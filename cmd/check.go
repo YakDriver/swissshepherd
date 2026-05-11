@@ -11,6 +11,7 @@ import (
 
 	"github.com/YakDriver/swissshepherd/internal/check"
 	"github.com/YakDriver/swissshepherd/internal/config"
+	"github.com/YakDriver/swissshepherd/internal/doc"
 	"github.com/YakDriver/swissshepherd/internal/provider"
 	"github.com/YakDriver/swissshepherd/internal/schema"
 	"github.com/spf13/cobra"
@@ -150,10 +151,11 @@ func runCheck(cmd *cobra.Command, args []string) error {
 	}
 
 	runner := &check.Runner{
-		Schema: ps,
-		Config: cfg,
-		Rules:  rules,
-		Logger: logger,
+		Schema:           ps,
+		Config:           cfg,
+		Rules:            rules,
+		Logger:           logger,
+		HeadingTemplates: headingTemplates(cfg),
 	}
 
 	// Run checks
@@ -207,4 +209,12 @@ func outputResultsText(results []check.Result) error {
 		return fmt.Errorf("%d check(s) failed", errors)
 	}
 	return nil
+}
+
+func headingTemplates(cfg *config.Config) doc.HeadingTemplates {
+	checkCfg := cfg.GetCheck("completeness")
+	if len(checkCfg.HeadingStyles) > 0 {
+		return doc.HeadingTemplates(checkCfg.HeadingStyles)
+	}
+	return doc.DefaultHeadingTemplates()
 }

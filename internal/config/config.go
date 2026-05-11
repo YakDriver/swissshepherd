@@ -7,6 +7,7 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/hashicorp/hcl/v2/hclsimple"
@@ -34,6 +35,12 @@ type Config struct {
 type CheckConfig struct {
 	Name    string `hcl:"name,label"`
 	Enabled bool   `hcl:"enabled,optional"`
+
+	// HeadingStyles defines templates for recognizing block headings.
+	// Use {Block} as placeholder for the block name (snake_case).
+	// Use {Title} as placeholder for title-case name (converted to snake_case).
+	// Default: ["`{Block}` Block", "{Block} Block", "`{Block}`", "{Block}", "{Title}"]
+	HeadingStyles []string `hcl:"heading_styles,optional"`
 
 	// Ignore lists (inline)
 	IgnoreResources   []string `hcl:"ignore_resources,optional"`
@@ -63,6 +70,13 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("parsing config %s: %w", path, err)
 	}
 
+	// Resolve relative paths from the config file's directory
+	cfgDir := filepath.Dir(path)
+	if abs, err := filepath.Abs(cfgDir); err == nil {
+		cfgDir = abs
+	}
+	cfg.resolvePaths(cfgDir)
+
 	if err := cfg.resolveFiles(); err != nil {
 		return nil, err
 	}
@@ -91,13 +105,35 @@ func (c *Config) IsCheckEnabled(name string) bool {
 	return true // enabled by default if not mentioned in config
 }
 
-// ProviderName extracts the short provider name from the source (e.g., "aws" from "registry.terraform.io/hashicorp/aws").
+// ProviderName extracts the short provider name from the source.
 func (c *Config) ProviderName() string {
 	parts := strings.Split(c.ProviderSource, "/")
 	if len(parts) > 0 {
 		return parts[len(parts)-1]
 	}
 	return ""
+}
+
+// resolvePaths makes relative paths absolute relative to the config file's directory.
+func (c *Config) resolvePaths(baseDir string) {
+	resolve := func(p string) string {
+		if p == "" || filepath.IsAbs(p) {
+			return p
+		}
+		return filepath.Join(baseDir, p)
+	}
+
+	c.ProviderDir = resolve(c.ProviderDir)
+	c.SchemaJSON = resolve(c.SchemaJSON)
+	c.DocsPath = resolve(c.DocsPath)
+	c.AllowedSubcategoriesFile = resolve(c.AllowedSubcategoriesFile)
+
+	for i := range c.Checks {
+		c.Checks[i].IgnoreResourcesFile = resolve(c.Checks[i].IgnoreResourcesFile)
+		c.Checks[i].IgnoreDataSourcesFile = resolve(c.Checks[i].IgnoreDataSourcesFile)
+		c.Checks[i].IgnoreSubcategoriesFile = resolve(c.Checks[i].IgnoreSubcategoriesFile)
+		c.Checks[i].IgnoreMissingResourcesFile = resolve(c.Checks[i].IgnoreMissingResourcesFile)
+	}
 }
 
 // resolveFiles loads any _file references into their corresponding slice fields.

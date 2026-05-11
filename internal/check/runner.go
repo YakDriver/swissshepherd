@@ -18,10 +18,11 @@ import (
 
 // Runner orchestrates running checks across all resources.
 type Runner struct {
-	Schema *schema.ProviderSchema
-	Config *config.Config
-	Rules  []Rule
-	Logger *slog.Logger
+	Schema       *schema.ProviderSchema
+	Config       *config.Config
+	Rules        []Rule
+	Logger       *slog.Logger
+	HeadingTemplates doc.HeadingTemplates
 }
 
 // RunAll runs all checks against all resources and data sources.
@@ -40,7 +41,7 @@ func (r *Runner) RunAll() []Result {
 		}
 
 		docPath := resourceDocPath(docsPath, providerName, name, "r")
-		d, err := loadDoc(docPath)
+		d, err := loadDoc(docPath, r.HeadingTemplates)
 		if err != nil {
 			r.Logger.Warn("cannot load doc", "resource", name, "path", docPath, "error", err)
 			continue
@@ -59,7 +60,7 @@ func (r *Runner) RunAll() []Result {
 		}
 
 		docPath := resourceDocPath(docsPath, providerName, name, "d")
-		d, err := loadDoc(docPath)
+		d, err := loadDoc(docPath, r.HeadingTemplates)
 		if err != nil {
 			r.Logger.Warn("cannot load doc", "data_source", name, "path", docPath, "error", err)
 			continue
@@ -84,7 +85,7 @@ func (r *Runner) RunOne(name string) ([]Result, error) {
 	}
 
 	docPath := resourceDocPath(docsPath, providerName, name, docType)
-	d, err := loadDoc(docPath)
+	d, err := loadDoc(docPath, r.HeadingTemplates)
 	if err != nil {
 		return nil, fmt.Errorf("loading doc for %s: %w", name, err)
 	}
@@ -113,7 +114,7 @@ func (r *Runner) RunPrefix(prefix string) []Result {
 		}
 
 		docPath := resourceDocPath(docsPath, providerName, name, "r")
-		d, err := loadDoc(docPath)
+		d, err := loadDoc(docPath, r.HeadingTemplates)
 		if err != nil {
 			r.Logger.Warn("cannot load doc", "resource", name, "path", docPath, "error", err)
 			continue
@@ -133,7 +134,7 @@ func (r *Runner) RunPrefix(prefix string) []Result {
 		}
 
 		docPath := resourceDocPath(docsPath, providerName, name, "d")
-		d, err := loadDoc(docPath)
+		d, err := loadDoc(docPath, r.HeadingTemplates)
 		if err != nil {
 			r.Logger.Warn("cannot load doc", "data_source", name, "path", docPath, "error", err)
 			continue
@@ -181,6 +182,6 @@ func resourceDocPath(docsPath, providerName, resourceName, docType string) strin
 	return legacyPath
 }
 
-func loadDoc(path string) (*doc.Document, error) {
-	return doc.ParseFile(path)
+func loadDoc(path string, templates doc.HeadingTemplates) (*doc.Document, error) {
+	return doc.ParseFileWithTemplates(path, templates)
 }
