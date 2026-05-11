@@ -1,0 +1,102 @@
+# Copyright IBM Corp. 2019, 2026
+# "SPDX-License-Identifier: MPL-2.0"
+
+name: PR Checks
+on: pull_request
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: 'go.mod'
+          check-latest: true
+
+      - name: Cache Go modules
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Install dependencies
+        run: go mod download
+
+      - name: Check go.mod tidy
+        run: |
+          echo "==> Checking source code with go mod tidy..."
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum || \
+            (echo; echo "Unexpected difference in go.mod/go.sum files. Run 'go mod tidy' command or revert any go.mod/go.sum changes and commit."; exit 1)
+
+      - name: Build
+        run: go build ./...
+
+      - name: Run tests
+        run: go test ./...
+
+      - name: Vet code
+        run: go vet ./...
+
+      - name: Check go fmt
+        run: |
+          echo "==> Checking source code with go fmt..."
+          go fmt ./...
+          git diff --exit-code || \
+            (echo; echo "Unexpected difference after go fmt. Run 'go fmt ./...' and commit."; exit 1)
+
+  modern-check:
+    name: Modern Go Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up Go Stable
+        uses: actions/setup-go@v6
+        with:
+          go-version: stable
+          check-latest: true
+
+      - name: Modern Go code check
+        run: go run golang.org/x/tools/gopls/internal/analysis/modernize/cmd/modernize@latest -test ./...
+
+  goreleaser:
+    name: GoReleaser
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: 'go.mod'
+      - name: Check configuration
+        uses: goreleaser/goreleaser-action@v7
+        with:
+          args: check
+      - name: Build artifacts
+        uses: goreleaser/goreleaser-action@v7
+        with:
+          args: build --snapshot
+
+  copyright:
+    name: Copyright Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: stable
+      - name: Check copyright headers
+        run: go run github.com/YakDriver/copyplop@latest check

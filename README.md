@@ -1,4 +1,6 @@
 # swissshepherd
+<!-- Copyright IBM Corp. 2019, 2026 -->
+<!-- SPDX-License-Identifier: MPL-2.0 -->
 
 A documentation checker for Terraform providers. Validates that provider documentation accurately reflects the provider schema.
 
