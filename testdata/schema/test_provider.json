@@ -1,0 +1,103 @@
+{
+  "format_version": "1.0",
+  "provider_schemas": {
+    "registry.terraform.io/hashicorp/test": {
+      "provider": {
+        "version": 0,
+        "block": {}
+      },
+      "resource_schemas": {
+        "test_instance": {
+          "version": 0,
+          "block": {
+            "attributes": {
+              "id": {
+                "type": "string",
+                "computed": true
+              },
+              "name": {
+                "type": "string",
+                "required": true
+              },
+              "description": {
+                "type": "string",
+                "optional": true
+              },
+              "arn": {
+                "type": "string",
+                "computed": true
+              },
+              "tags": {
+                "type": ["map", "string"],
+                "optional": true
+              },
+              "tags_all": {
+                "type": ["map", "string"],
+                "computed": true
+              }
+            },
+            "block_types": {
+              "network": {
+                "nesting_mode": "list",
+                "block": {
+                  "attributes": {
+                    "subnet_id": {
+                      "type": "string",
+                      "required": true
+                    },
+                    "security_groups": {
+                      "type": ["list", "string"],
+                      "optional": true
+                    },
+                    "private_ip": {
+                      "type": "string",
+                      "computed": true
+                    }
+                  }
+                },
+                "max_items": 5
+              },
+              "timeouts": {
+                "nesting_mode": "single",
+                "block": {
+                  "attributes": {
+                    "create": {
+                      "type": "string",
+                      "optional": true
+                    },
+                    "delete": {
+                      "type": "string",
+                      "optional": true
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "data_source_schemas": {
+        "test_instance": {
+          "version": 0,
+          "block": {
+            "attributes": {
+              "id": {
+                "type": "string",
+                "optional": true,
+                "computed": true
+              },
+              "name": {
+                "type": "string",
+                "required": true
+              },
+              "arn": {
+                "type": "string",
+                "computed": true
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
