@@ -21,6 +21,7 @@ var (
 	docsPath       string
 	providerSource string
 	resource       string
+	prefix         string
 	outputJSON     bool
 	verbose        bool
 )
@@ -48,6 +49,7 @@ func init() {
 	checkCmd.Flags().StringVar(&docsPath, "docs-path", "", "path to documentation directory")
 	checkCmd.Flags().StringVar(&providerSource, "provider-source", "", "provider source (e.g., registry.terraform.io/hashicorp/aws)")
 	checkCmd.Flags().StringVar(&resource, "resource", "", "check a single resource (e.g., aws_instance)")
+	checkCmd.Flags().StringVar(&prefix, "prefix", "", "check all resources matching a prefix (e.g., aws_dms_)")
 	checkCmd.Flags().BoolVar(&outputJSON, "json", false, "output results as JSON")
 	checkCmd.Flags().BoolVar(&verbose, "verbose", false, "verbose logging")
 }
@@ -119,6 +121,8 @@ func runCheck(cmd *cobra.Command, args []string) error {
 		if err != nil {
 			return err
 		}
+	} else if prefix != "" {
+		results = runner.RunPrefix(prefix)
 	} else {
 		results = runner.RunAll()
 	}

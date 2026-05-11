@@ -96,6 +96,57 @@ func (r *Runner) RunOne(name string) ([]Result, error) {
 	return results, nil
 }
 
+// RunPrefix runs checks against all resources and data sources matching a name prefix.
+func (r *Runner) RunPrefix(prefix string) []Result {
+	var results []Result
+
+	checkCfg := r.Config.GetCheck("completeness")
+	providerName := r.Config.ProviderName()
+	docsPath := r.Config.DocsPath
+
+	for name, rs := range r.Schema.Resources {
+		if !strings.HasPrefix(name, prefix) {
+			continue
+		}
+		if slices.Contains(checkCfg.IgnoreResources, name) {
+			continue
+		}
+
+		docPath := resourceDocPath(docsPath, providerName, name, "r")
+		d, err := loadDoc(docPath)
+		if err != nil {
+			r.Logger.Warn("cannot load doc", "resource", name, "path", docPath, "error", err)
+			continue
+		}
+
+		for _, rule := range r.Rules {
+			results = append(results, rule.Check(name, rs, d)...)
+		}
+	}
+
+	for name, rs := range r.Schema.DataSources {
+		if !strings.HasPrefix(name, prefix) {
+			continue
+		}
+		if slices.Contains(checkCfg.IgnoreDataSources, name) {
+			continue
+		}
+
+		docPath := resourceDocPath(docsPath, providerName, name, "d")
+		d, err := loadDoc(docPath)
+		if err != nil {
+			r.Logger.Warn("cannot load doc", "data_source", name, "path", docPath, "error", err)
+			continue
+		}
+
+		for _, rule := range r.Rules {
+			results = append(results, rule.Check(name, rs, d)...)
+		}
+	}
+
+	return results
+}
+
 func (r *Runner) findResource(name string) (*schema.ResourceSchema, string) {
 	if rs, ok := r.Schema.Resources[name]; ok {
 		return rs, "r"
