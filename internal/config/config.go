@@ -17,6 +17,7 @@ const DefaultConfigFile = ".swissshepherd.hcl"
 // Config is the top-level configuration for swissshepherd.
 type Config struct {
 	ProviderSource string `hcl:"provider_source,optional"`
+	ProviderDir    string `hcl:"provider_dir,optional"`
 	SchemaJSON     string `hcl:"schema_json,optional"`
 	DocsPath       string `hcl:"docs_path,optional"`
 
@@ -77,6 +78,17 @@ func (c *Config) GetCheck(name string) CheckConfig {
 		}
 	}
 	return CheckConfig{Name: name}
+}
+
+// IsCheckEnabled returns true if a check is enabled.
+// Checks are enabled by default unless explicitly disabled in config.
+func (c *Config) IsCheckEnabled(name string) bool {
+	for _, ch := range c.Checks {
+		if ch.Name == name {
+			return ch.Enabled
+		}
+	}
+	return true // enabled by default if not mentioned in config
 }
 
 // ProviderName extracts the short provider name from the source (e.g., "aws" from "registry.terraform.io/hashicorp/aws").

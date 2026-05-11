@@ -11,6 +11,7 @@ import (
 
 	"github.com/YakDriver/swissshepherd/internal/check"
 	"github.com/YakDriver/swissshepherd/internal/config"
+	"github.com/YakDriver/swissshepherd/internal/provider"
 	"github.com/YakDriver/swissshepherd/internal/schema"
 	"github.com/spf13/cobra"
 )
@@ -20,6 +21,7 @@ var (
 	schemaJSON     string
 	docsPath       string
 	providerSource string
+	providerDir    string
 	resource       string
 	prefix         string
 	outputJSON     bool
@@ -33,6 +35,8 @@ func Execute() error {
 var rootCmd = &cobra.Command{
 	Use:   "swissshepherd",
 	Short: "Terraform provider documentation checker",
+	// Default to check command when no subcommand is given
+	RunE: runCheck,
 }
 
 var checkCmd = &cobra.Command{
@@ -44,14 +48,20 @@ var checkCmd = &cobra.Command{
 func init() {
 	rootCmd.AddCommand(checkCmd)
 
-	checkCmd.Flags().StringVar(&cfgFile, "config", "", "config file (default: .swissshepherd.hcl)")
-	checkCmd.Flags().StringVar(&schemaJSON, "schema-json", "", "path to terraform providers schema -json output")
-	checkCmd.Flags().StringVar(&docsPath, "docs-path", "", "path to documentation directory")
-	checkCmd.Flags().StringVar(&providerSource, "provider-source", "", "provider source (e.g., registry.terraform.io/hashicorp/aws)")
-	checkCmd.Flags().StringVar(&resource, "resource", "", "check a single resource (e.g., aws_instance)")
-	checkCmd.Flags().StringVar(&prefix, "prefix", "", "check all resources matching a prefix (e.g., aws_dms_)")
-	checkCmd.Flags().BoolVar(&outputJSON, "json", false, "output results as JSON")
-	checkCmd.Flags().BoolVar(&verbose, "verbose", false, "verbose logging")
+	// Config is a persistent flag available to all subcommands
+	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default: .swissshepherd.hcl)")
+	rootCmd.PersistentFlags().BoolVar(&verbose, "verbose", false, "verbose logging")
+
+	// Check flags on both root (default) and check subcommand
+	for _, fs := range []*cobra.Command{rootCmd, checkCmd} {
+		fs.Flags().StringVar(&schemaJSON, "schema-json", "", "path to terraform providers schema -json output")
+		fs.Flags().StringVar(&docsPath, "docs-path", "", "path to documentation directory")
+		fs.Flags().StringVar(&providerSource, "provider-source", "", "provider source (e.g., registry.terraform.io/hashicorp/aws)")
+		fs.Flags().StringVar(&providerDir, "provider-dir", "", "path to provider source directory (builds provider and generates schema automatically)")
+		fs.Flags().StringVar(&resource, "resource", "", "check a single resource (e.g., aws_instance)")
+		fs.Flags().StringVar(&prefix, "prefix", "", "check all resources matching a prefix (e.g., aws_dms_)")
+		fs.Flags().BoolVar(&outputJSON, "json", false, "output results as JSON")
+	}
 }
 
 func runCheck(cmd *cobra.Command, args []string) error {
@@ -70,6 +80,27 @@ func runCheck(cmd *cobra.Command, args []string) error {
 	}
 	if providerSource != "" {
 		cfg.ProviderSource = providerSource
+	}
+	if providerDir != "" {
+		cfg.ProviderDir = providerDir
+	}
+
+	// Auto-generate schema from provider directory
+	if cfg.ProviderDir != "" && cfg.SchemaJSON == "" {
+		if cfg.ProviderSource == "" {
+			return fmt.Errorf("provider-source is required when using provider_dir")
+		}
+		schemaPath, err := provider.GenerateSchema(cfg.ProviderDir, cfg.ProviderSource)
+		if err != nil {
+			return fmt.Errorf("generating schema: %w", err)
+		}
+		defer provider.CleanupSchema(schemaPath)
+		cfg.SchemaJSON = schemaPath
+
+		// Default docs-path to website/docs under the provider dir
+		if cfg.DocsPath == "" {
+			cfg.DocsPath = cfg.ProviderDir + "/website/docs"
+		}
 	}
 
 	// Validate required fields
@@ -102,15 +133,26 @@ func runCheck(cmd *cobra.Command, args []string) error {
 		"data_sources", len(ps.DataSources),
 	)
 
-	// Set up rules
-	completenessCheck := &check.CompletenessRule{
-		IgnoreDeprecated: true,
+	// Set up rules based on config (all enabled by default)
+	var rules []check.Rule
+
+	if cfg.IsCheckEnabled("completeness") {
+		rules = append(rules, &check.CompletenessRule{IgnoreDeprecated: true})
+	}
+	if cfg.IsCheckEnabled("ordering") {
+		rules = append(rules, &check.OrderingRule{})
+	}
+	if cfg.IsCheckEnabled("description_style") {
+		rules = append(rules, &check.DescriptionStyleRule{})
+	}
+	if cfg.IsCheckEnabled("computed_attribute") {
+		rules = append(rules, &check.ComputedAttributeRule{})
 	}
 
 	runner := &check.Runner{
 		Schema: ps,
 		Config: cfg,
-		Rules:  []check.Rule{completenessCheck},
+		Rules:  rules,
 		Logger: logger,
 	}
 
