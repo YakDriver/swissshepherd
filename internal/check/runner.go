@@ -18,10 +18,11 @@ import (
 
 // Runner orchestrates running checks across all resources.
 type Runner struct {
-	Schema *schema.ProviderSchema
-	Config *config.Config
-	Rules  []Rule
-	Logger *slog.Logger
+	Schema           *schema.ProviderSchema
+	Config           *config.Config
+	Rules            []Rule
+	Logger           *slog.Logger
+	HeadingTemplates doc.HeadingTemplates
 }
 
 // RunAll runs all checks against all resources and data sources.
@@ -40,7 +41,7 @@ func (r *Runner) RunAll() []Result {
 		}
 
 		docPath := resourceDocPath(docsPath, providerName, name, "r")
-		d, err := loadDoc(docPath)
+		d, err := loadDoc(docPath, r.HeadingTemplates)
 		if err != nil {
 			r.Logger.Warn("cannot load doc", "resource", name, "path", docPath, "error", err)
 			continue
@@ -59,7 +60,7 @@ func (r *Runner) RunAll() []Result {
 		}
 
 		docPath := resourceDocPath(docsPath, providerName, name, "d")
-		d, err := loadDoc(docPath)
+		d, err := loadDoc(docPath, r.HeadingTemplates)
 		if err != nil {
 			r.Logger.Warn("cannot load doc", "data_source", name, "path", docPath, "error", err)
 			continue
@@ -84,7 +85,7 @@ func (r *Runner) RunOne(name string) ([]Result, error) {
 	}
 
 	docPath := resourceDocPath(docsPath, providerName, name, docType)
-	d, err := loadDoc(docPath)
+	d, err := loadDoc(docPath, r.HeadingTemplates)
 	if err != nil {
 		return nil, fmt.Errorf("loading doc for %s: %w", name, err)
 	}
@@ -94,6 +95,57 @@ func (r *Runner) RunOne(name string) ([]Result, error) {
 		results = append(results, rule.Check(name, rs, d)...)
 	}
 	return results, nil
+}
+
+// RunPrefix runs checks against all resources and data sources matching a name prefix.
+func (r *Runner) RunPrefix(prefix string) []Result {
+	var results []Result
+
+	checkCfg := r.Config.GetCheck("completeness")
+	providerName := r.Config.ProviderName()
+	docsPath := r.Config.DocsPath
+
+	for name, rs := range r.Schema.Resources {
+		if !strings.HasPrefix(name, prefix) {
+			continue
+		}
+		if slices.Contains(checkCfg.IgnoreResources, name) {
+			continue
+		}
+
+		docPath := resourceDocPath(docsPath, providerName, name, "r")
+		d, err := loadDoc(docPath, r.HeadingTemplates)
+		if err != nil {
+			r.Logger.Warn("cannot load doc", "resource", name, "path", docPath, "error", err)
+			continue
+		}
+
+		for _, rule := range r.Rules {
+			results = append(results, rule.Check(name, rs, d)...)
+		}
+	}
+
+	for name, rs := range r.Schema.DataSources {
+		if !strings.HasPrefix(name, prefix) {
+			continue
+		}
+		if slices.Contains(checkCfg.IgnoreDataSources, name) {
+			continue
+		}
+
+		docPath := resourceDocPath(docsPath, providerName, name, "d")
+		d, err := loadDoc(docPath, r.HeadingTemplates)
+		if err != nil {
+			r.Logger.Warn("cannot load doc", "data_source", name, "path", docPath, "error", err)
+			continue
+		}
+
+		for _, rule := range r.Rules {
+			results = append(results, rule.Check(name, rs, d)...)
+		}
+	}
+
+	return results
 }
 
 func (r *Runner) findResource(name string) (*schema.ResourceSchema, string) {
@@ -130,6 +182,6 @@ func resourceDocPath(docsPath, providerName, resourceName, docType string) strin
 	return legacyPath
 }
 
-func loadDoc(path string) (*doc.Document, error) {
-	return doc.ParseFile(path)
+func loadDoc(path string, templates doc.HeadingTemplates) (*doc.Document, error) {
+	return doc.ParseFileWithTemplates(path, templates)
 }

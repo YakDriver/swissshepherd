@@ -49,6 +49,7 @@ detection:
   replace_patterns:
     - "Copyright.*HashiCorp"
     - "Copyright.*IBM Corp."
+    - "Copyright \\(c\\) YakDriver.*"
     - "Copyright \\(c\\).*HashiCorp"
 
 third_party:

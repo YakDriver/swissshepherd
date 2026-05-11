@@ -19,30 +19,108 @@ type DocAttribute struct {
 	Name        string
 	Required    bool
 	Optional    bool
-	Description string // text after the (Required/Optional) marker
+	Description string
 }
 
-// DocBlock represents a documented block section (## Argument Reference or ### block_name Block).
+// DocBlock represents a documented block section.
 type DocBlock struct {
-	Name       string         // block name (empty string for root)
-	Heading    string         // raw heading text
-	Attributes []DocAttribute // attributes listed in this section
+	Name       string
+	Heading    string
+	Attributes []DocAttribute
+}
+
+// HeadingTemplates defines patterns for recognizing block headings.
+// Use {Block} for a snake_case block name placeholder.
+// Use {Title} for a title-case name placeholder (converted to snake_case).
+type HeadingTemplates []string
+
+// DefaultHeadingTemplates accepts common formats.
+func DefaultHeadingTemplates() HeadingTemplates {
+	return HeadingTemplates{
+		"`{Block}` Block",
+		"{Block} Block",
+		"`{Block}`",
+		"{Block}",
+		"{Title}",
+	}
+}
+
+// Match tries each template against a heading and returns the extracted block name, or "".
+func (t HeadingTemplates) Match(heading string) string {
+	h := strings.TrimSpace(heading)
+
+	// Skip example/usage headings
+	lower := strings.ToLower(h)
+	if strings.Contains(lower, "example") || strings.Contains(lower, "usage") {
+		return ""
+	}
+
+	for _, tmpl := range t {
+		if name := matchTemplate(tmpl, h); name != "" {
+			return name
+		}
+	}
+	return ""
+}
+
+// matchTemplate tries to match a single template against a heading.
+func matchTemplate(tmpl, heading string) string {
+	// {Block} matches a snake_case name (no spaces, lowercase with underscores)
+	// {Title} matches title-case words (converted to snake_case)
+
+	if strings.Contains(tmpl, "{Block}") {
+		prefix, suffix, _ := strings.Cut(tmpl, "{Block}")
+		// Goldmark strips backticks from inline code, so "`{Block}` Block" becomes "{Block} Block" in practice
+		prefix = strings.ReplaceAll(prefix, "`", "")
+		suffix = strings.ReplaceAll(suffix, "`", "")
+
+		if !strings.HasPrefix(heading, prefix) || !strings.HasSuffix(heading, suffix) {
+			return ""
+		}
+		name := heading[len(prefix) : len(heading)-len(suffix)]
+		name = strings.TrimSpace(name)
+		if name == "" || strings.Contains(name, " ") {
+			return ""
+		}
+		// Must look like snake_case
+		if name != strings.ToLower(name) {
+			return ""
+		}
+		return name
+	}
+
+	if strings.Contains(tmpl, "{Title}") {
+		prefix, suffix, _ := strings.Cut(tmpl, "{Title}")
+		prefix = strings.ReplaceAll(prefix, "`", "")
+		suffix = strings.ReplaceAll(suffix, "`", "")
+
+		if !strings.HasPrefix(heading, prefix) || !strings.HasSuffix(heading, suffix) {
+			return ""
+		}
+		title := heading[len(prefix) : len(heading)-len(suffix)]
+		title = strings.TrimSpace(title)
+		if title == "" || !strings.Contains(title, " ") {
+			return ""
+		}
+		return titleToSnake(title)
+	}
+
+	return ""
 }
 
 // Document represents a parsed documentation file.
 type Document struct {
 	ResourceName    string
-	ArgumentBlocks  map[string]*DocBlock // blocks under ## Argument Reference
-	AttributeBlocks map[string]*DocBlock // blocks under ## Attribute Reference
+	ArgumentBlocks  map[string]*DocBlock
+	AttributeBlocks map[string]*DocBlock
 }
 
-// Blocks returns a merged view of argument + attribute blocks (for backward compat).
+// Blocks returns a merged view of argument + attribute blocks.
 func (d *Document) Blocks() map[string]*DocBlock {
 	merged := make(map[string]*DocBlock, len(d.ArgumentBlocks)+len(d.AttributeBlocks))
 	maps.Copy(merged, d.ArgumentBlocks)
 	for k, v := range d.AttributeBlocks {
 		if existing, ok := merged[k]; ok {
-			// Merge attributes into existing block
 			existing.Attributes = append(existing.Attributes, v.Attributes...)
 		} else {
 			merged[k] = v
@@ -51,17 +129,27 @@ func (d *Document) Blocks() map[string]*DocBlock {
 	return merged
 }
 
-// ParseFile reads and parses a markdown documentation file.
+// ParseFile reads and parses a markdown documentation file (accepts all heading styles).
 func ParseFile(path string) (*Document, error) {
+	return ParseFileWithTemplates(path, DefaultHeadingTemplates())
+}
+
+// ParseFileWithTemplates reads and parses with specific heading templates.
+func ParseFileWithTemplates(path string, templates HeadingTemplates) (*Document, error) {
 	source, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("reading doc file: %w", err)
 	}
-	return Parse(source, path)
+	return ParseWithTemplates(source, path, templates)
 }
 
-// Parse parses markdown source into a Document.
+// Parse parses markdown source (accepts all heading styles).
 func Parse(source []byte, name string) (*Document, error) {
+	return ParseWithTemplates(source, name, DefaultHeadingTemplates())
+}
+
+// ParseWithTemplates parses markdown source with specific heading templates.
+func ParseWithTemplates(source []byte, name string, templates HeadingTemplates) (*Document, error) {
 	md := goldmark.New()
 	reader := text.NewReader(source)
 	tree := md.Parser().Parse(reader)
@@ -72,12 +160,11 @@ func Parse(source []byte, name string) (*Document, error) {
 		AttributeBlocks: make(map[string]*DocBlock),
 	}
 
-	extractBlocks(tree, source, doc)
+	extractBlocks(tree, source, doc, templates)
 	return doc, nil
 }
 
-// extractBlocks walks the AST and extracts argument/attribute sections.
-func extractBlocks(tree ast.Node, source []byte, doc *Document) {
+func extractBlocks(tree ast.Node, source []byte, doc *Document, templates HeadingTemplates) {
 	var currentBlockName string
 	var inArguments, inAttributes bool
 
@@ -108,7 +195,7 @@ func extractBlocks(tree ast.Node, source []byte, doc *Document) {
 			}
 
 			if n.Level == 3 && (inArguments || inAttributes) {
-				blockName := extractBlockName(headingText)
+				blockName := templates.Match(headingText)
 				if blockName != "" {
 					currentBlockName = blockName
 					if inArguments {
@@ -158,36 +245,7 @@ func ensureBlock(blocks map[string]*DocBlock, name, heading string) {
 	}
 }
 
-// extractBlockName extracts the block name from a heading like:
-//   - "`rule` Block"
-//   - "Credit Specification"
-//   - "CPU Options"
-//   - "Network Interfaces"
-func extractBlockName(heading string) string {
-	h := strings.TrimSpace(heading)
-
-	// Remove common suffixes
-	h = strings.TrimSuffix(h, " Block")
-	h = strings.TrimSuffix(h, " block")
-
-	// Remove backticks — if present, it's already snake_case
-	if strings.Contains(h, "`") {
-		h = strings.Trim(h, "`")
-		if !strings.Contains(h, " ") {
-			return h
-		}
-	}
-
-	// If it contains spaces, convert title case to snake_case
-	if strings.Contains(h, " ") {
-		return titleToSnake(h)
-	}
-
-	return h
-}
-
-// titleToSnake converts "Credit Specification" → "credit_specification",
-// "CPU Options" → "cpu_options", "EBS Block Device" → "ebs_block_device".
+// titleToSnake converts "Credit Specification" → "credit_specification".
 func titleToSnake(s string) string {
 	words := strings.Fields(s)
 	if len(words) == 0 {
@@ -199,8 +257,7 @@ func titleToSnake(s string) string {
 	return strings.Join(words, "_")
 }
 
-// parseListItem extracts an attribute from a list item like:
-// `name` - (Required) Description...
+// parseListItem extracts an attribute from a list item.
 func parseListItem(li *ast.ListItem, source []byte) DocAttribute {
 	var rawText string
 	for child := li.FirstChild(); child != nil; child = child.NextSibling() {
@@ -231,8 +288,7 @@ func parseListItem(li *ast.ListItem, source []byte) DocAttribute {
 		return DocAttribute{}
 	}
 
-	// Names with dots or brackets are dot-notation references (e.g., "block.*.attr"),
-	// not actual attribute names in this block.
+	// Names with dots or brackets are dot-notation references, not attribute names.
 	if strings.ContainsAny(name, ".[]*") {
 		return DocAttribute{}
 	}
@@ -253,7 +309,6 @@ func parseListItem(li *ast.ListItem, source []byte) DocAttribute {
 						attr.Optional = true
 					}
 				}
-				// Description is everything after the closing paren + space
 				attr.Description = strings.TrimSpace(desc[end+1:])
 			}
 		} else {
