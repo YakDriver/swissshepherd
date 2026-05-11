@@ -99,7 +99,16 @@ func matchTemplate(tmpl, heading string) string {
 		}
 		title := heading[len(prefix) : len(heading)-len(suffix)]
 		title = strings.TrimSpace(title)
-		if title == "" || !strings.Contains(title, " ") {
+		if title == "" {
+			return ""
+		}
+		// Must start with uppercase (title case) to distinguish from bare snake_case
+		if title[0] < 'A' || title[0] > 'Z' {
+			return ""
+		}
+		// For bare {Title} (no suffix/prefix), require multiple words to avoid
+		// matching single capitalized words that may not be block names.
+		if suffix == "" && prefix == "" && !strings.Contains(title, " ") {
 			return ""
 		}
 		return titleToSnake(title)
@@ -194,7 +203,7 @@ func extractBlocks(tree ast.Node, source []byte, doc *Document, templates Headin
 				return ast.WalkSkipChildren, nil
 			}
 
-			if n.Level == 3 && (inArguments || inAttributes) {
+			if n.Level >= 3 && (inArguments || inAttributes) {
 				blockName := templates.Match(headingText)
 				if blockName != "" {
 					currentBlockName = blockName
