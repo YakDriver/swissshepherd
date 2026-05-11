@@ -150,12 +150,18 @@ func runCheck(cmd *cobra.Command, args []string) error {
 		rules = append(rules, &check.ComputedAttributeRule{})
 	}
 
+	preferred := preferredHeadingTemplates(cfg)
+	if cfg.IsCheckEnabled("heading_style") && len(preferred) > 0 {
+		rules = append(rules, &check.HeadingStyleRule{Preferred: preferred})
+	}
+
 	runner := &check.Runner{
-		Schema:           ps,
-		Config:           cfg,
-		Rules:            rules,
-		Logger:           logger,
-		HeadingTemplates: headingTemplates(cfg),
+		Schema:                    ps,
+		Config:                    cfg,
+		Rules:                     rules,
+		Logger:                    logger,
+		HeadingTemplates:          headingTemplates(cfg),
+		PreferredHeadingTemplates: preferred,
 	}
 
 	// Run checks
@@ -217,4 +223,12 @@ func headingTemplates(cfg *config.Config) doc.HeadingTemplates {
 		return doc.HeadingTemplates(checkCfg.BlockHeadingStyles)
 	}
 	return doc.DefaultHeadingTemplates()
+}
+
+func preferredHeadingTemplates(cfg *config.Config) doc.HeadingTemplates {
+	checkCfg := cfg.GetCheck("completeness")
+	if len(checkCfg.PreferredBlockHeadingStyles) > 0 {
+		return doc.HeadingTemplates(checkCfg.PreferredBlockHeadingStyles)
+	}
+	return nil
 }

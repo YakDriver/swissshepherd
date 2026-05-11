@@ -34,6 +34,26 @@ type DocBlock struct {
 // Use {Title} for a title-case name placeholder (converted to snake_case).
 type HeadingTemplates []string
 
+// Render produces a heading string from a template and block name.
+// For {Block} templates, inserts the name directly.
+// For {Title} templates, converts snake_case to Title Case.
+// {Parent} is left as-is (caller must substitute if needed).
+func RenderHeading(tmpl, blockName string) string {
+	result := strings.Replace(tmpl, "{Block}", blockName, 1)
+	result = strings.Replace(result, "{Title}", snakeToTitle(blockName), 1)
+	return result
+}
+
+func snakeToTitle(s string) string {
+	words := strings.Split(s, "_")
+	for i, w := range words {
+		if w != "" {
+			words[i] = strings.ToUpper(w[:1]) + w[1:]
+		}
+	}
+	return strings.Join(words, " ")
+}
+
 // DefaultHeadingTemplates accepts common formats.
 func DefaultHeadingTemplates() HeadingTemplates {
 	return HeadingTemplates{
@@ -67,6 +87,38 @@ func (t HeadingTemplates) Match(heading string) string {
 func matchTemplate(tmpl, heading string) string {
 	// {Block} matches a snake_case name (no spaces, lowercase with underscores)
 	// {Title} matches title-case words (converted to snake_case)
+	// {Parent} matches a snake_case name (used as disambiguator, value is discarded)
+
+	// Handle {Parent} by replacing it with a greedy snake_case match.
+	if strings.Contains(tmpl, "{Parent}") {
+		// Strip backticks from template, split on {Parent}
+		clean := strings.ReplaceAll(tmpl, "`", "")
+		before, after, _ := strings.Cut(clean, "{Parent}")
+		before = strings.TrimSpace(before)
+
+		// The heading must start with a snake_case word (the parent)
+		// followed by the rest of the template containing {Block}.
+		if before != "" && !strings.HasPrefix(heading, before) {
+			return ""
+		}
+		rest := heading[len(before):]
+		rest = strings.TrimSpace(rest)
+
+		// Find where the parent name ends (first space)
+		spaceIdx := strings.IndexByte(rest, ' ')
+		if spaceIdx < 0 {
+			return ""
+		}
+		parent := rest[:spaceIdx]
+		if parent == "" || parent != strings.ToLower(parent) || strings.Contains(parent, " ") {
+			return ""
+		}
+
+		// Match the remainder against the after-{Parent} portion
+		remainder := strings.TrimSpace(rest[spaceIdx+1:])
+		afterClean := strings.TrimSpace(strings.ReplaceAll(after, "`", ""))
+		return matchTemplate(afterClean, remainder)
+	}
 
 	if strings.Contains(tmpl, "{Block}") {
 		prefix, suffix, _ := strings.Cut(tmpl, "{Block}")
