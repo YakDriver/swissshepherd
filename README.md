@@ -82,6 +82,14 @@ check "completeness" {
 
   ignore_resources    = ["aws_legacy_resource"]
   ignore_data_sources = ["aws_kms_secrets"]
+
+  heading_styles = [
+    "`{Block}` Block",
+    "{Block} Block",
+    "`{Block}`",
+    "{Block}",
+    "{Title}",
+  ]
 }
 
 check "ordering" {
@@ -98,6 +106,58 @@ check "computed_attribute" {
 ```
 
 All rules are enabled by default. Add a `check` block with `enabled = false` to disable one.
+
+## Heading styles
+
+The `heading_styles` list in the `completeness` check controls which `###` heading formats are recognized as block documentation. Each entry is a template with placeholders:
+
+| Placeholder | Matches | Example heading | Extracted name |
+|-------------|---------|-----------------|----------------|
+| `{Block}` | A snake_case identifier (lowercase, underscores) | `network_interface` | `network_interface` |
+| `{Title}` | Title Case words (converted to snake_case) | `Network Interface` | `network_interface` |
+
+Templates are tried in order — first match wins. Literal text around the placeholder must match exactly.
+
+### Examples
+
+| Template | Matches heading | Result |
+|----------|-----------------|--------|
+| `` `{Block}` Block `` | `network Block` | `network` |
+| `{Block} Block` | `network Block` | `network` |
+| `{Block} Configuration Block` | `vpc_config Configuration Block` | `vpc_config` |
+| `{Block} Argument Reference` | `filter Argument Reference` | `filter` |
+| `` `{Block}` `` | `statement` | `statement` |
+| `{Block}` | `redis_settings` | `redis_settings` |
+| `{Title}` | `Credit Specification` | `credit_specification` |
+| `{Title}` | `CPU Options` | `cpu_options` |
+
+Note: goldmark (the markdown parser) strips backticks from inline code in headings. So `### \`network\` Block` in markdown becomes `network Block` in the parsed text. The templates match against this parsed text.
+
+### Strict vs permissive
+
+To enforce a single heading format across your docs:
+
+```hcl
+heading_styles = ["`{Block}` Block"]
+```
+
+To accept everything during a migration:
+
+```hcl
+heading_styles = [
+  "`{Block}` Block",
+  "{Block} Block",
+  "{Block} block",
+  "{Block} Configuration Block",
+  "{Block} Argument Reference",
+  "{Block} Attribute Reference",
+  "`{Block}`",
+  "{Block}",
+  "{Title}",
+]
+```
+
+If `heading_styles` is omitted, a sensible default is used.
 
 ## Rules
 
