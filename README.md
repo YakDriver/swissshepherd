@@ -1,18 +1,16 @@
 # swissshepherd
-<!-- Copyright IBM Corp. 2019, 2026 -->
-<!-- SPDX-License-Identifier: MPL-2.0 -->
 
 A documentation checker for Terraform providers. Validates that provider documentation accurately reflects the provider schema.
 
 ## What it does
 
-swissshepherd compares a Terraform provider's JSON schema (from `terraform providers schema -json`) against its markdown documentation and reports:
+swissshepherd compares a Terraform provider's schema against its markdown documentation and reports:
 
 - **Missing documentation** — schema attributes or blocks with no corresponding doc entry
 - **Phantom documentation** — documented attributes that don't exist in the schema
 - **Ordering violations** — arguments or attributes not in alphabetical order
-- **Description style issues** — descriptions starting with articles (A, An, The) or fluff words (Specifies, Indicates, Describes, Defines)
-- **Misplaced computed attributes** — computed-only attributes documented in Argument Reference instead of Attribute Reference
+- **Description style issues** — descriptions starting with articles or fluff words
+- **Misplaced computed attributes** — computed-only attributes in the wrong section
 
 ## Installation
 
@@ -20,76 +18,84 @@ swissshepherd compares a Terraform provider's JSON schema (from `terraform provi
 go install github.com/YakDriver/swissshepherd@latest
 ```
 
-## Usage
+Requires [Terraform](https://developer.hashicorp.com/terraform/install) in PATH when using `provider_dir`.
 
-### Check a single resource
+## Quick start
 
-```bash
-swissshepherd check \
-  --schema-json terraform-providers-schema/schema.json \
-  --docs-path website/docs \
-  --provider-source registry.terraform.io/hashicorp/aws \
-  --resource aws_iam_role
-```
-
-### Check all resources
-
-```bash
-swissshepherd check \
-  --schema-json terraform-providers-schema/schema.json \
-  --docs-path website/docs \
-  --provider-source registry.terraform.io/hashicorp/aws
-```
-
-### JSON output
-
-```bash
-swissshepherd check --resource aws_vpc --json
-```
-
-## Configuration
-
-Create a `.swissshepherd.hcl` file in your project root to avoid repeating CLI flags:
+Create `.swissshepherd.hcl` in your provider repo root:
 
 ```hcl
 provider_source = "registry.terraform.io/hashicorp/aws"
-schema_json     = "terraform-providers-schema/schema.json"
+provider_dir    = "."
 docs_path       = "website/docs"
-
-check "completeness" {
-  enabled = true
-
-  ignore_resources   = ["aws_legacy_resource"]
-  ignore_data_sources = ["aws_kms_secrets"]
-}
 ```
 
 Then run:
 
 ```bash
-swissshepherd check
+# Check everything
+swissshepherd
+
+# Check a single service
+swissshepherd --prefix aws_dms_
+
+# Check a single resource
+swissshepherd --resource aws_iam_role
+```
+
+That's it. swissshepherd builds the provider, generates the schema via Terraform, runs the checks, and cleans up.
+
+## Usage
+
+```bash
+# With explicit config file
+swissshepherd --config path/to/swissshepherd.hcl
+
+# With CLI flags (no config file needed)
+swissshepherd --provider-dir . --provider-source registry.terraform.io/hashicorp/aws --docs-path website/docs
+
+# With pre-generated schema (skips build)
+swissshepherd --schema-json schema.json --docs-path website/docs --provider-source registry.terraform.io/hashicorp/aws
+
+# JSON output
+swissshepherd --resource aws_vpc --json
 ```
 
 CLI flags override config file values.
 
-## Generating the schema JSON
+## Configuration
 
-```bash
-# Build the provider
-go build -o terraform-provider-aws .
+```hcl
+# .swissshepherd.hcl
 
-# Set up Terraform to use the local binary
-mkdir -p terraform-plugin-dir/registry.terraform.io/hashicorp/aws/99.99.99/$(go env GOOS)_$(go env GOARCH)
-cp terraform-provider-aws terraform-plugin-dir/registry.terraform.io/hashicorp/aws/99.99.99/$(go env GOOS)_$(go env GOARCH)/
+provider_source = "registry.terraform.io/hashicorp/aws"
+provider_dir    = "."           # builds provider + generates schema automatically
+docs_path       = "website/docs"
 
-# Generate schema
-echo 'data "aws_partition" "example" {}' > example.tf
-terraform init -plugin-dir terraform-plugin-dir
-terraform providers schema -json > schema.json
+# Or use a pre-generated schema (skips build):
+# schema_json = "path/to/schema.json"
 
-# Clean up
-rm -rf terraform-plugin-dir example.tf .terraform .terraform.lock.hcl terraform-provider-aws
+check "completeness" {
+  enabled = true
+
+  ignore_resources    = ["aws_legacy_resource"]
+  ignore_data_sources = ["aws_kms_secrets"]
+}
+
+check "ordering" {
+  enabled = true
+}
+
+check "description_style" {
+  enabled = true
+}
+
+check "computed_attribute" {
+  enabled = false  # disable this rule
+}
 ```
+
+All rules are enabled by default. Add a `check` block with `enabled = false` to disable one.
 
 ## Rules
 
@@ -100,11 +106,23 @@ rm -rf terraform-plugin-dir example.tf .terraform .terraform.lock.hcl terraform-
 | `description_style` | Descriptions don't start with weak prefixes (A, An, The, Specifies, Indicates, Describes, Defines) |
 | `computed_attribute` | Computed-only attributes appear in Attribute Reference, not Argument Reference |
 
+## How schema generation works
+
+When `provider_dir` is set, swissshepherd:
+
+1. Runs `go build` in the provider directory
+2. Sets up a temporary Terraform plugin directory
+3. Runs `terraform init` and `terraform providers schema -json`
+4. Uses the generated schema for checks
+5. Cleans up all temporary files
+
+If `schema_json` is set instead, the build step is skipped entirely.
+
 ## Design
 
-- Uses `terraform providers schema -json` as the source of truth — no Go source parsing
-- Parses markdown with [goldmark](https://github.com/yuin/goldmark) AST
-- Each rule implements a simple interface: `Check(resource, schema, doc) []Result`
+- Schema from `terraform providers schema -json` is the source of truth — no Go source parsing
+- Markdown parsed with [goldmark](https://github.com/yuin/goldmark) AST
+- Each rule implements `Check(resource, schema, doc) []Result`
 - Supports both registry-style (`docs/resources/`) and legacy (`website/docs/r/`) doc layouts
 - HCL configuration via [hcl/v2](https://github.com/hashicorp/hcl)
 
