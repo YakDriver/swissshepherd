@@ -1,10 +1,11 @@
-// Copyright (c) YakDriver, 2026
+// Copyright IBM Corp. 2019, 2026
 // SPDX-License-Identifier: MPL-2.0
 
 package doc
 
 import (
 	"fmt"
+	"maps"
 	"os"
 	"strings"
 
@@ -38,9 +39,7 @@ type Document struct {
 // Blocks returns a merged view of argument + attribute blocks (for backward compat).
 func (d *Document) Blocks() map[string]*DocBlock {
 	merged := make(map[string]*DocBlock, len(d.ArgumentBlocks)+len(d.AttributeBlocks))
-	for k, v := range d.ArgumentBlocks {
-		merged[k] = v
-	}
+	maps.Copy(merged, d.ArgumentBlocks)
 	for k, v := range d.AttributeBlocks {
 		if existing, ok := merged[k]; ok {
 			// Merge attributes into existing block

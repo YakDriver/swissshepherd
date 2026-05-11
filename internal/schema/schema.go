@@ -1,4 +1,4 @@
-// Copyright (c) YakDriver, 2026
+// Copyright IBM Corp. 2019, 2026
 // SPDX-License-Identifier: MPL-2.0
 
 package schema
@@ -24,8 +24,8 @@ type Attribute struct {
 
 // Block represents a flattened schema block with its attributes and child block names.
 type Block struct {
-	Path       string
-	Attributes []Attribute
+	Path        string
+	Attributes  []Attribute
 	ChildBlocks []string // names of immediate child blocks
 }
 

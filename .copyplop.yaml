@@ -1,0 +1,57 @@
+# Copyright IBM Corp. 2019, 2026
+# "SPDX-License-Identifier: MPL-2.0"
+
+# swissshepherd Copyplop Configuration
+copyright:
+  holder: "IBM Corp."
+  start_year: 2019
+  current_year: 2026
+  format: "Copyright {{.Holder}} {{.StartYear}}, {{.CurrentYear}}"
+
+license:
+  enabled: true
+  identifier: "MPL-2.0"
+  format: "SPDX-License-Identifier: {{.Identifier}}"
+
+files:
+  exclude_paths:
+    - "CHANGELOG.md"
+    - "LICENSE"
+  extensions:
+    - ".go"
+    - ".md"
+    - ".sh"
+    - ".yml"
+    - ".yaml"
+    - ".html.markdown"
+
+  comment_styles:
+    go: "//"
+    md: "<!--"
+    sh: "#"
+    yaml: "#"
+    yml: "#"
+    html_markdown: "<!--"
+
+  placement_exceptions:
+    markdown_heading: true
+
+  below_frontmatter:
+    - ".md"
+    - ".html.markdown"
+
+detection:
+  skip_generated: false
+  generated_patterns:
+    - "Code generated"
+    - "DO NOT EDIT"
+  max_scan_lines: 20
+  replace_patterns:
+    - "Copyright.*HashiCorp"
+    - "Copyright.*IBM Corp."
+    - "Copyright \\(c\\).*HashiCorp"
+
+third_party:
+  action: "above"
+  patterns:
+    - "Copyright.*[a-zA-Z0-9].*"

@@ -1,4 +1,4 @@
-// Copyright (c) YakDriver, 2026
+// Copyright IBM Corp. 2019, 2026
 // SPDX-License-Identifier: MPL-2.0
 
 package config
@@ -39,12 +39,12 @@ type CheckConfig struct {
 	IgnoreDataSources []string `hcl:"ignore_data_sources,optional"`
 
 	// Ignore lists (from file)
-	IgnoreResourcesFile        string `hcl:"ignore_resources_file,optional"`
-	IgnoreDataSourcesFile      string `hcl:"ignore_data_sources_file,optional"`
-	IgnoreSubcategoriesFile    string `hcl:"ignore_subcategories_file,optional"`
+	IgnoreResourcesFile        string   `hcl:"ignore_resources_file,optional"`
+	IgnoreDataSourcesFile      string   `hcl:"ignore_data_sources_file,optional"`
+	IgnoreSubcategoriesFile    string   `hcl:"ignore_subcategories_file,optional"`
 	IgnoreMissingResources     []string `hcl:"ignore_missing_resources,optional"`
 	IgnoreMissingDataSources   []string `hcl:"ignore_missing_data_sources,optional"`
-	IgnoreMissingResourcesFile string `hcl:"ignore_missing_resources_file,optional"`
+	IgnoreMissingResourcesFile string   `hcl:"ignore_missing_resources_file,optional"`
 }
 
 // Load reads and parses an HCL config file. Returns a zero-value Config if the file doesn't exist.
