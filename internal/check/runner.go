@@ -18,10 +18,10 @@ import (
 
 // Runner orchestrates running checks across all resources.
 type Runner struct {
-	Schema       *schema.ProviderSchema
-	Config       *config.Config
-	Rules        []Rule
-	Logger       *slog.Logger
+	Schema           *schema.ProviderSchema
+	Config           *config.Config
+	Rules            []Rule
+	Logger           *slog.Logger
 	HeadingTemplates doc.HeadingTemplates
 }
 
