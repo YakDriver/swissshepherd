@@ -213,8 +213,8 @@ func outputResultsText(results []check.Result) error {
 
 func headingTemplates(cfg *config.Config) doc.HeadingTemplates {
 	checkCfg := cfg.GetCheck("completeness")
-	if len(checkCfg.HeadingStyles) > 0 {
-		return doc.HeadingTemplates(checkCfg.HeadingStyles)
+	if len(checkCfg.BlockHeadingStyles) > 0 {
+		return doc.HeadingTemplates(checkCfg.BlockHeadingStyles)
 	}
 	return doc.DefaultHeadingTemplates()
 }

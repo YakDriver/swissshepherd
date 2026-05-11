@@ -83,7 +83,7 @@ check "completeness" {
   ignore_resources    = ["aws_legacy_resource"]
   ignore_data_sources = ["aws_kms_secrets"]
 
-  heading_styles = [
+  block_heading_styles = [
     "`{Block}` Block",
     "{Block} Block",
     "`{Block}`",
@@ -109,7 +109,7 @@ All rules are enabled by default. Add a `check` block with `enabled = false` to 
 
 ## Heading styles
 
-The `heading_styles` list in the `completeness` check controls which `###` heading formats are recognized as block documentation. Each entry is a template with placeholders:
+The `block_heading_styles` list in the `completeness` check controls which `###` heading formats are recognized as block documentation. Each entry is a template with placeholders:
 
 | Placeholder | Matches | Example heading | Extracted name |
 |-------------|---------|-----------------|----------------|
@@ -138,13 +138,13 @@ Note: goldmark (the markdown parser) strips backticks from inline code in headin
 To enforce a single heading format across your docs:
 
 ```hcl
-heading_styles = ["`{Block}` Block"]
+block_heading_styles = ["`{Block}` Block"]
 ```
 
 To accept everything during a migration:
 
 ```hcl
-heading_styles = [
+block_heading_styles = [
   "`{Block}` Block",
   "{Block} Block",
   "{Block} block",
@@ -157,7 +157,7 @@ heading_styles = [
 ]
 ```
 
-If `heading_styles` is omitted, a sensible default is used.
+If `block_heading_styles` is omitted, a sensible default is used.
 
 ## Rules
 

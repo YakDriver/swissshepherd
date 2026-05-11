@@ -36,11 +36,11 @@ type CheckConfig struct {
 	Name    string `hcl:"name,label"`
 	Enabled bool   `hcl:"enabled,optional"`
 
-	// HeadingStyles defines templates for recognizing block headings.
+	// BlockHeadingStyles defines templates for recognizing block headings.
 	// Use {Block} as placeholder for the block name (snake_case).
 	// Use {Title} as placeholder for title-case name (converted to snake_case).
 	// Default: ["`{Block}` Block", "{Block} Block", "`{Block}`", "{Block}", "{Title}"]
-	HeadingStyles []string `hcl:"heading_styles,optional"`
+	BlockHeadingStyles []string `hcl:"block_heading_styles,optional"`
 
 	// Ignore lists (inline)
 	IgnoreResources   []string `hcl:"ignore_resources,optional"`
