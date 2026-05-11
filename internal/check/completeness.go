@@ -6,7 +6,6 @@ package check
 import (
 	"fmt"
 	"slices"
-	"strings"
 
 	"github.com/YakDriver/swissshepherd/internal/doc"
 	"github.com/YakDriver/swissshepherd/internal/schema"
@@ -50,12 +49,6 @@ func (r *CompletenessRule) Check(resource string, rs *schema.ResourceSchema, d *
 			if len(schemaBlock.Attributes) > 0 {
 				// Deduplicate: only report each leaf name once.
 				if reportedMissingBlocks[docBlockName] {
-					continue
-				}
-
-				// Check if the leaf name is documented as an attribute in a parent block.
-				// This handles the pattern where sub-blocks are documented inline.
-				if isDocumentedInParent(d, blockPath) {
 					continue
 				}
 
@@ -153,40 +146,6 @@ func findDocBlock(d *doc.Document, leafName string, fullPath string) *doc.DocBlo
 		return blocks[""]
 	}
 	return nil
-}
-
-// isDocumentedInParent checks if a block's leaf name appears as a documented
-// attribute in any of its ancestor blocks' doc sections. This handles the pattern
-// where sub-blocks are documented inline under their parent heading.
-func isDocumentedInParent(d *doc.Document, blockPath string) bool {
-	leaf := leafName(blockPath)
-	blocks := d.Blocks()
-
-	// Walk up the path checking each ancestor.
-	path := blockPath
-	for {
-		dot := strings.LastIndex(path, ".")
-		if dot < 0 {
-			// Check root block
-			if root, ok := blocks[""]; ok {
-				for _, attr := range root.Attributes {
-					if attr.Name == leaf {
-						return true
-					}
-				}
-			}
-			return false
-		}
-		path = path[:dot]
-		parentLeaf := leafName(path)
-		if parent, ok := blocks[parentLeaf]; ok {
-			for _, attr := range parent.Attributes {
-				if attr.Name == leaf {
-					return true
-				}
-			}
-		}
-	}
 }
 
 func leafName(path string) string {
