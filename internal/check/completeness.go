@@ -6,6 +6,7 @@ package check
 import (
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/YakDriver/swissshepherd/internal/doc"
 	"github.com/YakDriver/swissshepherd/internal/schema"
@@ -27,6 +28,13 @@ func (r *CompletenessRule) Name() string { return "completeness" }
 func (r *CompletenessRule) Check(resource string, rs *schema.ResourceSchema, d *doc.Document) []Result {
 	var results []Result
 
+	// Track which leaf names we've already reported as missing blocks.
+	// For recursive schemas (e.g., wafv2), the same block structure appears at
+	// hundreds of paths — report it once.
+	reportedMissingBlocks := make(map[string]bool)
+	// Track reported "doc attr not in schema" warnings by leaf+attr to deduplicate.
+	reportedExtraAttrs := make(map[string]bool)
+
 	for blockPath, schemaBlock := range rs.Blocks {
 		// Skip the timeouts block — it has its own ## Timeouts section.
 		if blockPath == "timeouts" {
@@ -39,9 +47,15 @@ func (r *CompletenessRule) Check(resource string, rs *schema.ResourceSchema, d *
 		docBlock := findDocBlock(d, docBlockName, blockPath)
 
 		if docBlock == nil {
-			// If the schema block has attributes, report the missing doc section.
-			// Skip if it only has child blocks and no attributes.
-			if len(schemaBlock.Attributes) > 0 {
+			// If the schema block has configurable attributes, report the missing doc section.
+			// Skip if it only has child blocks, no attributes, or only computed-only attributes.
+			if hasConfigurableAttributes(schemaBlock) {
+				// Deduplicate: only report each leaf name once.
+				if reportedMissingBlocks[docBlockName] {
+					continue
+				}
+
+				reportedMissingBlocks[docBlockName] = true
 				results = append(results, Result{
 					Rule:     r.Name(),
 					Resource: resource,
@@ -65,17 +79,25 @@ func (r *CompletenessRule) Check(resource string, rs *schema.ResourceSchema, d *
 				continue
 			}
 			if !documented[attr.Name] {
+				msg := fmt.Sprintf("attribute %q in block %q is not documented", attr.Name, displayPath(blockPath))
+				if slices.Contains(docBlock.MalformedAttributes, attr.Name) {
+					msg = fmt.Sprintf("attribute %q in block %q is documented but missing the \" - \" separator (expected: * `%s` - (Required|Optional) ...)", attr.Name, displayPath(blockPath), attr.Name)
+				}
 				results = append(results, Result{
 					Rule:     r.Name(),
 					Resource: resource,
 					Severity: severity(attr),
-					Message:  fmt.Sprintf("attribute %q in block %q is not documented", attr.Name, displayPath(blockPath)),
+					Message:  msg,
 					Block:    blockPath,
 				})
 			}
 		}
 
 		// Check each documented attribute exists in schema.
+		// Skip this check if the schema block is empty (leaf-name collision artifact).
+		if len(schemaBlock.Attributes) == 0 && len(schemaBlock.ChildBlocks) == 0 {
+			continue
+		}
 		schemaAttrNames := make(map[string]bool, len(schemaBlock.Attributes))
 		for _, attr := range schemaBlock.Attributes {
 			schemaAttrNames[attr.Name] = true
@@ -87,6 +109,11 @@ func (r *CompletenessRule) Check(resource string, rs *schema.ResourceSchema, d *
 
 		for _, docAttr := range docBlock.Attributes {
 			if !schemaAttrNames[docAttr.Name] && !slices.Contains(specialAttributes, docAttr.Name) {
+				key := docBlockName + "." + docAttr.Name
+				if reportedExtraAttrs[key] {
+					continue
+				}
+				reportedExtraAttrs[key] = true
 				results = append(results, Result{
 					Rule:     r.Name(),
 					Resource: resource,
@@ -99,6 +126,17 @@ func (r *CompletenessRule) Check(resource string, rs *schema.ResourceSchema, d *
 	}
 
 	return results
+}
+
+// hasConfigurableAttributes returns true if the block has at least one attribute
+// that is required or optional (i.e., user-configurable, not computed-only).
+func hasConfigurableAttributes(block *schema.Block) bool {
+	for _, attr := range block.Attributes {
+		if attr.Required || attr.Optional {
+			return true
+		}
+	}
+	return false
 }
 
 func shouldSkipAttribute(attr schema.Attribute, ignoreDeprecated bool) bool {
@@ -124,15 +162,25 @@ func severity(attr schema.Attribute) Severity {
 }
 
 // findDocBlock looks up the doc block by the leaf name of the schema path.
-// Falls back to checking the full path segments.
+// Falls back to checking parent.leaf composite keys and then leaf-only.
 func findDocBlock(d *doc.Document, leafName string, fullPath string) *doc.DocBlock {
 	blocks := d.Blocks()
-	if b, ok := blocks[leafName]; ok {
-		return b
-	}
 	// For root block, look up ""
 	if fullPath == "" {
 		return blocks[""]
+	}
+	// Try parent.leaf composite key (from {Parent} headings)
+	parts := strings.Split(fullPath, ".")
+	if len(parts) >= 2 {
+		parent := parts[len(parts)-2]
+		composite := parent + "." + leafName
+		if b, ok := blocks[composite]; ok {
+			return b
+		}
+	}
+	// Fall back to leaf-only
+	if b, ok := blocks[leafName]; ok {
+		return b
 	}
 	return nil
 }

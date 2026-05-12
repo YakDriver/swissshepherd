@@ -18,11 +18,12 @@ import (
 
 // Runner orchestrates running checks across all resources.
 type Runner struct {
-	Schema           *schema.ProviderSchema
-	Config           *config.Config
-	Rules            []Rule
-	Logger           *slog.Logger
-	HeadingTemplates doc.HeadingTemplates
+	Schema                    *schema.ProviderSchema
+	Config                    *config.Config
+	Rules                     []Rule
+	Logger                    *slog.Logger
+	HeadingTemplates          doc.HeadingTemplates
+	PreferredHeadingTemplates doc.HeadingTemplates
 }
 
 // RunAll runs all checks against all resources and data sources.
@@ -93,6 +94,13 @@ func (r *Runner) RunOne(name string) ([]Result, error) {
 	var results []Result
 	for _, rule := range r.Rules {
 		results = append(results, rule.Check(name, rs, d)...)
+	}
+
+	// Run file-level checks (format_style)
+	for _, rule := range r.Rules {
+		if fsr, ok := rule.(*FormatStyleRule); ok {
+			results = append(results, fsr.CheckFile(name, docPath)...)
+		}
 	}
 	return results, nil
 }

@@ -42,6 +42,11 @@ type CheckConfig struct {
 	// Default: ["`{Block}` Block", "{Block} Block", "`{Block}`", "{Block}", "{Title}"]
 	BlockHeadingStyles []string `hcl:"block_heading_styles,optional"`
 
+	// PreferredBlockHeadingStyles defines the target heading format(s).
+	// When a block heading matches an accepted style but not a preferred style,
+	// a warning is emitted suggesting the preferred format.
+	PreferredBlockHeadingStyles []string `hcl:"preferred_block_heading_styles,optional"`
+
 	// Ignore lists (inline)
 	IgnoreResources   []string `hcl:"ignore_resources,optional"`
 	IgnoreDataSources []string `hcl:"ignore_data_sources,optional"`
