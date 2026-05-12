@@ -248,13 +248,11 @@ func preferredHeadingTemplates(cfg *config.Config) doc.HeadingTemplates {
 }
 
 // frontmatterRule constructs a FrontmatterRule from the check "frontmatter"
-// block of the HCL config. Provider-wide toggles (require_resource_subcategory)
-// are folded in so providers can enforce subcategory presence at the top level
-// without repeating the option in every check block.
+// block of the HCL config.
 func frontmatterRule(cfg *config.Config) *check.FrontmatterRule {
 	cc := cfg.GetCheck("frontmatter")
 	return &check.FrontmatterRule{
-		RequireSubcategory:   cc.RequireSubcategory || cfg.RequireResourceSubcategory,
+		RequireSubcategory:   cc.RequireSubcategory,
 		RequirePageTitle:     cc.RequirePageTitle,
 		RequireDescription:   cc.RequireDescription,
 		RequireLayout:        cc.RequireLayout,

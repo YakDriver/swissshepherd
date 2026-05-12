@@ -22,8 +22,7 @@ type Config struct {
 	SchemaJSON     string `hcl:"schema_json,optional"`
 	DocsPath       string `hcl:"docs_path,optional"`
 
-	RequireResourceSubcategory bool `hcl:"require_resource_subcategory,optional"`
-	IgnoreCdktfMissingFiles    bool `hcl:"ignore_cdktf_missing_files,optional"`
+	IgnoreCdktfMissingFiles bool `hcl:"ignore_cdktf_missing_files,optional"`
 
 	Checks []CheckConfig `hcl:"check,block"`
 }
