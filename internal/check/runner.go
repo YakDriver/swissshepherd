@@ -17,10 +17,15 @@ import (
 )
 
 // Runner orchestrates running checks across all resources.
+//
+// Rules operate on the parsed doc.Document plus the schema. FileRules operate
+// on the raw file bytes. Runner reads each documentation file once and feeds
+// the content to both kinds of checks.
 type Runner struct {
 	Schema                    *schema.ProviderSchema
 	Config                    *config.Config
 	Rules                     []Rule
+	FileRules                 []FileRule
 	Logger                    *slog.Logger
 	HeadingTemplates          doc.HeadingTemplates
 	PreferredHeadingTemplates doc.HeadingTemplates
@@ -31,45 +36,21 @@ func (r *Runner) RunAll() []Result {
 	var results []Result
 
 	checkCfg := r.Config.GetCheck("completeness")
-	providerName := r.Config.ProviderName()
-	docsPath := r.Config.DocsPath
 
-	// Check resources
 	for name, rs := range r.Schema.Resources {
 		if slices.Contains(checkCfg.IgnoreResources, name) {
 			r.Logger.Debug("skipping ignored resource", "name", name)
 			continue
 		}
-
-		docPath := resourceDocPath(docsPath, providerName, name, "r")
-		d, err := loadDoc(docPath, r.HeadingTemplates)
-		if err != nil {
-			r.Logger.Warn("cannot load doc", "resource", name, "path", docPath, "error", err)
-			continue
-		}
-
-		for _, rule := range r.Rules {
-			results = append(results, rule.Check(name, rs, d)...)
-		}
+		results = append(results, r.checkTarget(name, rs, "r")...)
 	}
 
-	// Check data sources
 	for name, rs := range r.Schema.DataSources {
 		if slices.Contains(checkCfg.IgnoreDataSources, name) {
 			r.Logger.Debug("skipping ignored data source", "name", name)
 			continue
 		}
-
-		docPath := resourceDocPath(docsPath, providerName, name, "d")
-		d, err := loadDoc(docPath, r.HeadingTemplates)
-		if err != nil {
-			r.Logger.Warn("cannot load doc", "data_source", name, "path", docPath, "error", err)
-			continue
-		}
-
-		for _, rule := range r.Rules {
-			results = append(results, rule.Check(name, rs, d)...)
-		}
+		results = append(results, r.checkTarget(name, rs, "d")...)
 	}
 
 	return results
@@ -77,30 +58,29 @@ func (r *Runner) RunAll() []Result {
 
 // RunOne runs checks against a single named resource or data source.
 func (r *Runner) RunOne(name string) ([]Result, error) {
-	providerName := r.Config.ProviderName()
-	docsPath := r.Config.DocsPath
-
 	rs, docType := r.findResource(name)
 	if rs == nil {
 		return nil, fmt.Errorf("resource %q not found in schema", name)
 	}
 
-	docPath := resourceDocPath(docsPath, providerName, name, docType)
-	d, err := loadDoc(docPath, r.HeadingTemplates)
+	// For RunOne, surface load errors to the caller rather than logging and
+	// continuing, so a bad --resource invocation fails loudly.
+	docPath := resourceDocPath(r.Config.DocsPath, r.Config.ProviderName(), name, docType)
+	content, err := os.ReadFile(docPath)
 	if err != nil {
-		return nil, fmt.Errorf("loading doc for %s: %w", name, err)
+		return nil, fmt.Errorf("reading doc for %s: %w", name, err)
+	}
+	d, err := doc.ParseWithTemplates(content, docPath, r.HeadingTemplates)
+	if err != nil {
+		return nil, fmt.Errorf("parsing doc for %s: %w", name, err)
 	}
 
 	var results []Result
 	for _, rule := range r.Rules {
 		results = append(results, rule.Check(name, rs, d)...)
 	}
-
-	// Run file-level checks (format_style)
-	for _, rule := range r.Rules {
-		if fsr, ok := rule.(*FormatStyleRule); ok {
-			results = append(results, fsr.CheckFile(name, docPath)...)
-		}
+	for _, rule := range r.FileRules {
+		results = append(results, rule.CheckFile(name, docPath, content)...)
 	}
 	return results, nil
 }
@@ -110,8 +90,6 @@ func (r *Runner) RunPrefix(prefix string) []Result {
 	var results []Result
 
 	checkCfg := r.Config.GetCheck("completeness")
-	providerName := r.Config.ProviderName()
-	docsPath := r.Config.DocsPath
 
 	for name, rs := range r.Schema.Resources {
 		if !strings.HasPrefix(name, prefix) {
@@ -120,17 +98,7 @@ func (r *Runner) RunPrefix(prefix string) []Result {
 		if slices.Contains(checkCfg.IgnoreResources, name) {
 			continue
 		}
-
-		docPath := resourceDocPath(docsPath, providerName, name, "r")
-		d, err := loadDoc(docPath, r.HeadingTemplates)
-		if err != nil {
-			r.Logger.Warn("cannot load doc", "resource", name, "path", docPath, "error", err)
-			continue
-		}
-
-		for _, rule := range r.Rules {
-			results = append(results, rule.Check(name, rs, d)...)
-		}
+		results = append(results, r.checkTarget(name, rs, "r")...)
 	}
 
 	for name, rs := range r.Schema.DataSources {
@@ -140,19 +108,37 @@ func (r *Runner) RunPrefix(prefix string) []Result {
 		if slices.Contains(checkCfg.IgnoreDataSources, name) {
 			continue
 		}
-
-		docPath := resourceDocPath(docsPath, providerName, name, "d")
-		d, err := loadDoc(docPath, r.HeadingTemplates)
-		if err != nil {
-			r.Logger.Warn("cannot load doc", "data_source", name, "path", docPath, "error", err)
-			continue
-		}
-
-		for _, rule := range r.Rules {
-			results = append(results, rule.Check(name, rs, d)...)
-		}
+		results = append(results, r.checkTarget(name, rs, "d")...)
 	}
 
+	return results
+}
+
+// checkTarget resolves the doc path, reads content once, parses it, and runs
+// every configured Rule and FileRule. Load failures are logged and skipped
+// rather than returned — RunAll and RunPrefix should not bail on one bad file.
+func (r *Runner) checkTarget(name string, rs *schema.ResourceSchema, docType string) []Result {
+	docPath := resourceDocPath(r.Config.DocsPath, r.Config.ProviderName(), name, docType)
+
+	content, err := os.ReadFile(docPath)
+	if err != nil {
+		r.Logger.Warn("cannot read doc", "resource", name, "path", docPath, "error", err)
+		return nil
+	}
+
+	d, err := doc.ParseWithTemplates(content, docPath, r.HeadingTemplates)
+	if err != nil {
+		r.Logger.Warn("cannot parse doc", "resource", name, "path", docPath, "error", err)
+		return nil
+	}
+
+	var results []Result
+	for _, rule := range r.Rules {
+		results = append(results, rule.Check(name, rs, d)...)
+	}
+	for _, rule := range r.FileRules {
+		results = append(results, rule.CheckFile(name, docPath, content)...)
+	}
 	return results
 }
 
@@ -188,8 +174,4 @@ func resourceDocPath(docsPath, providerName, resourceName, docType string) strin
 
 	// Return legacy path as default (will error on load)
 	return legacyPath
-}
-
-func loadDoc(path string, templates doc.HeadingTemplates) (*doc.Document, error) {
-	return doc.ParseFileWithTemplates(path, templates)
 }

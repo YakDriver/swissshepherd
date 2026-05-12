@@ -58,6 +58,19 @@ type CheckConfig struct {
 	IgnoreMissingResources     []string `hcl:"ignore_missing_resources,optional"`
 	IgnoreMissingDataSources   []string `hcl:"ignore_missing_data_sources,optional"`
 	IgnoreMissingResourcesFile string   `hcl:"ignore_missing_resources_file,optional"`
+
+	// Frontmatter rule options. Set require_* to fail when a field is absent;
+	// set forbid_* to fail when it is present. A field covered by both require
+	// and forbid is a configuration error — require wins but emits both.
+	RequireSubcategory   bool `hcl:"require_subcategory,optional"`
+	RequirePageTitle     bool `hcl:"require_page_title,optional"`
+	RequireDescription   bool `hcl:"require_description,optional"`
+	RequireLayout        bool `hcl:"require_layout,optional"`
+	ForbidSubcategory    bool `hcl:"forbid_subcategory,optional"`
+	ForbidPageTitle      bool `hcl:"forbid_page_title,optional"`
+	ForbidDescription    bool `hcl:"forbid_description,optional"`
+	ForbidLayout         bool `hcl:"forbid_layout,optional"`
+	ForbidSidebarCurrent bool `hcl:"forbid_sidebar_current,optional"`
 }
 
 // Load reads and parses an HCL config file. Returns a zero-value Config if the file doesn't exist.

@@ -5,18 +5,19 @@ package check
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
-	"os"
 	"strings"
-
-	"github.com/YakDriver/swissshepherd/internal/doc"
-	"github.com/YakDriver/swissshepherd/internal/schema"
 )
 
 // FormatStyleRule checks structural formatting of argument/attribute sections:
 // - No code blocks
 // - Single-line attribute descriptions (no continuation lines)
 // - Uninterrupted attribute lists (no unexpected prose between list items)
+//
+// Implements FileRule: it scans raw lines rather than the goldmark AST, so it
+// can catch whitespace and continuation issues that are normalized away by the
+// parser.
 type FormatStyleRule struct {
 	NoCodeBlocks       bool
 	SingleLineAttrs    bool
@@ -25,24 +26,14 @@ type FormatStyleRule struct {
 
 func (r *FormatStyleRule) Name() string { return "format_style" }
 
-func (r *FormatStyleRule) Check(_ string, _ *schema.ResourceSchema, _ *doc.Document) []Result {
-	return nil
-}
-
-// CheckFile runs format checks against a raw documentation file.
-func (r *FormatStyleRule) CheckFile(resource, path string) []Result {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil
-	}
-	defer f.Close()
-
+// CheckFile runs format checks against the raw bytes of a documentation file.
+func (r *FormatStyleRule) CheckFile(resource, _ string, content []byte) []Result {
 	var results []Result
 	var inSection bool
 	var inCodeBlock bool
 	var inList bool
 	var prevWasAttr bool
-	scanner := bufio.NewScanner(f)
+	scanner := bufio.NewScanner(bytes.NewReader(content))
 	lineNum := 0
 
 	for scanner.Scan() {
