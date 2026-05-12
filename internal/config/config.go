@@ -7,7 +7,6 @@ import (
 	"bufio"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/hashicorp/hcl/v2/hclsimple"
@@ -76,7 +75,16 @@ type CheckConfig struct {
 	AllowedSubcategoriesFile string   `hcl:"allowed_subcategories_file,optional"`
 }
 
-// Load reads and parses an HCL config file. Returns a zero-value Config if the file doesn't exist.
+// Load reads and parses an HCL config file. Returns a zero-value Config if
+// the file doesn't exist.
+//
+// Relative paths in the config (provider_dir, docs_path, schema_json, and any
+// *_file option) are interpreted by the OS relative to the current working
+// directory at the time swissshepherd runs — the same convention as terraform,
+// docker, go, make, and other tools. The location of the config file itself
+// does not anchor paths; run swissshepherd from the provider repo root (or
+// wherever your paths are written relative to) and point --config at the
+// config file.
 func Load(path string) (*Config, error) {
 	if path == "" {
 		path = DefaultConfigFile
@@ -90,13 +98,6 @@ func Load(path string) (*Config, error) {
 	if err := hclsimple.DecodeFile(path, nil, &cfg); err != nil {
 		return nil, fmt.Errorf("parsing config %s: %w", path, err)
 	}
-
-	// Resolve relative paths from the config file's directory
-	cfgDir := filepath.Dir(path)
-	if abs, err := filepath.Abs(cfgDir); err == nil {
-		cfgDir = abs
-	}
-	cfg.resolvePaths(cfgDir)
 
 	if err := cfg.resolveFiles(); err != nil {
 		return nil, err
@@ -133,28 +134,6 @@ func (c *Config) ProviderName() string {
 		return parts[len(parts)-1]
 	}
 	return ""
-}
-
-// resolvePaths makes relative paths absolute relative to the config file's directory.
-func (c *Config) resolvePaths(baseDir string) {
-	resolve := func(p string) string {
-		if p == "" || filepath.IsAbs(p) {
-			return p
-		}
-		return filepath.Join(baseDir, p)
-	}
-
-	c.ProviderDir = resolve(c.ProviderDir)
-	c.SchemaJSON = resolve(c.SchemaJSON)
-	c.DocsPath = resolve(c.DocsPath)
-
-	for i := range c.Checks {
-		c.Checks[i].IgnoreResourcesFile = resolve(c.Checks[i].IgnoreResourcesFile)
-		c.Checks[i].IgnoreDataSourcesFile = resolve(c.Checks[i].IgnoreDataSourcesFile)
-		c.Checks[i].IgnoreSubcategoriesFile = resolve(c.Checks[i].IgnoreSubcategoriesFile)
-		c.Checks[i].IgnoreMissingResourcesFile = resolve(c.Checks[i].IgnoreMissingResourcesFile)
-		c.Checks[i].AllowedSubcategoriesFile = resolve(c.Checks[i].AllowedSubcategoriesFile)
-	}
 }
 
 // resolveFiles loads any _file references into their corresponding slice fields.

@@ -50,6 +50,22 @@ swissshepherd --resource aws_iam_role
 
 That's it. swissshepherd builds the provider, generates the schema via Terraform, runs the checks, and cleans up.
 
+### A note on paths
+
+Relative paths in the config file (`provider_dir`, `docs_path`, `schema_json`, and every `*_file` option) are interpreted relative to the **current working directory** at the time swissshepherd runs — the same convention as `terraform`, `docker`, `go`, and `make`. The location of the config file itself has no effect on path resolution.
+
+In practice: `cd` into the provider repo root and invoke swissshepherd from there. This works whether the config sits at the root or in a subdirectory like `.ci/`:
+
+```bash
+# Config at repo root, one canonical layout
+cd terraform-provider-foo
+swissshepherd
+
+# Config in .ci/, paths still described relative to repo root
+cd terraform-provider-foo
+swissshepherd --config .ci/swissshepherd.hcl
+```
+
 ## Usage
 
 ```bash
