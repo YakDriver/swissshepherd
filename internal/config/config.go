@@ -22,11 +22,7 @@ type Config struct {
 	SchemaJSON     string `hcl:"schema_json,optional"`
 	DocsPath       string `hcl:"docs_path,optional"`
 
-	AllowedSubcategories     []string `hcl:"allowed_subcategories,optional"`
-	AllowedSubcategoriesFile string   `hcl:"allowed_subcategories_file,optional"`
-
-	RequireResourceSubcategory bool `hcl:"require_resource_subcategory,optional"`
-	IgnoreCdktfMissingFiles    bool `hcl:"ignore_cdktf_missing_files,optional"`
+	IgnoreCdktfMissingFiles bool `hcl:"ignore_cdktf_missing_files,optional"`
 
 	Checks []CheckConfig `hcl:"check,block"`
 }
@@ -58,6 +54,26 @@ type CheckConfig struct {
 	IgnoreMissingResources     []string `hcl:"ignore_missing_resources,optional"`
 	IgnoreMissingDataSources   []string `hcl:"ignore_missing_data_sources,optional"`
 	IgnoreMissingResourcesFile string   `hcl:"ignore_missing_resources_file,optional"`
+
+	// Frontmatter rule options. Set require_* to fail when a field is absent;
+	// set forbid_* to fail when it is present. A field covered by both require
+	// and forbid is a configuration error — require wins but emits both.
+	RequireSubcategory   bool `hcl:"require_subcategory,optional"`
+	RequirePageTitle     bool `hcl:"require_page_title,optional"`
+	RequireDescription   bool `hcl:"require_description,optional"`
+	RequireLayout        bool `hcl:"require_layout,optional"`
+	ForbidSubcategory    bool `hcl:"forbid_subcategory,optional"`
+	ForbidPageTitle      bool `hcl:"forbid_page_title,optional"`
+	ForbidDescription    bool `hcl:"forbid_description,optional"`
+	ForbidLayout         bool `hcl:"forbid_layout,optional"`
+	ForbidSidebarCurrent bool `hcl:"forbid_sidebar_current,optional"`
+
+	// Subcategory allowlist for the frontmatter rule. When non-empty, a
+	// frontmatter subcategory value outside this list is reported. The allowlist
+	// only fires when subcategory is actually present in the file — pair with
+	// require_subcategory if absence should also fail.
+	AllowedSubcategories     []string `hcl:"allowed_subcategories,optional"`
+	AllowedSubcategoriesFile string   `hcl:"allowed_subcategories_file,optional"`
 }
 
 // Load reads and parses an HCL config file. Returns a zero-value Config if the file doesn't exist.
@@ -131,26 +147,18 @@ func (c *Config) resolvePaths(baseDir string) {
 	c.ProviderDir = resolve(c.ProviderDir)
 	c.SchemaJSON = resolve(c.SchemaJSON)
 	c.DocsPath = resolve(c.DocsPath)
-	c.AllowedSubcategoriesFile = resolve(c.AllowedSubcategoriesFile)
 
 	for i := range c.Checks {
 		c.Checks[i].IgnoreResourcesFile = resolve(c.Checks[i].IgnoreResourcesFile)
 		c.Checks[i].IgnoreDataSourcesFile = resolve(c.Checks[i].IgnoreDataSourcesFile)
 		c.Checks[i].IgnoreSubcategoriesFile = resolve(c.Checks[i].IgnoreSubcategoriesFile)
 		c.Checks[i].IgnoreMissingResourcesFile = resolve(c.Checks[i].IgnoreMissingResourcesFile)
+		c.Checks[i].AllowedSubcategoriesFile = resolve(c.Checks[i].AllowedSubcategoriesFile)
 	}
 }
 
 // resolveFiles loads any _file references into their corresponding slice fields.
 func (c *Config) resolveFiles() error {
-	if c.AllowedSubcategoriesFile != "" {
-		lines, err := readLines(c.AllowedSubcategoriesFile)
-		if err != nil {
-			return err
-		}
-		c.AllowedSubcategories = append(c.AllowedSubcategories, lines...)
-	}
-
 	for i := range c.Checks {
 		ch := &c.Checks[i]
 		if ch.IgnoreResourcesFile != "" {
@@ -181,6 +189,13 @@ func (c *Config) resolveFiles() error {
 				return err
 			}
 			ch.IgnoreMissingResources = append(ch.IgnoreMissingResources, lines...)
+		}
+		if ch.AllowedSubcategoriesFile != "" {
+			lines, err := readLines(ch.AllowedSubcategoriesFile)
+			if err != nil {
+				return err
+			}
+			ch.AllowedSubcategories = append(ch.AllowedSubcategories, lines...)
 		}
 	}
 

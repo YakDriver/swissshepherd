@@ -138,6 +138,7 @@ func runCheck(cmd *cobra.Command, args []string) error {
 
 	// Set up rules based on config (all enabled by default)
 	var rules []check.Rule
+	var fileRules []check.FileRule
 
 	if cfg.IsCheckEnabled("completeness") {
 		rules = append(rules, &check.CompletenessRule{IgnoreDeprecated: true})
@@ -157,17 +158,21 @@ func runCheck(cmd *cobra.Command, args []string) error {
 		rules = append(rules, &check.HeadingStyleRule{Preferred: preferred})
 	}
 	if cfg.IsCheckEnabled("format_style") {
-		rules = append(rules, &check.FormatStyleRule{
+		fileRules = append(fileRules, &check.FormatStyleRule{
 			NoCodeBlocks:       true,
 			SingleLineAttrs:    true,
 			UninterruptedLists: true,
 		})
+	}
+	if cfg.IsCheckEnabled("frontmatter") {
+		fileRules = append(fileRules, frontmatterRule(cfg))
 	}
 
 	runner := &check.Runner{
 		Schema:                    ps,
 		Config:                    cfg,
 		Rules:                     rules,
+		FileRules:                 fileRules,
 		Logger:                    logger,
 		HeadingTemplates:          headingTemplates(cfg),
 		PreferredHeadingTemplates: preferred,
@@ -240,4 +245,22 @@ func preferredHeadingTemplates(cfg *config.Config) doc.HeadingTemplates {
 		return doc.HeadingTemplates(checkCfg.PreferredBlockHeadingStyles)
 	}
 	return nil
+}
+
+// frontmatterRule constructs a FrontmatterRule from the check "frontmatter"
+// block of the HCL config.
+func frontmatterRule(cfg *config.Config) *check.FrontmatterRule {
+	cc := cfg.GetCheck("frontmatter")
+	return &check.FrontmatterRule{
+		RequireSubcategory:   cc.RequireSubcategory,
+		RequirePageTitle:     cc.RequirePageTitle,
+		RequireDescription:   cc.RequireDescription,
+		RequireLayout:        cc.RequireLayout,
+		ForbidSubcategory:    cc.ForbidSubcategory,
+		ForbidPageTitle:      cc.ForbidPageTitle,
+		ForbidDescription:    cc.ForbidDescription,
+		ForbidLayout:         cc.ForbidLayout,
+		ForbidSidebarCurrent: cc.ForbidSidebarCurrent,
+		AllowedSubcategories: cc.AllowedSubcategories,
+	}
 }
