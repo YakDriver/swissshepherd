@@ -34,16 +34,18 @@ func Execute() error {
 }
 
 var rootCmd = &cobra.Command{
-	Use:   "swissshepherd",
-	Short: "Terraform provider documentation checker",
+	Use:          "swissshepherd",
+	Short:        "Terraform provider documentation checker",
+	SilenceUsage: true,
 	// Default to check command when no subcommand is given
 	RunE: runCheck,
 }
 
 var checkCmd = &cobra.Command{
-	Use:   "check",
-	Short: "Run documentation checks against provider schema",
-	RunE:  runCheck,
+	Use:          "check",
+	Short:        "Run documentation checks against provider schema",
+	SilenceUsage: true,
+	RunE:         runCheck,
 }
 
 func init() {
@@ -153,6 +155,13 @@ func runCheck(cmd *cobra.Command, args []string) error {
 	preferred := preferredHeadingTemplates(cfg)
 	if cfg.IsCheckEnabled("heading_style") && len(preferred) > 0 {
 		rules = append(rules, &check.HeadingStyleRule{Preferred: preferred})
+	}
+	if cfg.IsCheckEnabled("format_style") {
+		rules = append(rules, &check.FormatStyleRule{
+			NoCodeBlocks:       true,
+			SingleLineAttrs:    true,
+			UninterruptedLists: true,
+		})
 	}
 
 	runner := &check.Runner{

@@ -95,6 +95,13 @@ func (r *Runner) RunOne(name string) ([]Result, error) {
 	for _, rule := range r.Rules {
 		results = append(results, rule.Check(name, rs, d)...)
 	}
+
+	// Run file-level checks (format_style)
+	for _, rule := range r.Rules {
+		if fsr, ok := rule.(*FormatStyleRule); ok {
+			results = append(results, fsr.CheckFile(name, docPath)...)
+		}
+	}
 	return results, nil
 }
 

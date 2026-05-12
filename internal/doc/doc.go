@@ -24,9 +24,10 @@ type DocAttribute struct {
 
 // DocBlock represents a documented block section.
 type DocBlock struct {
-	Name       string
-	Heading    string
-	Attributes []DocAttribute
+	Name                string
+	Heading             string
+	Attributes          []DocAttribute
+	MalformedAttributes []string // attribute names found but with formatting issues
 }
 
 // HeadingTemplates defines patterns for recognizing block headings.
@@ -96,28 +97,53 @@ func matchTemplate(tmpl, heading string) string {
 		before, after, _ := strings.Cut(clean, "{Parent}")
 		before = strings.TrimSpace(before)
 
-		// The heading must start with a snake_case word (the parent)
-		// followed by the rest of the template containing {Block}.
 		if before != "" && !strings.HasPrefix(heading, before) {
 			return ""
 		}
 		rest := heading[len(before):]
 		rest = strings.TrimSpace(rest)
 
-		// Find where the parent name ends (first space)
-		spaceIdx := strings.IndexByte(rest, ' ')
-		if spaceIdx < 0 {
-			return ""
-		}
-		parent := rest[:spaceIdx]
-		if parent == "" || parent != strings.ToLower(parent) || strings.Contains(parent, " ") {
-			return ""
+		// The after portion contains {Block} and possibly a suffix like "Block".
+		// Extract the suffix after {Block}.
+		afterClean := strings.TrimSpace(strings.ReplaceAll(after, "`", ""))
+		_, blockSuffix, _ := strings.Cut(afterClean, "{Block}")
+		blockSuffix = strings.TrimSpace(blockSuffix)
+
+		// Strip the suffix from the heading remainder to isolate "parent... block_name"
+		candidate := rest
+		if blockSuffix != "" {
+			if !strings.HasSuffix(candidate, blockSuffix) {
+				return ""
+			}
+			candidate = strings.TrimSuffix(candidate, blockSuffix)
+			candidate = strings.TrimSpace(candidate)
 		}
 
-		// Match the remainder against the after-{Parent} portion
-		remainder := strings.TrimSpace(rest[spaceIdx+1:])
-		afterClean := strings.TrimSpace(strings.ReplaceAll(after, "`", ""))
-		return matchTemplate(afterClean, remainder)
+		// The last word is the block name; everything before is the parent.
+		lastSpace := strings.LastIndexByte(candidate, ' ')
+		if lastSpace < 0 {
+			return ""
+		}
+		parent := candidate[:lastSpace]
+		blockName := candidate[lastSpace+1:]
+
+		// Validate: parent must be all lowercase words, block must be snake_case
+		if parent == "" || blockName == "" {
+			return ""
+		}
+		if blockName != strings.ToLower(blockName) || strings.Contains(blockName, " ") {
+			return ""
+		}
+		for word := range strings.FieldsSeq(parent) {
+			if word != strings.ToLower(word) {
+				return ""
+			}
+		}
+
+		// Return composite key: last parent word + block name
+		parentWords := strings.Fields(parent)
+		lastParent := parentWords[len(parentWords)-1]
+		return lastParent + "." + blockName
 	}
 
 	if strings.Contains(tmpl, "{Block}") {
@@ -290,6 +316,8 @@ func extractBlocks(tree ast.Node, source []byte, doc *Document, templates Headin
 					attr := parseListItem(li, source)
 					if attr.Name != "" {
 						block.Attributes = append(block.Attributes, attr)
+					} else if name := malformedAttrName(li, source); name != "" {
+						block.MalformedAttributes = append(block.MalformedAttributes, name)
 					}
 				}
 			}
@@ -378,4 +406,56 @@ func parseListItem(li *ast.ListItem, source []byte) DocAttribute {
 	}
 
 	return attr
+}
+
+// malformedAttrName detects list items that look like attributes but are missing
+// the standard " - " separator (e.g., using no dash, em-dash, or missing space).
+func malformedAttrName(li *ast.ListItem, source []byte) string {
+	var rawText string
+	for child := li.FirstChild(); child != nil; child = child.NextSibling() {
+		switch c := child.(type) {
+		case *ast.TextBlock:
+			rawText = string(c.Text(source))
+		case *ast.Paragraph:
+			rawText = string(c.Text(source))
+		}
+		if rawText != "" {
+			break
+		}
+	}
+	if rawText == "" {
+		return ""
+	}
+
+	// Already has " - " — parseListItem should have handled it
+	if strings.Contains(rawText, " - ") {
+		return ""
+	}
+
+	// Look for pattern: name (Required|Optional) or name – (with em-dash)
+	// Extract potential name (first word, no spaces, looks like snake_case)
+	parts := strings.Fields(rawText)
+	if len(parts) < 2 {
+		return ""
+	}
+	name := strings.Trim(parts[0], "`")
+	if name == "" || strings.Contains(name, " ") || name != strings.ToLower(name) {
+		return ""
+	}
+	if strings.ContainsAny(name, ".[]*") {
+		return ""
+	}
+
+	// Check if what follows looks like (Required), (Optional), or a dash variant
+	rest := rawText[len(parts[0]):]
+	rest = strings.TrimSpace(rest)
+	if strings.HasPrefix(rest, "(") || strings.HasPrefix(rest, "\u2013") || strings.HasPrefix(rest, "\u2014") {
+		return name
+	}
+	// "- (" with missing leading space
+	if strings.HasPrefix(rest, "-(") || strings.HasPrefix(rest, "- (") {
+		return name
+	}
+
+	return ""
 }

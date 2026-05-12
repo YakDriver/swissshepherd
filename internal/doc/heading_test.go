@@ -129,6 +129,33 @@ func TestHeadingTemplates_Match(t *testing.T) {
 			heading:   "Network",
 			want:      "",
 		},
+		// {Parent} template — single parent
+		{
+			name:      "parent single word",
+			templates: doc.HeadingTemplates{"`{Parent}` `{Block}` Block"},
+			heading:   "custom_key header Block",
+			want:      "custom_key.header",
+		},
+		// {Parent} template — multi-word parent
+		{
+			name:      "parent multi-word",
+			templates: doc.HeadingTemplates{"`{Parent}` `{Block}` Block"},
+			heading:   "customized_metric_specification metrics metric_stat Block",
+			want:      "metrics.metric_stat",
+		},
+		{
+			name:      "parent three words",
+			templates: doc.HeadingTemplates{"`{Parent}` `{Block}` Block"},
+			heading:   "metric_data_query metric_stat metric Block",
+			want:      "metric_stat.metric",
+		},
+		// {Parent} template — no match without suffix
+		{
+			name:      "parent rejects single word",
+			templates: doc.HeadingTemplates{"`{Parent}` `{Block}` Block"},
+			heading:   "header Block",
+			want:      "",
+		},
 	}
 
 	for _, tt := range tests {

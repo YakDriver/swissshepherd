@@ -5,6 +5,7 @@ package check
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/YakDriver/swissshepherd/internal/doc"
 	"github.com/YakDriver/swissshepherd/internal/schema"
@@ -22,10 +23,19 @@ func (r *HeadingStyleRule) Check(resource string, rs *schema.ResourceSchema, d *
 		return nil
 	}
 
-	// Build set of schema block leaf names for filtering.
+	// Build set of schema block leaf names and detect ambiguous ones
+	// (same leaf name appears with different attribute sets).
 	schemaLeaves := make(map[string]bool)
-	for path := range rs.Blocks {
-		schemaLeaves[leafName(path)] = true
+	ambiguousLeaves := make(map[string]bool)
+	leafAttrs := make(map[string]string) // leaf -> sorted attr signature
+	for path, block := range rs.Blocks {
+		leaf := leafName(path)
+		schemaLeaves[leaf] = true
+		sig := blockSignature(block)
+		if prev, exists := leafAttrs[leaf]; exists && prev != sig {
+			ambiguousLeaves[leaf] = true
+		}
+		leafAttrs[leaf] = sig
 	}
 
 	var results []Result
@@ -42,16 +52,46 @@ func (r *HeadingStyleRule) Check(resource string, rs *schema.ResourceSchema, d *
 			if r.Preferred.Match(block.Heading) != "" {
 				continue
 			}
-			// Heading matched an accepted style but not a preferred one — suggest fix
-			suggested := doc.RenderHeading(string(r.Preferred[0]), block.Name)
-			results = append(results, Result{
-				Rule:     r.Name(),
-				Resource: resource,
-				Severity: SeverityWarning,
-				Message:  fmt.Sprintf("block %q heading %q should be %q", block.Name, block.Heading, suggested),
-				Block:    block.Name,
-			})
+			// Suggest {Parent} form for ambiguous blocks, plain form otherwise.
+			var suggested string
+			if ambiguousLeaves[block.Name] {
+				suggested = fmt.Sprintf("`{parent}` `%s` Block", block.Name)
+				results = append(results, Result{
+					Rule:     r.Name(),
+					Resource: resource,
+					Severity: SeverityWarning,
+					Message:  fmt.Sprintf("block %q heading %q is ambiguous (multiple blocks share this name with different schemas); use parent to disambiguate: %s", block.Name, block.Heading, suggested),
+					Block:    block.Name,
+				})
+			} else {
+				for _, tmpl := range r.Preferred {
+					if !strings.Contains(tmpl, "{Parent}") {
+						suggested = doc.RenderHeading(tmpl, block.Name)
+						break
+					}
+				}
+				if suggested == "" {
+					suggested = doc.RenderHeading("`{Block}` Block", block.Name)
+				}
+				results = append(results, Result{
+					Rule:     r.Name(),
+					Resource: resource,
+					Severity: SeverityWarning,
+					Message:  fmt.Sprintf("block %q heading %q should be %q", block.Name, block.Heading, suggested),
+					Block:    block.Name,
+				})
+			}
 		}
 	}
 	return results
+}
+
+// blockSignature returns a string representing the attribute names of a block,
+// used to detect when the same leaf name has different schemas.
+func blockSignature(block *schema.Block) string {
+	var names []string
+	for _, a := range block.Attributes {
+		names = append(names, a.Name)
+	}
+	return strings.Join(names, ",")
 }

@@ -28,15 +28,16 @@ type DescriptionStyleRule struct{}
 func (r *DescriptionStyleRule) Name() string { return "description_style" }
 
 func (r *DescriptionStyleRule) Check(resource string, _ *schema.ResourceSchema, d *doc.Document) []Result {
+	seen := make(map[string]bool)
 	var results []Result
 
-	results = append(results, checkDescriptions(resource, r.Name(), d.ArgumentBlocks)...)
-	results = append(results, checkDescriptions(resource, r.Name(), d.AttributeBlocks)...)
+	results = append(results, checkDescriptions(resource, r.Name(), d.ArgumentBlocks, seen)...)
+	results = append(results, checkDescriptions(resource, r.Name(), d.AttributeBlocks, seen)...)
 
 	return results
 }
 
-func checkDescriptions(resource, ruleName string, blocks map[string]*doc.DocBlock) []Result {
+func checkDescriptions(resource, ruleName string, blocks map[string]*doc.DocBlock, seen map[string]bool) []Result {
 	var results []Result
 
 	for blockName, block := range blocks {
@@ -44,8 +45,13 @@ func checkDescriptions(resource, ruleName string, blocks map[string]*doc.DocBloc
 			if attr.Description == "" {
 				continue
 			}
+			key := blockName + "." + attr.Name
+			if seen[key] {
+				continue
+			}
 			for _, prefix := range badDescriptionPrefixes {
 				if strings.HasPrefix(attr.Description, prefix) {
+					seen[key] = true
 					results = append(results, Result{
 						Rule:     ruleName,
 						Resource: resource,
