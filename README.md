@@ -80,9 +80,6 @@ docs_path       = "website/docs"
 # Or use a pre-generated schema (skips build):
 # schema_json = "path/to/schema.json"
 
-# Subcategory allowlist — referenced by the frontmatter check when set
-allowed_subcategories_file = "website/allowed-subcategories.txt"
-
 check "completeness" {
   enabled = true
 
@@ -132,6 +129,10 @@ check "frontmatter" {
   require_description = true
   forbid_layout          = true
   forbid_sidebar_current = true
+
+  # Subcategory allowlist (inline or file). When non-empty, a frontmatter
+  # subcategory outside this list fails.
+  allowed_subcategories_file = "website/allowed-subcategories.txt"
 }
 ```
 
@@ -219,7 +220,7 @@ Every frontmatter toggle is off by default — the rule does nothing until at le
 | `forbid_layout` | Fail if `layout` is present (registry layout) |
 | `forbid_sidebar_current` | Fail if `sidebar_current` is present (always, in modern docs) |
 
-The subcategory allowlist is set at the top level via `allowed_subcategories` (inline list) or `allowed_subcategories_file` (newline-separated file). When the allowlist is non-empty, a frontmatter `subcategory` value not on the list fails. An empty allowlist is equivalent to "anything goes". The allowlist only fires when `subcategory` is present in the file — use `require_subcategory` alongside it if absence should also fail.
+The subcategory allowlist is set inside the `check "frontmatter"` block via `allowed_subcategories` (inline list) or `allowed_subcategories_file` (newline-separated file). When the allowlist is non-empty, a frontmatter `subcategory` value not on the list fails. An empty allowlist is equivalent to "anything goes". The allowlist only fires when `subcategory` is present in the file — use `require_subcategory` alongside it if absence should also fail.
 
 An unterminated or missing frontmatter block is treated the same as an absent block: each `require_*` toggle produces a result, `forbid_*` toggles stay silent.
 
