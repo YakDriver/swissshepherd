@@ -16,6 +16,7 @@ swissshepherd compares a Terraform provider's schema against its markdown docume
 - **Heading style mismatches** — nested block headings not matching the preferred format
 - **Format / structure issues** — code blocks inside argument sections, multi-line attribute descriptions, interrupted attribute lists
 - **Frontmatter problems** — missing required YAML frontmatter fields, forbidden fields present, disallowed subcategories
+- **Title section problems** — missing title, wrong heading level, bad `<Kind>: ` prefix, code blocks misplaced above the first `##` heading
 
 ## Installation
 
@@ -150,6 +151,15 @@ check "frontmatter" {
   # subcategory outside this list fails.
   allowed_subcategories_file = "website/allowed-subcategories.txt"
 }
+
+check "title_section" {
+  enabled = true
+
+  # Override the allow-list of accepted kinds if your provider uses custom
+  # heading prefixes. Defaults to:
+  # ["Action", "Data Source", "Ephemeral", "Function", "List Resource", "Resource"]
+  # allowed_prefixes = ["Resource", "Data Source"]
+}
 ```
 
 All rules are enabled by default. Add a `check` block with `enabled = false` to disable one.
@@ -215,6 +225,7 @@ If `block_heading_styles` is omitted, a sensible default is used.
 | `description_style` | schema + doc | Descriptions don't start with weak prefixes (`A`, `An`, `The`, `Specifies`, `Indicates`, `Describes`, `Defines`) |
 | `computed_attribute` | schema + doc | Computed-only attributes appear in Attribute Reference, not Argument Reference |
 | `heading_style` | schema + doc | Nested block headings match the preferred template (requires `preferred_block_heading_styles`) |
+| `title_section` | schema + doc | Level-1 heading is present, at level 1, begins with one of the allowed `<Kind>: ` prefixes, and contains no code blocks |
 | `format_style` | raw file | No code blocks inside argument/attribute sections, single-line attribute entries, uninterrupted attribute lists |
 | `frontmatter` | raw file | YAML frontmatter field presence/absence and subcategory allowlist |
 

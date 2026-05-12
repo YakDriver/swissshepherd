@@ -73,6 +73,13 @@ type CheckConfig struct {
 	// require_subcategory if absence should also fail.
 	AllowedSubcategories     []string `hcl:"allowed_subcategories,optional"`
 	AllowedSubcategoriesFile string   `hcl:"allowed_subcategories_file,optional"`
+
+	// TitleSection rule options.
+	//
+	// AllowedPrefixes replaces the default set of permitted level-1 heading
+	// prefixes ("Action", "Data Source", "Ephemeral", "Function",
+	// "List Resource", "Resource"). Leave empty to use the default.
+	AllowedPrefixes []string `hcl:"allowed_prefixes,optional"`
 }
 
 // Load reads and parses an HCL config file. Returns a zero-value Config if

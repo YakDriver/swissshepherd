@@ -140,10 +140,16 @@ func matchTemplate(tmpl, heading string) string {
 			}
 		}
 
-		// Return composite key: last parent word + block name
+		// Return composite key with enough parent context to disambiguate
+		// For "a b c block_name", prefer "b.c.block_name" if multiple parents exist
+		// to handle cases like "dest s3 format config" vs "dest upsolver format config"
 		parentWords := strings.Fields(parent)
-		lastParent := parentWords[len(parentWords)-1]
-		return lastParent + "." + blockName
+		if len(parentWords) >= 2 {
+			// Use last two parent words for disambiguation
+			return parentWords[len(parentWords)-2] + "." + parentWords[len(parentWords)-1] + "." + blockName
+		}
+		// Single parent: use it directly
+		return parentWords[0] + "." + blockName
 	}
 
 	if strings.Contains(tmpl, "{Block}") {
@@ -200,6 +206,7 @@ type Document struct {
 	ResourceName    string
 	ArgumentBlocks  map[string]*DocBlock
 	AttributeBlocks map[string]*DocBlock
+	Sections        *Sections
 }
 
 // Blocks returns a merged view of argument + attribute blocks.
@@ -245,6 +252,7 @@ func ParseWithTemplates(source []byte, name string, templates HeadingTemplates) 
 		ResourceName:    name,
 		ArgumentBlocks:  make(map[string]*DocBlock),
 		AttributeBlocks: make(map[string]*DocBlock),
+		Sections:        &Sections{},
 	}
 
 	extractBlocks(tree, source, doc, templates)
@@ -253,7 +261,20 @@ func ParseWithTemplates(source []byte, name string, templates HeadingTemplates) 
 
 func extractBlocks(tree ast.Node, source []byte, doc *Document, templates HeadingTemplates) {
 	var currentBlockName string
+	var currentSection *Section
 	var inArguments, inAttributes bool
+
+	// assignSection records a freshly discovered top-level section and makes it
+	// the current accumulator target for paragraphs and code blocks that follow.
+	// Only the first occurrence of each section is captured — duplicate headings
+	// keep pointing at the first one so rules can still reason about "the"
+	// section without the walker silently replacing it.
+	assignSection := func(field **Section, heading *ast.Heading, text string) {
+		if *field == nil {
+			*field = &Section{Heading: heading, Text: text}
+		}
+		currentSection = *field
+	}
 
 	_ = ast.Walk(tree, func(node ast.Node, entering bool) (ast.WalkStatus, error) {
 		if !entering {
@@ -264,19 +285,38 @@ func extractBlocks(tree ast.Node, source []byte, doc *Document, templates Headin
 		case *ast.Heading:
 			headingText := string(n.Text(source))
 
+			if n.Level == 1 {
+				assignSection(&doc.Sections.Title, n, headingText)
+				inArguments = false
+				inAttributes = false
+				return ast.WalkSkipChildren, nil
+			}
+
 			if n.Level == 2 {
 				inArguments = strings.HasPrefix(headingText, "Argument")
 				inAttributes = strings.HasPrefix(headingText, "Attribute")
 
-				if inArguments {
+				switch {
+				case inArguments:
 					currentBlockName = ""
 					ensureBlock(doc.ArgumentBlocks, "", headingText)
-				} else if inAttributes {
+					assignSection(&doc.Sections.Arguments, n, headingText)
+				case inAttributes:
 					currentBlockName = ""
 					ensureBlock(doc.AttributeBlocks, "", headingText)
-				} else {
-					inArguments = false
-					inAttributes = false
+					assignSection(&doc.Sections.Attributes, n, headingText)
+				case strings.HasPrefix(headingText, "Example"):
+					assignSection(&doc.Sections.Example, n, headingText)
+				case strings.HasPrefix(headingText, "Timeout"):
+					assignSection(&doc.Sections.Timeouts, n, headingText)
+				case strings.HasPrefix(headingText, "Import"):
+					assignSection(&doc.Sections.Import, n, headingText)
+				case strings.HasPrefix(headingText, "Signature"):
+					assignSection(&doc.Sections.Signature, n, headingText)
+				default:
+					// Unknown level-2 section — stop accumulating into any
+					// recognized section until the next known heading.
+					currentSection = nil
 				}
 				return ast.WalkSkipChildren, nil
 			}
@@ -294,6 +334,18 @@ func extractBlocks(tree ast.Node, source []byte, doc *Document, templates Headin
 				return ast.WalkSkipChildren, nil
 			}
 
+			return ast.WalkSkipChildren, nil
+
+		case *ast.FencedCodeBlock:
+			if currentSection != nil {
+				currentSection.FencedCodeBlocks = append(currentSection.FencedCodeBlocks, n)
+			}
+			return ast.WalkSkipChildren, nil
+
+		case *ast.Paragraph:
+			if currentSection != nil {
+				currentSection.Paragraphs = append(currentSection.Paragraphs, n)
+			}
 			return ast.WalkSkipChildren, nil
 
 		case *ast.List:

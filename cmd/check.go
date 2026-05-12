@@ -152,6 +152,11 @@ func runCheck(cmd *cobra.Command, args []string) error {
 	if cfg.IsCheckEnabled("computed_attribute") {
 		rules = append(rules, &check.ComputedAttributeRule{})
 	}
+	if cfg.IsCheckEnabled("title_section") {
+		rules = append(rules, &check.TitleSectionRule{
+			AllowedPrefixes: cfg.GetCheck("title_section").AllowedPrefixes,
+		})
+	}
 
 	preferred := preferredHeadingTemplates(cfg)
 	if cfg.IsCheckEnabled("heading_style") && len(preferred) > 0 {
