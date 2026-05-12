@@ -162,20 +162,32 @@ func severity(attr schema.Attribute) Severity {
 }
 
 // findDocBlock looks up the doc block by the leaf name of the schema path.
-// Falls back to checking parent.leaf composite keys and then leaf-only.
+// Tries parent.leaf composite keys at all levels, then falls back to leaf-only.
 func findDocBlock(d *doc.Document, leafName string, fullPath string) *doc.DocBlock {
 	blocks := d.Blocks()
 	// For root block, look up ""
 	if fullPath == "" {
 		return blocks[""]
 	}
-	// Try parent.leaf composite key (from {Parent} headings)
 	parts := strings.Split(fullPath, ".")
+	// Try two-level parent combinations first: "parent2.parent1.leaf"
+	// For path "a.b.c.d", try "b.c.d", then "a.b.d"
+	if len(parts) >= 3 {
+		for i := len(parts) - 3; i >= 0; i-- {
+			composite := parts[i] + "." + parts[i+1] + "." + leafName
+			if b, ok := blocks[composite]; ok {
+				return b
+			}
+		}
+	}
+	// Try single-level parent combinations: "parent.leaf"
+	// For path "a.b.c.d", try "c.d", then "b.d", then "a.d"
 	if len(parts) >= 2 {
-		parent := parts[len(parts)-2]
-		composite := parent + "." + leafName
-		if b, ok := blocks[composite]; ok {
-			return b
+		for i := len(parts) - 2; i >= 0; i-- {
+			composite := parts[i] + "." + leafName
+			if b, ok := blocks[composite]; ok {
+				return b
+			}
 		}
 	}
 	// Fall back to leaf-only

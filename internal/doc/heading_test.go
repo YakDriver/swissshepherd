@@ -136,18 +136,18 @@ func TestHeadingTemplates_Match(t *testing.T) {
 			heading:   "custom_key header Block",
 			want:      "custom_key.header",
 		},
-		// {Parent} template — multi-word parent
+		// {Parent} template — multi-word parent (uses last two parent words for disambiguation)
 		{
 			name:      "parent multi-word",
 			templates: doc.HeadingTemplates{"`{Parent}` `{Block}` Block"},
 			heading:   "customized_metric_specification metrics metric_stat Block",
-			want:      "metrics.metric_stat",
+			want:      "customized_metric_specification.metrics.metric_stat",
 		},
 		{
 			name:      "parent three words",
 			templates: doc.HeadingTemplates{"`{Parent}` `{Block}` Block"},
 			heading:   "metric_data_query metric_stat metric Block",
-			want:      "metric_stat.metric",
+			want:      "metric_data_query.metric_stat.metric",
 		},
 		// {Parent} template — no match without suffix
 		{
