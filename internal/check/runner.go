@@ -157,7 +157,9 @@ func (r *Runner) runTarget(t *config.Type, name string, logOnError bool) ([]Resu
 	docPath, err := r.resolveDocPath(t, name)
 	if err != nil {
 		if logOnError {
-			r.Logger.Warn("doc file not found", "type", t.Name, "name", name, "error", err)
+			if !slices.Contains(r.Config.IgnoreFileMissing, name) {
+				r.Logger.Warn("doc file not found", "type", t.Name, "name", name, "error", err)
+			}
 			return nil, nil
 		}
 		return nil, err
@@ -225,7 +227,13 @@ func (r *Runner) applicableFileRules(name, typeName string) []FileRule {
 // resolve relative to the current working directory. Returns an error
 // identifying every path tried when none exist.
 func (r *Runner) resolveDocPath(t *config.Type, name string) (string, error) {
-	candidates := t.ResolveDocPath(name, r.Config.ProviderName())
+	docName := name
+	if alias, ok := r.Config.FileAliases[t.Name+"/"+name]; ok {
+		docName = alias
+	} else if alias, ok := r.Config.FileAliases[name]; ok {
+		docName = alias
+	}
+	candidates := t.ResolveDocPath(docName, r.Config.ProviderName())
 	anchor := r.Config.ProviderDir
 	tried := make([]string, 0, len(candidates))
 	for _, c := range candidates {
