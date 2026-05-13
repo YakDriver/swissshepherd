@@ -190,6 +190,9 @@ func (r *Runner) runTarget(t *config.Type, name string, logOnError bool) ([]Resu
 	for _, rule := range applicableFileRules {
 		results = append(results, rule.CheckFile(name, docPath, content)...)
 	}
+	for i := range results {
+		results[i].Path = docPath
+	}
 	return results, nil
 }
 
