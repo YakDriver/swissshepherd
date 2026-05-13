@@ -133,6 +133,14 @@ func (r *CompletenessRule) Check(resource string, rs *schema.ResourceSchema, d *
 					Message:  msg,
 					Block:    blockPath,
 				})
+			} else if slices.Contains(docBlock.MalformedAttributes, attr.Name) {
+				results = append(results, Result{
+					Rule:     r.Name(),
+					Resource: resource,
+					Severity: SeverityWarning,
+					Message:  fmt.Sprintf("attribute %q in block %q is documented but missing the \" - \" separator (expected: * `%s` - (Required|Optional) ...)", attr.Name, displayPath(blockPath), attr.Name),
+					Block:    blockPath,
+				})
 			}
 		}
 

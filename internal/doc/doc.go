@@ -368,6 +368,10 @@ func extractBlocks(tree ast.Node, source []byte, doc *Document, templates Headin
 					attr := parseListItem(li, source)
 					if attr.Name != "" {
 						block.Attributes = append(block.Attributes, attr)
+						// Flag attributes with malformed separator (e.g. `mode`- instead of `mode` -).
+						if hasMalformedSeparator(li, source, attr.Name) {
+							block.MalformedAttributes = append(block.MalformedAttributes, attr.Name)
+						}
 					} else if name := malformedAttrName(li, source); name != "" {
 						block.MalformedAttributes = append(block.MalformedAttributes, name)
 					}
@@ -378,6 +382,25 @@ func extractBlocks(tree ast.Node, source []byte, doc *Document, templates Headin
 
 		return ast.WalkContinue, nil
 	})
+}
+
+// hasMalformedSeparator checks if the raw source for a list item has a
+// backtick-dash pattern (`name`- ) instead of the correct `name` - format.
+func hasMalformedSeparator(li *ast.ListItem, source []byte, name string) bool {
+	for child := li.FirstChild(); child != nil; child = child.NextSibling() {
+		var raw string
+		switch c := child.(type) {
+		case *ast.TextBlock:
+			raw = string(c.Text(source))
+		case *ast.Paragraph:
+			raw = string(c.Text(source))
+		}
+		if raw != "" {
+			// Look for `name`- (no space between closing backtick and dash)
+			return strings.Contains(raw, "`"+name+"`-")
+		}
+	}
+	return false
 }
 
 func ensureBlock(blocks map[string]*DocBlock, name, heading string) {
@@ -417,6 +440,14 @@ func parseListItem(li *ast.ListItem, source []byte) DocAttribute {
 		return DocAttribute{}
 	}
 
+	// Primary separator is " - " (with spaces). Also accept "`- " which appears
+	// when authors omit the space before the dash: `mode`- (Required) ...
+	sep := " - "
+	if !strings.Contains(rawText, sep) && strings.Contains(rawText, "`- ") {
+		sep = "`- "
+		// Re-attach the backtick to the name side so trimming works correctly.
+		rawText = strings.Replace(rawText, "`- ", "` - ", 1)
+	}
 	parts := strings.SplitN(rawText, " - ", 2)
 	if len(parts) < 1 {
 		return DocAttribute{}
@@ -490,11 +521,15 @@ func malformedAttrName(li *ast.ListItem, source []byte) string {
 	if len(parts) < 2 {
 		return ""
 	}
+	// Strip surrounding backticks and a trailing dash that appears when the
+	// author writes `name`- with no space before the dash.
 	name := strings.Trim(parts[0], "`")
+	name = strings.TrimRight(name, "-")
+	name = strings.TrimRight(name, "`")
 	if name == "" || strings.Contains(name, " ") || name != strings.ToLower(name) {
 		return ""
 	}
-	if strings.ContainsAny(name, ".[]*") {
+	if strings.ContainsAny(name, ".[]*`") {
 		return ""
 	}
 
