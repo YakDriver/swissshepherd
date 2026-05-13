@@ -160,6 +160,9 @@ func runCheck(cmd *cobra.Command, args []string) error {
 	if cfg.IsCheckEnabled("section_presence") {
 		rules = append(rules, &check.SectionPresenceRule{})
 	}
+	if cfg.IsCheckEnabled("timeouts_section") {
+		rules = append(rules, &check.TimeoutsSectionRule{})
+	}
 
 	preferred := preferredHeadingTemplates(cfg)
 	if cfg.IsCheckEnabled("heading_style") && len(preferred) > 0 {
