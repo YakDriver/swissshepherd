@@ -134,13 +134,20 @@ func runCheck(cmd *cobra.Command, args []string) error {
 	var fileRules []check.FileRule
 
 	if cfg.IsCheckEnabled("completeness") {
-		rules = append(rules, &check.CompletenessRule{IgnoreDeprecated: true})
+		cc := cfg.GetCheck("completeness")
+		rules = append(rules, &check.CompletenessRule{
+			IgnoreDeprecated:   cc.IgnoreDeprecated == nil || *cc.IgnoreDeprecated,
+			ImplicitAttributes: cc.ImplicitAttributes,
+			PhantomAllowlist:   cc.PhantomAllowlist,
+			SkipBlocks:         cc.SkipBlocks,
+		})
 	}
 	if cfg.IsCheckEnabled("ordering") {
 		rules = append(rules, &check.OrderingRule{})
 	}
 	if cfg.IsCheckEnabled("description_style") {
-		rules = append(rules, &check.DescriptionStyleRule{})
+		cc := cfg.GetCheck("description_style")
+		rules = append(rules, &check.DescriptionStyleRule{BadPrefixes: cc.BadPrefixes})
 	}
 	if cfg.IsCheckEnabled("computed_attribute") {
 		rules = append(rules, &check.ComputedAttributeRule{})
@@ -156,10 +163,11 @@ func runCheck(cmd *cobra.Command, args []string) error {
 		rules = append(rules, &check.HeadingStyleRule{Preferred: preferred})
 	}
 	if cfg.IsCheckEnabled("format_style") {
+		cc := cfg.GetCheck("format_style")
 		fileRules = append(fileRules, &check.FormatStyleRule{
-			NoCodeBlocks:       true,
-			SingleLineAttrs:    true,
-			UninterruptedLists: true,
+			NoCodeBlocks:       cc.NoCodeBlocks,
+			SingleLineAttrs:    cc.SingleLineAttrs,
+			UninterruptedLists: cc.UninterruptedLists,
 		})
 	}
 	if cfg.IsCheckEnabled("frontmatter") {

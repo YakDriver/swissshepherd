@@ -15,13 +15,25 @@ import (
 // - Single-line attribute descriptions (no continuation lines)
 // - Uninterrupted attribute lists (no unexpected prose between list items)
 //
+// All three checks default to enabled. Set a field to a pointer to false to
+// disable it: check "format_style" { no_code_blocks = false }.
+//
 // Implements FileRule: it scans raw lines rather than the goldmark AST, so it
 // can catch whitespace and continuation issues that are normalized away by the
 // parser.
 type FormatStyleRule struct {
-	NoCodeBlocks       bool
-	SingleLineAttrs    bool
-	UninterruptedLists bool
+	// nil means enabled (default true). Set to pointer-to-false to disable.
+	NoCodeBlocks       *bool
+	SingleLineAttrs    *bool
+	UninterruptedLists *bool
+}
+
+func (r *FormatStyleRule) noCodeBlocks() bool { return r.NoCodeBlocks == nil || *r.NoCodeBlocks }
+func (r *FormatStyleRule) singleLineAttrs() bool {
+	return r.SingleLineAttrs == nil || *r.SingleLineAttrs
+}
+func (r *FormatStyleRule) uninterruptedLists() bool {
+	return r.UninterruptedLists == nil || *r.UninterruptedLists
 }
 
 func (r *FormatStyleRule) Name() string { return "format_style" }
@@ -57,7 +69,7 @@ func (r *FormatStyleRule) CheckFile(resource, _ string, content []byte) []Result
 
 		// Code block check
 		if strings.HasPrefix(line, "```") {
-			if r.NoCodeBlocks && !inCodeBlock {
+			if r.noCodeBlocks() && !inCodeBlock {
 				results = append(results, Result{
 					Rule:     r.Name(),
 					Resource: resource,
@@ -77,7 +89,7 @@ func (r *FormatStyleRule) CheckFile(resource, _ string, content []byte) []Result
 		isBlank := line == ""
 
 		// Single-line check: continuation line after an attribute
-		if r.SingleLineAttrs && prevWasAttr && !isAttrLine && !isHeading && !isBlank && strings.HasPrefix(line, "  ") {
+		if r.singleLineAttrs() && prevWasAttr && !isAttrLine && !isHeading && !isBlank && strings.HasPrefix(line, "  ") {
 			results = append(results, Result{
 				Rule:     r.Name(),
 				Resource: resource,
@@ -87,7 +99,7 @@ func (r *FormatStyleRule) CheckFile(resource, _ string, content []byte) []Result
 		}
 
 		// Uninterrupted list check
-		if r.UninterruptedLists && inList && !isAttrLine && !isHeading && !isBlank && !strings.HasPrefix(line, "  ") && !isListProse(line) {
+		if r.uninterruptedLists() && inList && !isAttrLine && !isHeading && !isBlank && !strings.HasPrefix(line, "  ") && !isListProse(line) {
 			results = append(results, Result{
 				Rule:     r.Name(),
 				Resource: resource,

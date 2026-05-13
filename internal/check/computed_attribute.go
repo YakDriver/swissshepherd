@@ -37,7 +37,7 @@ func (r *ComputedAttributeRule) Check(resource string, rs *schema.ResourceSchema
 	var computedOnly []string
 	for _, attr := range rootBlock.Attributes {
 		if attr.Computed && !attr.Optional && !attr.Required {
-			if slices.Contains(implicitAttributes, attr.Name) {
+			if slices.Contains(DefaultImplicitAttributes, attr.Name) {
 				continue
 			}
 			computedOnly = append(computedOnly, attr.Name)

@@ -12,15 +12,51 @@ import (
 	"github.com/YakDriver/swissshepherd/internal/schema"
 )
 
-// Attributes that are always implicitly present and don't need documentation.
-var implicitAttributes = []string{"id", "tags_all"}
+// DefaultImplicitAttributes are attribute names that are always implicitly
+// present in provider docs and don't need explicit documentation entries.
+// Overridable via check "completeness" { implicit_attributes = [...] }.
+var DefaultImplicitAttributes = []string{"id", "tags_all"}
 
-// Attributes with special documentation handling.
-var specialAttributes = []string{"tags", "tags_all"}
+// DefaultPhantomAllowlist are attribute names that may appear in docs without
+// a corresponding schema entry (provider-injected attributes). Overridable
+// via check "completeness" { phantom_allowlist = [...] }.
+var DefaultPhantomAllowlist = []string{"tags", "tags_all"}
+
+// DefaultSkipBlocks are block names that are always skipped by the
+// completeness check. Overridable via check "completeness" { skip_blocks = [...] }.
+var DefaultSkipBlocks = []string{"timeouts"}
 
 // CompletenessRule checks that all schema attributes are documented and vice versa.
 type CompletenessRule struct {
+	// IgnoreDeprecated skips deprecated attributes. Default true in wiring.
 	IgnoreDeprecated bool
+	// ImplicitAttributes overrides DefaultImplicitAttributes when non-nil.
+	ImplicitAttributes []string
+	// PhantomAllowlist overrides DefaultPhantomAllowlist when non-nil.
+	PhantomAllowlist []string
+	// SkipBlocks overrides DefaultSkipBlocks when non-nil.
+	SkipBlocks []string
+}
+
+func (r *CompletenessRule) implicit() []string {
+	if r.ImplicitAttributes != nil {
+		return r.ImplicitAttributes
+	}
+	return DefaultImplicitAttributes
+}
+
+func (r *CompletenessRule) phantom() []string {
+	if r.PhantomAllowlist != nil {
+		return r.PhantomAllowlist
+	}
+	return DefaultPhantomAllowlist
+}
+
+func (r *CompletenessRule) skipBlocks() []string {
+	if r.SkipBlocks != nil {
+		return r.SkipBlocks
+	}
+	return DefaultSkipBlocks
 }
 
 func (r *CompletenessRule) Name() string { return "completeness" }
@@ -43,8 +79,8 @@ func (r *CompletenessRule) Check(resource string, rs *schema.ResourceSchema, d *
 	reportedExtraAttrs := make(map[string]bool)
 
 	for blockPath, schemaBlock := range rs.Blocks {
-		// Skip the timeouts block — it has its own ## Timeouts section.
-		if blockPath == "timeouts" {
+		// Skip configured skip-blocks (default: timeouts).
+		if slices.Contains(r.skipBlocks(), blockPath) {
 			continue
 		}
 
@@ -82,7 +118,7 @@ func (r *CompletenessRule) Check(resource string, rs *schema.ResourceSchema, d *
 
 		// Check each schema attribute is documented.
 		for _, attr := range schemaBlock.Attributes {
-			if shouldSkipAttribute(attr, r.IgnoreDeprecated) {
+			if r.shouldSkipAttribute(attr) {
 				continue
 			}
 			if !documented[attr.Name] {
@@ -115,7 +151,7 @@ func (r *CompletenessRule) Check(resource string, rs *schema.ResourceSchema, d *
 		}
 
 		for _, docAttr := range docBlock.Attributes {
-			if !schemaAttrNames[docAttr.Name] && !slices.Contains(specialAttributes, docAttr.Name) {
+			if !schemaAttrNames[docAttr.Name] && !slices.Contains(r.phantom(), docAttr.Name) {
 				key := docBlockName + "." + docAttr.Name
 				if reportedExtraAttrs[key] {
 					continue
@@ -146,11 +182,11 @@ func hasConfigurableAttributes(block *schema.Block) bool {
 	return false
 }
 
-func shouldSkipAttribute(attr schema.Attribute, ignoreDeprecated bool) bool {
-	if slices.Contains(implicitAttributes, attr.Name) {
+func (r *CompletenessRule) shouldSkipAttribute(attr schema.Attribute) bool {
+	if slices.Contains(r.implicit(), attr.Name) {
 		return true
 	}
-	if ignoreDeprecated && attr.Deprecated {
+	if r.IgnoreDeprecated && attr.Deprecated {
 		return true
 	}
 	// Computed-only attributes (not optional, not required) are typically documented

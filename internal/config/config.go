@@ -99,6 +99,20 @@ type CheckConfig struct {
 	// prefixes ("Action", "Data Source", "Ephemeral", "Function",
 	// "List Resource", "Resource"). Leave empty to use the default.
 	AllowedPrefixes []string `hcl:"allowed_prefixes,optional"`
+
+	// Completeness rule options.
+	IgnoreDeprecated   *bool    `hcl:"ignore_deprecated,optional"`
+	ImplicitAttributes []string `hcl:"implicit_attributes,optional"`
+	PhantomAllowlist   []string `hcl:"phantom_allowlist,optional"`
+	SkipBlocks         []string `hcl:"skip_blocks,optional"`
+
+	// DescriptionStyle rule options.
+	BadPrefixes []string `hcl:"bad_prefixes,optional"`
+
+	// FormatStyle rule options. nil means enabled (default true).
+	NoCodeBlocks       *bool `hcl:"no_code_blocks,optional"`
+	SingleLineAttrs    *bool `hcl:"single_line_attrs,optional"`
+	UninterruptedLists *bool `hcl:"uninterrupted_lists,optional"`
 }
 
 // AppliesTo reports whether this check's path-scoping admits the given
