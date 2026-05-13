@@ -123,23 +123,33 @@ func (r *CompletenessRule) Check(resource string, rs *schema.ResourceSchema, d *
 			}
 			if !documented[attr.Name] {
 				msg := fmt.Sprintf("attribute %q in block %q is not documented", attr.Name, displayPath(blockPath))
-				if slices.Contains(docBlock.MalformedAttributes, attr.Name) {
+				if m, ok := findMalformed(docBlock.MalformedAttributes, attr.Name); ok {
 					msg = fmt.Sprintf("attribute %q in block %q is documented but missing the \" - \" separator (expected: * `%s` - (Required|Optional) ...)", attr.Name, displayPath(blockPath), attr.Name)
+					results = append(results, Result{
+						Rule:     r.Name(),
+						Resource: resource,
+						Severity: severity(attr),
+						Message:  msg,
+						Block:    blockPath,
+						Line:     m.Line,
+					})
+				} else {
+					results = append(results, Result{
+						Rule:     r.Name(),
+						Resource: resource,
+						Severity: severity(attr),
+						Message:  msg,
+						Block:    blockPath,
+					})
 				}
-				results = append(results, Result{
-					Rule:     r.Name(),
-					Resource: resource,
-					Severity: severity(attr),
-					Message:  msg,
-					Block:    blockPath,
-				})
-			} else if slices.Contains(docBlock.MalformedAttributes, attr.Name) {
+			} else if m, ok := findMalformed(docBlock.MalformedAttributes, attr.Name); ok {
 				results = append(results, Result{
 					Rule:     r.Name(),
 					Resource: resource,
 					Severity: SeverityWarning,
 					Message:  fmt.Sprintf("attribute %q in block %q is documented but missing the \" - \" separator (expected: * `%s` - (Required|Optional) ...)", attr.Name, displayPath(blockPath), attr.Name),
 					Block:    blockPath,
+					Line:     m.Line,
 				})
 			}
 		}
@@ -300,4 +310,14 @@ func displayPath(path string) string {
 		return "(root)"
 	}
 	return path
+}
+
+// findMalformed looks up a name in the malformed attributes list.
+func findMalformed(malformed []doc.MalformedAttr, name string) (doc.MalformedAttr, bool) {
+	for _, m := range malformed {
+		if m.Name == name {
+			return m, true
+		}
+	}
+	return doc.MalformedAttr{}, false
 }

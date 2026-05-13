@@ -4,6 +4,7 @@
 package doc
 
 import (
+	"bytes"
 	"fmt"
 	"maps"
 	"os"
@@ -20,6 +21,13 @@ type DocAttribute struct {
 	Required    bool
 	Optional    bool
 	Description string
+	Line        int // 1-based line number in the source file
+}
+
+// MalformedAttr records an attribute name with a formatting issue and its location.
+type MalformedAttr struct {
+	Name string
+	Line int
 }
 
 // DocBlock represents a documented block section.
@@ -27,7 +35,7 @@ type DocBlock struct {
 	Name                string
 	Heading             string
 	Attributes          []DocAttribute
-	MalformedAttributes []string // attribute names found but with formatting issues
+	MalformedAttributes []MalformedAttr // attributes found but with formatting issues
 }
 
 // HeadingTemplates defines patterns for recognizing block headings.
@@ -365,15 +373,17 @@ func extractBlocks(tree ast.Node, source []byte, doc *Document, templates Headin
 
 			for child := n.FirstChild(); child != nil; child = child.NextSibling() {
 				if li, ok := child.(*ast.ListItem); ok {
+					line := nodeLineNumber(li, source)
 					attr := parseListItem(li, source)
 					if attr.Name != "" {
+						attr.Line = line
 						block.Attributes = append(block.Attributes, attr)
 						// Flag attributes with malformed separator (e.g. `mode`- instead of `mode` -).
 						if hasMalformedSeparator(li, source, attr.Name) {
-							block.MalformedAttributes = append(block.MalformedAttributes, attr.Name)
+							block.MalformedAttributes = append(block.MalformedAttributes, MalformedAttr{Name: attr.Name, Line: line})
 						}
 					} else if name := malformedAttrName(li, source); name != "" {
-						block.MalformedAttributes = append(block.MalformedAttributes, name)
+						block.MalformedAttributes = append(block.MalformedAttributes, MalformedAttr{Name: name, Line: line})
 					}
 				}
 			}
@@ -386,6 +396,23 @@ func extractBlocks(tree ast.Node, source []byte, doc *Document, templates Headin
 
 // hasMalformedSeparator checks if the raw source for a list item has a
 // backtick-dash pattern (`name`- ) instead of the correct `name` - format.
+// nodeLineNumber returns the 1-based line number of a block node by inspecting
+// its first line segment or recursing into its first child.
+func nodeLineNumber(n ast.Node, source []byte) int {
+	if lines := n.Lines(); lines.Len() > 0 {
+		offset := lines.At(0).Start
+		return bytes.Count(source[:offset], []byte{'\n'}) + 1
+	}
+	// ListItem often has no direct lines; check first child.
+	if fc := n.FirstChild(); fc != nil {
+		if lines := fc.Lines(); lines.Len() > 0 {
+			offset := lines.At(0).Start
+			return bytes.Count(source[:offset], []byte{'\n'}) + 1
+		}
+	}
+	return 0
+}
+
 func hasMalformedSeparator(li *ast.ListItem, source []byte, name string) bool {
 	for child := li.FirstChild(); child != nil; child = child.NextSibling() {
 		var raw string
