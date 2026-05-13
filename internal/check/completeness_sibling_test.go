@@ -125,7 +125,7 @@ This resource exports no additional attributes.
 	}
 
 	rule := &check.CompletenessRule{IgnoreDeprecated: true}
-	results := rule.Check("aws_test_resource", rs, d)
+	results := rule.Check(check.CheckContext{Resource: "aws_test_resource", Schema: rs, Doc: d})
 
 	// Filter to errors and warnings
 	var errors, warnings []string
@@ -212,7 +212,7 @@ This resource exports no additional attributes.
 	}
 
 	rule := &check.CompletenessRule{IgnoreDeprecated: true}
-	results := rule.Check("aws_test_resource", rs, d)
+	results := rule.Check(check.CheckContext{Resource: "aws_test_resource", Schema: rs, Doc: d})
 
 	// max_connections and timeout should NOT be phantom (they exist in siblings).
 	// bogus_attr SHOULD be phantom.
@@ -307,7 +307,7 @@ This resource exports no additional attributes.
 	}
 
 	rule := &check.CompletenessRule{IgnoreDeprecated: true}
-	results := rule.Check("aws_test_resource", rs, d)
+	results := rule.Check(check.CheckContext{Resource: "aws_test_resource", Schema: rs, Doc: d})
 
 	// per_request should NOT be phantom — it's a child block of slow.grpc.
 	// max_requests should NOT be phantom — it's an attr of fast.grpc.
@@ -389,7 +389,7 @@ This resource exports no additional attributes.
 	}
 
 	rule := &check.CompletenessRule{IgnoreDeprecated: true}
-	results := rule.Check("aws_test_resource", rs, d)
+	results := rule.Check(check.CheckContext{Resource: "aws_test_resource", Schema: rs, Doc: d})
 
 	// max_pending should be reported as undocumented.
 	var found bool

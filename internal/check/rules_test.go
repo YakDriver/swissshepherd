@@ -21,7 +21,7 @@ func TestOrderingRule_Ordered(t *testing.T) {
 	}
 
 	rule := &check.OrderingRule{}
-	results := rule.Check("test_instance", nil, d)
+	results := rule.Check(check.CheckContext{Resource: "test_instance", Schema: nil, Doc: d})
 
 	for _, r := range results {
 		if r.Severity == check.SeverityError {
@@ -39,7 +39,7 @@ func TestOrderingRule_Unordered(t *testing.T) {
 	}
 
 	rule := &check.OrderingRule{}
-	results := rule.Check("test_instance", nil, d)
+	results := rule.Check(check.CheckContext{Resource: "test_instance", Schema: nil, Doc: d})
 
 	// Arguments: name, description, arn_prefix — "description" < "name" so "description" after "name" is wrong
 	// Actually: name > description, so description should come before name
@@ -81,7 +81,7 @@ func TestDescriptionStyleRule_Good(t *testing.T) {
 	}
 
 	rule := &check.DescriptionStyleRule{}
-	results := rule.Check("test_instance", nil, d)
+	results := rule.Check(check.CheckContext{Resource: "test_instance", Schema: nil, Doc: d})
 
 	if len(results) > 0 {
 		t.Errorf("expected no style errors, got %d: %v", len(results), results[0].Message)
@@ -97,7 +97,7 @@ func TestDescriptionStyleRule_Bad(t *testing.T) {
 	}
 
 	rule := &check.DescriptionStyleRule{}
-	results := rule.Check("test_instance", nil, d)
+	results := rule.Check(check.CheckContext{Resource: "test_instance", Schema: nil, Doc: d})
 
 	// Should flag: "The name", "A description", "Specifies the mode", "Indicates the type", "An ARN"
 	if len(results) < 4 {
@@ -138,7 +138,7 @@ func TestComputedAttributeRule_Correct(t *testing.T) {
 	}
 
 	rule := &check.ComputedAttributeRule{}
-	results := rule.Check("test_instance", ps.Resources["test_instance"], d)
+	results := rule.Check(check.CheckContext{Resource: "test_instance", Schema: ps.Resources["test_instance"], Doc: d})
 
 	// arn is computed-only and is in the Attribute Reference section — should pass
 	for _, r := range results {
@@ -162,7 +162,7 @@ func TestComputedAttributeRule_Wrong(t *testing.T) {
 	}
 
 	rule := &check.ComputedAttributeRule{}
-	results := rule.Check("test_instance", ps.Resources["test_instance"], d)
+	results := rule.Check(check.CheckContext{Resource: "test_instance", Schema: ps.Resources["test_instance"], Doc: d})
 
 	// arn is computed-only but is in Argument Reference and NOT in Attribute Reference
 	var foundMissing, foundWrongSection bool

@@ -7,9 +7,6 @@ import (
 	"fmt"
 	"slices"
 	"strings"
-
-	"github.com/YakDriver/swissshepherd/internal/doc"
-	"github.com/YakDriver/swissshepherd/internal/schema"
 )
 
 // DefaultTitleSectionPrefixes is the allow-list of "<kind>:" prefixes that
@@ -45,7 +42,8 @@ type TitleSectionRule struct {
 
 func (r *TitleSectionRule) Name() string { return "title_section" }
 
-func (r *TitleSectionRule) Check(resource string, _ *schema.ResourceSchema, d *doc.Document) []Result {
+func (r *TitleSectionRule) Check(ctx CheckContext) []Result {
+	resource, d := ctx.Resource, ctx.Doc
 	section := d.Sections.Title
 	if section == nil {
 		return []Result{{

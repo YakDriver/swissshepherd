@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/YakDriver/swissshepherd/internal/doc"
-	"github.com/YakDriver/swissshepherd/internal/schema"
 )
 
 // DefaultBadDescriptionPrefixes is the list of weak or redundant description
@@ -38,7 +37,8 @@ func (r *DescriptionStyleRule) prefixes() []string {
 
 func (r *DescriptionStyleRule) Name() string { return "description_style" }
 
-func (r *DescriptionStyleRule) Check(resource string, _ *schema.ResourceSchema, d *doc.Document) []Result {
+func (r *DescriptionStyleRule) Check(ctx CheckContext) []Result {
+	resource, d := ctx.Resource, ctx.Doc
 	seen := make(map[string]bool)
 	var results []Result
 

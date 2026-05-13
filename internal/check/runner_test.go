@@ -37,13 +37,13 @@ type captureCall struct {
 
 func (c *captureRule) Name() string { return c.name }
 
-func (c *captureRule) Check(resource string, rs *schema.ResourceSchema, d *doc.Document) []check.Result {
+func (c *captureRule) Check(ctx check.CheckContext) []check.Result {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.seen = append(c.seen, captureCall{
-		Resource:  resource,
-		HasSchema: rs != nil,
-		HasDoc:    d != nil,
+		Resource:  ctx.Resource,
+		HasSchema: ctx.Schema != nil,
+		HasDoc:    ctx.Doc != nil,
 	})
 	return nil
 }
@@ -720,10 +720,10 @@ type captureFileRule struct {
 
 func (c *captureFileRule) Name() string { return c.name }
 
-func (c *captureFileRule) CheckFile(resource, _ string, _ []byte) []check.Result {
+func (c *captureFileRule) CheckFile(ctx check.FileCheckContext) []check.Result {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.seen = append(c.seen, resource)
+	c.seen = append(c.seen, ctx.Resource)
 	return nil
 }
 

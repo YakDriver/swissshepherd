@@ -4,6 +4,7 @@
 package check
 
 import (
+	"github.com/YakDriver/swissshepherd/internal/config"
 	"github.com/YakDriver/swissshepherd/internal/doc"
 	"github.com/YakDriver/swissshepherd/internal/schema"
 )
@@ -36,13 +37,29 @@ type Result struct {
 	Block    string   `json:"block,omitempty"`
 }
 
+// CheckContext carries all inputs a Rule needs to produce findings.
+type CheckContext struct {
+	Resource string
+	Type     *config.Type
+	Schema   *schema.ResourceSchema
+	Doc      *doc.Document
+}
+
+// FileCheckContext carries all inputs a FileRule needs to produce findings.
+type FileCheckContext struct {
+	Resource string
+	Type     *config.Type
+	Path     string
+	Content  []byte
+}
+
 // Rule is the interface all per-resource checks implement. A Rule compares a
 // resource's schema against its parsed markdown document. For checks that
 // operate on raw file content (YAML frontmatter, file size, line-level
 // scanning, etc.) implement FileRule instead.
 type Rule interface {
 	Name() string
-	Check(resource string, rs *schema.ResourceSchema, d *doc.Document) []Result
+	Check(ctx CheckContext) []Result
 }
 
 // FileRule is the interface for checks that operate on the raw bytes of a
@@ -51,5 +68,5 @@ type Rule interface {
 // FileRule alongside the parsed Document that Rules consume.
 type FileRule interface {
 	Name() string
-	CheckFile(resource, path string, content []byte) []Result
+	CheckFile(ctx FileCheckContext) []Result
 }

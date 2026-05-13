@@ -41,7 +41,7 @@ func TestTitleSectionRule_Valid(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			rule := &check.TitleSectionRule{}
-			results := rule.Check("test_instance", nil, parseDoc(t, src))
+			results := rule.Check(check.CheckContext{Resource: "test_instance", Schema: nil, Doc: parseDoc(t, src)})
 			if len(results) != 0 {
 				t.Fatalf("expected 0 results for valid title, got %d: %v", len(results), resultMessages(results))
 			}
@@ -55,7 +55,7 @@ func TestTitleSectionRule_MissingTitle(t *testing.T) {
 	// No level-1 heading at all.
 	source := "## Example Usage\n\nBody.\n"
 	rule := &check.TitleSectionRule{}
-	results := rule.Check("aws_example", nil, parseDoc(t, source))
+	results := rule.Check(check.CheckContext{Resource: "aws_example", Schema: nil, Doc: parseDoc(t, source)})
 
 	if len(results) != 1 {
 		t.Fatalf("expected 1 result, got %d: %v", len(results), resultMessages(results))
@@ -84,7 +84,7 @@ func TestTitleSectionRule_BadPrefix(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			rule := &check.TitleSectionRule{}
-			results := rule.Check("test_instance", nil, parseDoc(t, src))
+			results := rule.Check(check.CheckContext{Resource: "test_instance", Schema: nil, Doc: parseDoc(t, src)})
 
 			if len(results) != 1 {
 				t.Fatalf("expected 1 result, got %d: %v", len(results), resultMessages(results))
@@ -104,7 +104,7 @@ func TestTitleSectionRule_CodeBlockInTitle(t *testing.T) {
 		"## Example Usage\n\nBody.\n"
 
 	rule := &check.TitleSectionRule{}
-	results := rule.Check("test_instance", nil, parseDoc(t, source))
+	results := rule.Check(check.CheckContext{Resource: "test_instance", Schema: nil, Doc: parseDoc(t, source)})
 
 	if len(results) != 1 {
 		t.Fatalf("expected 1 result, got %d: %v", len(results), resultMessages(results))
@@ -124,7 +124,7 @@ func TestTitleSectionRule_MultipleFailures(t *testing.T) {
 		"## Example Usage\n\nBody.\n"
 
 	rule := &check.TitleSectionRule{}
-	results := rule.Check("test_instance", nil, parseDoc(t, source))
+	results := rule.Check(check.CheckContext{Resource: "test_instance", Schema: nil, Doc: parseDoc(t, source)})
 
 	if len(results) != 2 {
 		t.Fatalf("expected 2 aggregated results, got %d: %v", len(results), resultMessages(results))
@@ -171,7 +171,7 @@ func TestTitleSectionRule_CustomAllowedPrefixes(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			rule := &check.TitleSectionRule{AllowedPrefixes: tt.prefixes}
-			results := rule.Check("test_instance", nil, parseDoc(t, tt.source))
+			results := rule.Check(check.CheckContext{Resource: "test_instance", Schema: nil, Doc: parseDoc(t, tt.source)})
 
 			if tt.wantPass && len(results) != 0 {
 				t.Fatalf("expected pass, got: %v", resultMessages(results))
@@ -209,7 +209,7 @@ func TestTitleSectionRule_EmitsRuleAndResourceMetadata(t *testing.T) {
 
 	source := "# AWS S3 Bucket\n\nBody.\n"
 	rule := &check.TitleSectionRule{}
-	results := rule.Check("aws_s3_bucket", nil, parseDoc(t, source))
+	results := rule.Check(check.CheckContext{Resource: "aws_s3_bucket", Schema: nil, Doc: parseDoc(t, source)})
 
 	if len(results) != 1 {
 		t.Fatalf("expected 1 result, got %d", len(results))
@@ -238,7 +238,7 @@ func TestTitleSectionRule_ValidFixture(t *testing.T) {
 		t.Fatalf("ParseFile: %v", err)
 	}
 	rule := &check.TitleSectionRule{}
-	if got := rule.Check("test_instance", nil, d); len(got) != 0 {
+	if got := rule.Check(check.CheckContext{Resource: "test_instance", Schema: nil, Doc: d}); len(got) != 0 {
 		t.Fatalf("valid fixture should pass, got: %v", resultMessages(got))
 	}
 }
@@ -251,7 +251,7 @@ func TestTitleSectionRule_BadPrefixFixture(t *testing.T) {
 		t.Fatalf("ParseFile: %v", err)
 	}
 	rule := &check.TitleSectionRule{}
-	results := rule.Check("test_instance", nil, d)
+	results := rule.Check(check.CheckContext{Resource: "test_instance", Schema: nil, Doc: d})
 	if len(results) != 1 {
 		t.Fatalf("expected 1 result, got %d: %v", len(results), resultMessages(results))
 	}
@@ -268,7 +268,7 @@ func TestTitleSectionRule_CodeBlockFixture(t *testing.T) {
 		t.Fatalf("ParseFile: %v", err)
 	}
 	rule := &check.TitleSectionRule{}
-	results := rule.Check("test_instance", nil, d)
+	results := rule.Check(check.CheckContext{Resource: "test_instance", Schema: nil, Doc: d})
 	if len(results) != 1 {
 		t.Fatalf("expected 1 result, got %d: %v", len(results), resultMessages(results))
 	}
@@ -285,7 +285,7 @@ func TestTitleSectionRule_NoTitleFixture(t *testing.T) {
 		t.Fatalf("ParseFile: %v", err)
 	}
 	rule := &check.TitleSectionRule{}
-	results := rule.Check("test_instance", nil, d)
+	results := rule.Check(check.CheckContext{Resource: "test_instance", Schema: nil, Doc: d})
 	if len(results) != 1 {
 		t.Fatalf("expected 1 result, got %d: %v", len(results), resultMessages(results))
 	}

@@ -41,7 +41,7 @@ This resource exports no additional attributes.
 `), "test_thing")
 
 	rule := &check.CompletenessRule{IgnoreDeprecated: true}
-	results := rule.Check("test_thing", rs, d)
+	results := rule.Check(check.CheckContext{Resource: "test_thing", Schema: rs, Doc: d})
 
 	for _, r := range results {
 		if r.Severity == check.SeverityError {
@@ -78,7 +78,7 @@ This resource exports no additional attributes.
 		IgnoreDeprecated:   true,
 		ImplicitAttributes: []string{"id", "tags_all", "region"},
 	}
-	results := rule.Check("test_thing", rs, d)
+	results := rule.Check(check.CheckContext{Resource: "test_thing", Schema: rs, Doc: d})
 
 	for _, r := range results {
 		if r.Severity == check.SeverityError {
@@ -117,7 +117,7 @@ This resource exports no additional attributes.
 		IgnoreDeprecated: true,
 		SkipBlocks:       []string{"timeouts", "network"},
 	}
-	results := rule.Check("test_thing", rs, d)
+	results := rule.Check(check.CheckContext{Resource: "test_thing", Schema: rs, Doc: d})
 
 	for _, r := range results {
 		if r.Severity == check.SeverityError {
@@ -145,7 +145,7 @@ func TestDescriptionStyleRule_DefaultPrefixesFire(t *testing.T) {
 `), "test")
 
 	rule := &check.DescriptionStyleRule{}
-	results := rule.Check("test", nil, d)
+	results := rule.Check(check.CheckContext{Resource: "test", Schema: nil, Doc: d})
 
 	if len(results) != 1 {
 		t.Fatalf("expected 1 result for 'The ' prefix, got %d: %v", len(results), resultMessages(results))
@@ -163,7 +163,7 @@ func TestDescriptionStyleRule_CustomBadPrefixes(t *testing.T) {
 
 	// Replace the default list with a custom one that only flags "FORBIDDEN".
 	rule := &check.DescriptionStyleRule{BadPrefixes: []string{"FORBIDDEN "}}
-	results := rule.Check("test", nil, d)
+	results := rule.Check(check.CheckContext{Resource: "test", Schema: nil, Doc: d})
 
 	if len(results) != 1 {
 		t.Fatalf("expected 1 result for custom prefix, got %d: %v", len(results), resultMessages(results))
@@ -182,7 +182,7 @@ func TestDescriptionStyleRule_EmptyBadPrefixesMatchesNothing(t *testing.T) {
 `), "test")
 
 	rule := &check.DescriptionStyleRule{BadPrefixes: []string{}}
-	results := rule.Check("test", nil, d)
+	results := rule.Check(check.CheckContext{Resource: "test", Schema: nil, Doc: d})
 
 	if len(results) != 0 {
 		t.Errorf("empty BadPrefixes should match nothing, got %d results", len(results))
@@ -217,7 +217,7 @@ code block here
 `)
 
 	rule := &check.FormatStyleRule{} // all nil → all enabled
-	results := rule.CheckFile("test", "test.md", content)
+	results := rule.CheckFile(check.FileCheckContext{Resource: "test", Path: "test.md", Content: content})
 
 	if len(results) == 0 {
 		t.Error("zero-value FormatStyleRule should flag the code block (default enabled)")
@@ -239,7 +239,7 @@ code block here
 * ` + "`name`" + ` - (Required) Name.
 `)
 
-	results := rule.CheckFile("test", "test.md", content)
+	results := rule.CheckFile(check.FileCheckContext{Resource: "test", Path: "test.md", Content: content})
 	for _, r := range results {
 		if r.Rule == "format_style" && r.Severity == check.SeverityError {
 			t.Errorf("NoCodeBlocks=false should suppress code-block errors; got: %s", r.Message)

@@ -43,8 +43,9 @@ func (r *FrontmatterRule) Name() string { return "frontmatter" }
 // frontmatter block is present, every RequireX toggle produces a result. If
 // the block exists but fails to parse as YAML, a single parse-error result is
 // returned and individual field checks are skipped.
-func (r *FrontmatterRule) CheckFile(resource, _ string, content []byte) []Result {
-	block, ok := extractFrontmatter(content)
+func (r *FrontmatterRule) CheckFile(ctx FileCheckContext) []Result {
+	resource := ctx.Resource
+	block, ok := extractFrontmatter(ctx.Content)
 	if !ok {
 		return r.missingFrontmatterResults(resource)
 	}
