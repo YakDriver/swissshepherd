@@ -26,7 +26,7 @@ func TestLoad_NoFile_ReturnsEmpty(t *testing.T) {
 	if cfg == nil {
 		t.Fatal("Load() returned nil Config for missing file")
 	}
-	if cfg.ProviderSource != "" || cfg.DocsPath != "" || len(cfg.Checks) != 0 {
+	if cfg.ProviderSource != "" || len(cfg.Checks) != 0 {
 		t.Errorf("expected zero-value Config, got %+v", cfg)
 	}
 }
@@ -49,7 +49,6 @@ func TestLoad_PathsPassThroughUnmodified(t *testing.T) {
 	const body = `
 provider_source = "registry.terraform.io/hashicorp/test"
 provider_dir    = "."
-docs_path       = "website/docs"
 schema_json     = "schema.json"
 `
 	writeFile(t, cfgPath, body)
@@ -65,7 +64,6 @@ schema_json     = "schema.json"
 		want string
 	}{
 		{"provider_dir", cfg.ProviderDir, "."},
-		{"docs_path", cfg.DocsPath, "website/docs"},
 		{"schema_json", cfg.SchemaJSON, "schema.json"},
 	}
 	for _, tt := range tests {

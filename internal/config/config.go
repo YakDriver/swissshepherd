@@ -23,7 +23,6 @@ type Config struct {
 	ProviderSource string `hcl:"provider_source,optional"`
 	ProviderDir    string `hcl:"provider_dir,optional"`
 	SchemaJSON     string `hcl:"schema_json,optional"`
-	DocsPath       string `hcl:"docs_path,optional"`
 
 	IgnoreCdktfMissingFiles bool `hcl:"ignore_cdktf_missing_files,optional"`
 

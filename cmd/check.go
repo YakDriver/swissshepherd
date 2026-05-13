@@ -20,10 +20,10 @@ import (
 var (
 	cfgFile        string
 	schemaJSON     string
-	docsPath       string
 	providerSource string
 	providerDir    string
-	resource       string
+	target         string
+	targetType     string
 	prefix         string
 	outputJSON     bool
 	verbose        bool
@@ -58,11 +58,11 @@ func init() {
 	// Check flags on both root (default) and check subcommand
 	for _, fs := range []*cobra.Command{rootCmd, checkCmd} {
 		fs.Flags().StringVar(&schemaJSON, "schema-json", "", "path to terraform providers schema -json output")
-		fs.Flags().StringVar(&docsPath, "docs-path", "", "path to documentation directory")
 		fs.Flags().StringVar(&providerSource, "provider-source", "", "provider source (e.g., registry.terraform.io/hashicorp/aws)")
 		fs.Flags().StringVar(&providerDir, "provider-dir", "", "path to provider source directory (builds provider and generates schema automatically)")
-		fs.Flags().StringVar(&resource, "resource", "", "check a single resource (e.g., aws_instance)")
-		fs.Flags().StringVar(&prefix, "prefix", "", "check all resources matching a prefix (e.g., aws_dms_)")
+		fs.Flags().StringVar(&target, "target", "", "check a single named target (e.g., aws_instance)")
+		fs.Flags().StringVar(&targetType, "type", "", "target type for --target or --prefix (e.g., resource, data_source)")
+		fs.Flags().StringVar(&prefix, "prefix", "", "check all targets whose name begins with this prefix (e.g., aws_dms_)")
 		fs.Flags().BoolVar(&outputJSON, "json", false, "output results as JSON")
 	}
 }
@@ -77,9 +77,6 @@ func runCheck(cmd *cobra.Command, args []string) error {
 	// CLI flags override config
 	if schemaJSON != "" {
 		cfg.SchemaJSON = schemaJSON
-	}
-	if docsPath != "" {
-		cfg.DocsPath = docsPath
 	}
 	if providerSource != "" {
 		cfg.ProviderSource = providerSource
@@ -99,19 +96,11 @@ func runCheck(cmd *cobra.Command, args []string) error {
 		}
 		defer provider.CleanupSchema(schemaPath)
 		cfg.SchemaJSON = schemaPath
-
-		// Default docs-path to website/docs under the provider dir
-		if cfg.DocsPath == "" {
-			cfg.DocsPath = cfg.ProviderDir + "/website/docs"
-		}
 	}
 
 	// Validate required fields
 	if cfg.SchemaJSON == "" {
 		return fmt.Errorf("schema-json is required (via --schema-json or config file)")
-	}
-	if cfg.DocsPath == "" {
-		return fmt.Errorf("docs-path is required (via --docs-path or config file)")
 	}
 	if cfg.ProviderSource == "" {
 		return fmt.Errorf("provider-source is required (via --provider-source or config file)")
@@ -134,6 +123,10 @@ func runCheck(cmd *cobra.Command, args []string) error {
 	logger.Info("schema loaded",
 		"resources", len(ps.Resources),
 		"data_sources", len(ps.DataSources),
+		"ephemerals", len(ps.Ephemerals),
+		"list_resources", len(ps.ListResources),
+		"actions", len(ps.Actions),
+		"functions", len(ps.Functions),
 	)
 
 	// Set up rules based on config (all enabled by default)
@@ -183,16 +176,21 @@ func runCheck(cmd *cobra.Command, args []string) error {
 		PreferredHeadingTemplates: preferred,
 	}
 
-	// Run checks
+	// Dispatch: exactly one of (--target) / (--prefix) / (--type) / none.
+	// --target selects a single named target; when --type is set it
+	// disambiguates same-name targets across types. --prefix scopes by name
+	// prefix; --type additionally scopes by type. Providing neither runs
+	// every rule against every enumerable target.
 	var results []check.Result
-	if resource != "" {
-		results, err = runner.RunOne(resource)
+	switch {
+	case target != "":
+		results, err = runner.RunOne(target, targetType)
 		if err != nil {
 			return err
 		}
-	} else if prefix != "" {
-		results = runner.RunPrefix(prefix)
-	} else {
+	case prefix != "" || targetType != "":
+		results = runner.RunPrefix(prefix, targetType)
+	default:
 		results = runner.RunAll()
 	}
 

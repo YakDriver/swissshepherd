@@ -16,11 +16,18 @@ import (
 	"github.com/YakDriver/swissshepherd/internal/schema"
 )
 
-// Runner orchestrates running checks across all resources.
+// Runner orchestrates checks across every target the provider exposes.
 //
-// Rules operate on the parsed doc.Document plus the schema. FileRules operate
-// on the raw file bytes. Runner reads each documentation file once and feeds
-// the content to both kinds of checks.
+// Targets are discovered by iterating the configured types (config.Config.Types)
+// and asking the loaded schema for the names of each type's kind. For each
+// target, Runner resolves the doc file from the type's website_paths
+// templates, reads and parses it once, and invokes every Rule (schema + AST)
+// and every FileRule (raw bytes) against it.
+//
+// The Runner no longer hard-codes "resource" vs "data source" — everything it
+// does is driven by config.Type definitions. Adding a new Terraform category
+// means adding a type block (and, if block-based, registering a schema
+// accessor); the Runner requires no changes.
 type Runner struct {
 	Schema                    *schema.ProviderSchema
 	Config                    *config.Config
@@ -31,49 +38,139 @@ type Runner struct {
 	PreferredHeadingTemplates doc.HeadingTemplates
 }
 
-// RunAll runs all checks against all resources and data sources.
+// RunAll runs every configured rule against every target of every type that
+// swissshepherd can enumerate from the provider schema. Per-file load and
+// parse errors are logged and skipped so a single bad doc does not bring
+// down a full-provider run.
 func (r *Runner) RunAll() []Result {
+	return r.runFiltered("", "")
+}
+
+// RunPrefix runs every configured rule against targets whose names begin
+// with prefix. If kind is non-empty, targets are restricted to the type
+// with that name (typically "resource", "data_source", …). Empty kind plus
+// empty prefix is equivalent to RunAll.
+func (r *Runner) RunPrefix(prefix, kind string) []Result {
+	return r.runFiltered(prefix, kind)
+}
+
+// RunOne runs every configured rule against a single named target. If kind
+// is empty, Runner searches every configured type; an ambiguous name
+// (present in multiple types) returns an error naming the candidates so the
+// caller can re-invoke with an explicit --type. When kind is non-empty,
+// only that type is consulted.
+//
+// RunOne surfaces file-read and parse errors rather than logging-and-skipping
+// because it's the "I asked for this one thing" mode and silence would be
+// misleading.
+func (r *Runner) RunOne(name, kind string) ([]Result, error) {
+	typ, err := r.resolveOne(name, kind)
+	if err != nil {
+		return nil, err
+	}
+	return r.runTarget(typ, name, false)
+}
+
+// runFiltered is the shared iteration path behind RunAll and RunPrefix. It
+// walks every configured type whose kind has enumerable targets and filters
+// by name prefix and/or type name. Errors are logged and dropped.
+func (r *Runner) runFiltered(prefix, kind string) []Result {
 	var results []Result
-
-	checkCfg := r.Config.GetCheck("completeness")
-
-	for name, rs := range r.Schema.Resources {
-		if slices.Contains(checkCfg.IgnoreResources, name) {
-			r.Logger.Debug("skipping ignored resource", "name", name)
+	for i := range r.Config.Types {
+		t := &r.Config.Types[i]
+		if t.SchemaKind == schema.KindNone {
+			continue // content-only categories (guides, index) have no schema to enumerate
+		}
+		if kind != "" && t.Name != kind {
 			continue
 		}
-		results = append(results, r.checkTarget(name, rs, "r")...)
-	}
-
-	for name, rs := range r.Schema.DataSources {
-		if slices.Contains(checkCfg.IgnoreDataSources, name) {
-			r.Logger.Debug("skipping ignored data source", "name", name)
-			continue
+		for _, name := range r.Schema.TargetNames(t.SchemaKind) {
+			if prefix != "" && !strings.HasPrefix(name, prefix) {
+				continue
+			}
+			res, _ := r.runTarget(t, name, true)
+			results = append(results, res...)
 		}
-		results = append(results, r.checkTarget(name, rs, "d")...)
 	}
-
 	return results
 }
 
-// RunOne runs checks against a single named resource or data source.
-func (r *Runner) RunOne(name string) ([]Result, error) {
-	rs, docType := r.findResource(name)
-	if rs == nil {
-		return nil, fmt.Errorf("resource %q not found in schema", name)
+// resolveOne maps a user-provided (name, kind) pair to the single type that
+// should be invoked. kind=="" triggers ambiguity detection across every
+// enumerable type; a non-empty kind short-circuits to the named type.
+func (r *Runner) resolveOne(name, kind string) (*config.Type, error) {
+	if kind != "" {
+		t := r.Config.GetType(kind)
+		if t == nil {
+			return nil, fmt.Errorf("unknown type %q (configured: %v)", kind, r.Config.TypeNames())
+		}
+		if t.SchemaKind == schema.KindNone {
+			return nil, fmt.Errorf("type %q has no schema and cannot resolve individual targets", kind)
+		}
+		if slices.Contains(r.Schema.TargetNames(t.SchemaKind), name) {
+			return t, nil
+		}
+		return nil, fmt.Errorf("%s %q not found in schema", kind, name)
 	}
 
-	// For RunOne, surface load errors to the caller rather than logging and
-	// continuing, so a bad --resource invocation fails loudly.
-	docPath := resourceDocPath(r.Config.DocsPath, r.Config.ProviderName(), name, docType)
+	var matches []*config.Type
+	for i := range r.Config.Types {
+		t := &r.Config.Types[i]
+		if t.SchemaKind == schema.KindNone {
+			continue
+		}
+		if slices.Contains(r.Schema.TargetNames(t.SchemaKind), name) {
+			matches = append(matches, t)
+		}
+	}
+	switch len(matches) {
+	case 0:
+		return nil, fmt.Errorf("%q not found in any type's schema", name)
+	case 1:
+		return matches[0], nil
+	default:
+		typeNames := make([]string, len(matches))
+		for i, t := range matches {
+			typeNames[i] = t.Name
+		}
+		return nil, fmt.Errorf("%q matches multiple types (%s); re-run with --type to disambiguate",
+			name, strings.Join(typeNames, ", "))
+	}
+}
+
+// runTarget reads and parses the doc for a single (type, name) pair and
+// runs every Rule and FileRule. When logOnError is true, file-read and
+// parse failures produce a warning log and empty results (RunAll / RunPrefix
+// semantics); when false, the error is returned to the caller (RunOne).
+func (r *Runner) runTarget(t *config.Type, name string, logOnError bool) ([]Result, error) {
+	docPath, err := r.resolveDocPath(t, name)
+	if err != nil {
+		if logOnError {
+			r.Logger.Warn("doc file not found", "type", t.Name, "name", name, "error", err)
+			return nil, nil
+		}
+		return nil, err
+	}
+
 	content, err := os.ReadFile(docPath)
 	if err != nil {
+		if logOnError {
+			r.Logger.Warn("cannot read doc", "type", t.Name, "name", name, "path", docPath, "error", err)
+			return nil, nil
+		}
 		return nil, fmt.Errorf("reading doc for %s: %w", name, err)
 	}
+
 	d, err := doc.ParseWithTemplates(content, docPath, r.HeadingTemplates)
 	if err != nil {
+		if logOnError {
+			r.Logger.Warn("cannot parse doc", "type", t.Name, "name", name, "path", docPath, "error", err)
+			return nil, nil
+		}
 		return nil, fmt.Errorf("parsing doc for %s: %w", name, err)
 	}
+
+	rs := r.Schema.ResourceSchemaFor(t.SchemaKind, name)
 
 	var results []Result
 	for _, rule := range r.Rules {
@@ -85,93 +182,25 @@ func (r *Runner) RunOne(name string) ([]Result, error) {
 	return results, nil
 }
 
-// RunPrefix runs checks against all resources and data sources matching a name prefix.
-func (r *Runner) RunPrefix(prefix string) []Result {
-	var results []Result
-
-	checkCfg := r.Config.GetCheck("completeness")
-
-	for name, rs := range r.Schema.Resources {
-		if !strings.HasPrefix(name, prefix) {
-			continue
+// resolveDocPath tries every website_paths template for the given type and
+// returns the first candidate that exists on disk. When Config.ProviderDir
+// is set, templates resolve relative to that directory; otherwise they
+// resolve relative to the current working directory. Returns an error
+// identifying every path tried when none exist.
+func (r *Runner) resolveDocPath(t *config.Type, name string) (string, error) {
+	candidates := t.ResolveDocPath(name, r.Config.ProviderName())
+	anchor := r.Config.ProviderDir
+	tried := make([]string, 0, len(candidates))
+	for _, c := range candidates {
+		full := c
+		if anchor != "" && !filepath.IsAbs(c) {
+			full = filepath.Join(anchor, c)
 		}
-		if slices.Contains(checkCfg.IgnoreResources, name) {
-			continue
+		tried = append(tried, full)
+		if _, err := os.Stat(full); err == nil {
+			return full, nil
 		}
-		results = append(results, r.checkTarget(name, rs, "r")...)
 	}
-
-	for name, rs := range r.Schema.DataSources {
-		if !strings.HasPrefix(name, prefix) {
-			continue
-		}
-		if slices.Contains(checkCfg.IgnoreDataSources, name) {
-			continue
-		}
-		results = append(results, r.checkTarget(name, rs, "d")...)
-	}
-
-	return results
-}
-
-// checkTarget resolves the doc path, reads content once, parses it, and runs
-// every configured Rule and FileRule. Load failures are logged and skipped
-// rather than returned — RunAll and RunPrefix should not bail on one bad file.
-func (r *Runner) checkTarget(name string, rs *schema.ResourceSchema, docType string) []Result {
-	docPath := resourceDocPath(r.Config.DocsPath, r.Config.ProviderName(), name, docType)
-
-	content, err := os.ReadFile(docPath)
-	if err != nil {
-		r.Logger.Warn("cannot read doc", "resource", name, "path", docPath, "error", err)
-		return nil
-	}
-
-	d, err := doc.ParseWithTemplates(content, docPath, r.HeadingTemplates)
-	if err != nil {
-		r.Logger.Warn("cannot parse doc", "resource", name, "path", docPath, "error", err)
-		return nil
-	}
-
-	var results []Result
-	for _, rule := range r.Rules {
-		results = append(results, rule.Check(name, rs, d)...)
-	}
-	for _, rule := range r.FileRules {
-		results = append(results, rule.CheckFile(name, docPath, content)...)
-	}
-	return results
-}
-
-func (r *Runner) findResource(name string) (*schema.ResourceSchema, string) {
-	if rs, ok := r.Schema.Resources[name]; ok {
-		return rs, "r"
-	}
-	if rs, ok := r.Schema.DataSources[name]; ok {
-		return rs, "d"
-	}
-	return nil, ""
-}
-
-func resourceDocPath(docsPath, providerName, resourceName, docType string) string {
-	// Resource name like "aws_instance" → file "instance.html.markdown"
-	suffix := strings.TrimPrefix(resourceName, providerName+"_")
-
-	// Try registry-style first (docs/resources/instance.md), then legacy (website/docs/r/instance.html.markdown)
-	registryDir := "resources"
-	if docType == "d" {
-		registryDir = "data-sources"
-	}
-
-	registryPath := filepath.Join(docsPath, registryDir, suffix+".md")
-	if _, err := os.Stat(registryPath); err == nil {
-		return registryPath
-	}
-
-	legacyPath := filepath.Join(docsPath, docType, suffix+".html.markdown")
-	if _, err := os.Stat(legacyPath); err == nil {
-		return legacyPath
-	}
-
-	// Return legacy path as default (will error on load)
-	return legacyPath
+	return "", fmt.Errorf("no doc file found for %s %q (tried: %s)",
+		t.Name, name, strings.Join(tried, ", "))
 }

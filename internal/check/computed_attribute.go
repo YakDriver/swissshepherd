@@ -18,6 +18,12 @@ type ComputedAttributeRule struct{}
 func (r *ComputedAttributeRule) Name() string { return "computed_attribute" }
 
 func (r *ComputedAttributeRule) Check(resource string, rs *schema.ResourceSchema, d *doc.Document) []Result {
+	// Non-block-schema types (functions, content-only categories) don't have
+	// root blocks to inspect. No findings.
+	if rs == nil {
+		return nil
+	}
+
 	var results []Result
 
 	// Only check the root block for now — nested computed attrs are typically

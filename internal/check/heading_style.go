@@ -22,6 +22,11 @@ func (r *HeadingStyleRule) Check(resource string, rs *schema.ResourceSchema, d *
 	if len(r.Preferred) == 0 {
 		return nil
 	}
+	// Non-block-schema types have no nested block structure to align headings
+	// against. No findings.
+	if rs == nil {
+		return nil
+	}
 
 	// Build set of schema block leaf names and detect ambiguous ones
 	// (same leaf name appears with different attribute sets).

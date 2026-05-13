@@ -26,6 +26,13 @@ type CompletenessRule struct {
 func (r *CompletenessRule) Name() string { return "completeness" }
 
 func (r *CompletenessRule) Check(resource string, rs *schema.ResourceSchema, d *doc.Document) []Result {
+	// Types without a block schema (functions, content-only categories) can't
+	// be validated for completeness — their "arguments" aren't attribute sets
+	// at all. Return no findings rather than panicking on rs.Blocks.
+	if rs == nil {
+		return nil
+	}
+
 	var results []Result
 
 	// Track which leaf names we've already reported as missing blocks.
