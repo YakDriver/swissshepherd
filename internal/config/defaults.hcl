@@ -63,7 +63,7 @@ type "data_source" {
 
   require_attributes = "required"
   require_import     = "forbidden"
-  require_timeouts   = "forbidden"
+  require_timeouts   = "optional"
   require_signature  = "forbidden"
 
   frontmatter_require = ["description", "page_title"]

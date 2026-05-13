@@ -53,8 +53,30 @@ func (r *SectionPresenceRule) Check(ctx CheckContext) []Result {
 	s := ctx.Doc.Sections
 	check(t.RequireAttributes, s.Attributes, "Attribute Reference")
 	check(t.RequireImport, s.Import, "Import")
-	check(t.RequireTimeouts, s.Timeouts, "Timeouts")
 	check(t.RequireSignature, s.Signature, "Signature")
+
+	// Timeouts: schema-driven when schema is available (bidirectional).
+	// Falls back to type-level requirement only when no schema exists.
+	if ctx.Schema != nil {
+		_, hasTimeouts := ctx.Schema.Blocks["timeouts"]
+		if s.Timeouts != nil && !hasTimeouts {
+			results = append(results, Result{
+				Rule:     r.Name(),
+				Resource: ctx.Resource,
+				Severity: SeverityError,
+				Message:  "## Timeouts section is documented but the schema does not configure timeouts",
+			})
+		} else if s.Timeouts == nil && hasTimeouts {
+			results = append(results, Result{
+				Rule:     r.Name(),
+				Resource: ctx.Resource,
+				Severity: SeverityError,
+				Message:  "schema configures timeouts but ## Timeouts section is missing",
+			})
+		}
+	} else {
+		check(t.RequireTimeouts, s.Timeouts, "Timeouts")
+	}
 
 	return results
 }

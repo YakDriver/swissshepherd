@@ -10,6 +10,7 @@ import (
 	"github.com/YakDriver/swissshepherd/internal/check"
 	"github.com/YakDriver/swissshepherd/internal/config"
 	"github.com/YakDriver/swissshepherd/internal/doc"
+	"github.com/YakDriver/swissshepherd/internal/schema"
 )
 
 func TestSectionPresenceRule(t *testing.T) {
@@ -157,6 +158,107 @@ func TestSectionPresenceRule(t *testing.T) {
 						msgs = append(msgs, r.Message)
 					}
 					t.Errorf("expected message containing %q, got:\n  %s", want, strings.Join(msgs, "\n  "))
+				}
+			}
+		})
+	}
+}
+
+func TestSectionPresenceRule_SchemaTimeouts(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]struct {
+		schema  *schema.ResourceSchema
+		source  string
+		wantErr string
+	}{
+		"timeouts section present and schema has timeouts — OK": {
+			schema: &schema.ResourceSchema{
+				Blocks: map[string]*schema.Block{
+					"":         {},
+					"timeouts": {Attributes: []schema.Attribute{{Name: "create", Optional: true}}},
+				},
+			},
+			source: "# Resource: test\n\n## Argument Reference\n\n## Timeouts\n\n* `create` - (Default `60m`)\n",
+		},
+		"timeouts section present but schema has no timeouts — error": {
+			schema: &schema.ResourceSchema{
+				Blocks: map[string]*schema.Block{
+					"": {},
+				},
+			},
+			source:  "# Resource: test\n\n## Argument Reference\n\n## Timeouts\n\n* `create` - (Default `60m`)\n",
+			wantErr: "schema does not configure timeouts",
+		},
+		"no timeouts section but schema has timeouts — error": {
+			schema: &schema.ResourceSchema{
+				Blocks: map[string]*schema.Block{
+					"":         {},
+					"timeouts": {Attributes: []schema.Attribute{{Name: "create", Optional: true}}},
+				},
+			},
+			source:  "# Resource: test\n\n## Argument Reference\n",
+			wantErr: "schema configures timeouts but ## Timeouts section is missing",
+		},
+		"no timeouts section and schema has no timeouts — OK": {
+			schema: &schema.ResourceSchema{
+				Blocks: map[string]*schema.Block{
+					"": {},
+				},
+			},
+			source: "# Resource: test\n\n## Argument Reference\n",
+		},
+		"nil schema with timeouts section — falls back to type-level (optional)": {
+			source: "# Resource: test\n\n## Argument Reference\n\n## Timeouts\n",
+		},
+		"nil schema without timeouts section and type requires — error": {
+			source:  "# Resource: test\n\n## Argument Reference\n",
+			wantErr: "missing required section: ## Timeouts",
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			d, err := doc.Parse([]byte(tt.source), "test")
+			if err != nil {
+				t.Fatalf("parse error: %v", err)
+			}
+
+			// Use "optional" for most tests; the "nil schema requires" test uses "required".
+			req := config.SectionOptional
+			if tt.wantErr == "missing required section: ## Timeouts" {
+				req = config.SectionRequired
+			}
+			tp := &config.Type{Name: "resource", RequireTimeouts: req}
+			rule := &check.SectionPresenceRule{}
+			results := rule.Check(check.CheckContext{
+				Resource: "test",
+				Type:     tp,
+				Schema:   tt.schema,
+				Doc:      d,
+			})
+
+			if tt.wantErr == "" {
+				for _, r := range results {
+					if strings.Contains(r.Message, "imeout") {
+						t.Errorf("unexpected timeouts error: %s", r.Message)
+					}
+				}
+			} else {
+				found := false
+				for _, r := range results {
+					if strings.Contains(r.Message, tt.wantErr) {
+						found = true
+					}
+				}
+				if !found {
+					var msgs []string
+					for _, r := range results {
+						msgs = append(msgs, r.Message)
+					}
+					t.Errorf("expected error containing %q, got: %v", tt.wantErr, msgs)
 				}
 			}
 		})
