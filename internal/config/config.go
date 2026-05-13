@@ -5,6 +5,7 @@ package config
 
 import (
 	"bufio"
+	_ "embed"
 	"fmt"
 	"os"
 	"strings"
@@ -14,6 +15,9 @@ import (
 
 const DefaultConfigFile = ".swissshepherd.hcl"
 
+//go:embed defaults.hcl
+var defaultsHCL []byte
+
 // Config is the top-level configuration for swissshepherd.
 type Config struct {
 	ProviderSource string `hcl:"provider_source,optional"`
@@ -22,6 +26,12 @@ type Config struct {
 	DocsPath       string `hcl:"docs_path,optional"`
 
 	IgnoreCdktfMissingFiles bool `hcl:"ignore_cdktf_missing_files,optional"`
+
+	// Types defines every documentation category swissshepherd knows about.
+	// A set of standard types (resource, data_source, ephemeral, function,
+	// list_resource, action, guide, index) ships embedded; user blocks with
+	// the same name replace defaults wholesale, new names add new types.
+	Types []Type `hcl:"type,block"`
 
 	Checks []CheckConfig `hcl:"check,block"`
 }
@@ -83,7 +93,7 @@ type CheckConfig struct {
 }
 
 // Load reads and parses an HCL config file. Returns a zero-value Config if
-// the file doesn't exist.
+// the file doesn't exist (with default types already merged in).
 //
 // Relative paths in the config (provider_dir, docs_path, schema_json, and any
 // *_file option) are interpreted by the OS relative to the current working
@@ -97,8 +107,14 @@ func Load(path string) (*Config, error) {
 		path = DefaultConfigFile
 	}
 
+	defaults, err := loadDefaultTypes()
+	if err != nil {
+		return nil, fmt.Errorf("loading embedded default types: %w", err)
+	}
+
 	if _, err := os.Stat(path); os.IsNotExist(err) {
-		return &Config{}, nil
+		cfg := &Config{Types: defaults}
+		return cfg, nil
 	}
 
 	var cfg Config
@@ -106,11 +122,36 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("parsing config %s: %w", path, err)
 	}
 
+	cfg.Types = mergeTypes(defaults, cfg.Types)
+	for i := range cfg.Types {
+		if err := cfg.Types[i].Validate(); err != nil {
+			return nil, fmt.Errorf("config %s: %w", path, err)
+		}
+	}
+
 	if err := cfg.resolveFiles(); err != nil {
 		return nil, err
 	}
 
 	return &cfg, nil
+}
+
+// loadDefaultTypes parses the embedded defaults.hcl and returns the set of
+// default type blocks. Failures here indicate a bug in the embedded file —
+// they should never fire in a shipped binary.
+func loadDefaultTypes() ([]Type, error) {
+	var wrapper struct {
+		Types []Type `hcl:"type,block"`
+	}
+	if err := hclsimple.Decode("defaults.hcl", defaultsHCL, nil, &wrapper); err != nil {
+		return nil, err
+	}
+	for i := range wrapper.Types {
+		if err := wrapper.Types[i].Validate(); err != nil {
+			return nil, fmt.Errorf("defaults.hcl: %w", err)
+		}
+	}
+	return wrapper.Types, nil
 }
 
 // GetCheck returns the CheckConfig for a named check, or a disabled default.
