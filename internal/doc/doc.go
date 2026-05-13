@@ -272,14 +272,31 @@ func extractBlocks(tree ast.Node, source []byte, doc *Document, templates Headin
 	var currentSection *Section
 	var inArguments, inAttributes bool
 
+	// closeSection finalizes the current section's EndOffset.
+	closeSection := func(endOffset int) {
+		if currentSection != nil && currentSection.EndOffset == 0 {
+			currentSection.EndOffset = endOffset
+		}
+	}
+
 	// assignSection records a freshly discovered top-level section and makes it
 	// the current accumulator target for paragraphs and code blocks that follow.
 	// Only the first occurrence of each section is captured — duplicate headings
 	// keep pointing at the first one so rules can still reason about "the"
 	// section without the walker silently replacing it.
 	assignSection := func(field **Section, heading *ast.Heading, text string) {
+		startOff := 0
+		if lines := heading.Lines(); lines.Len() > 0 {
+			// Lines().At(0).Start is the content start (after "## ").
+			// Walk backwards to find the actual line start (the # character).
+			startOff = lines.At(0).Start
+			for startOff > 0 && source[startOff-1] != '\n' {
+				startOff--
+			}
+		}
+		closeSection(startOff)
 		if *field == nil {
-			*field = &Section{Heading: heading, Text: text}
+			*field = &Section{Heading: heading, Text: text, StartOffset: startOff}
 		}
 		currentSection = *field
 	}
@@ -339,7 +356,17 @@ func extractBlocks(tree ast.Node, source []byte, doc *Document, templates Headin
 						ensureBlock(doc.AttributeBlocks, blockName, headingText)
 					}
 				}
+				if currentSection != nil {
+					currentSection.ChildHeadings = append(currentSection.ChildHeadings, ChildHeading{Level: n.Level, Text: headingText})
+				}
 				return ast.WalkSkipChildren, nil
+			}
+
+			// Level >= 3 heading outside arguments/attributes — still record
+			// as a child heading of the current section (e.g. ### Basic Usage
+			// inside ## Example Usage).
+			if n.Level >= 3 && currentSection != nil {
+				currentSection.ChildHeadings = append(currentSection.ChildHeadings, ChildHeading{Level: n.Level, Text: headingText})
 			}
 
 			return ast.WalkSkipChildren, nil
@@ -358,6 +385,17 @@ func extractBlocks(tree ast.Node, source []byte, doc *Document, templates Headin
 
 		case *ast.List:
 			if !inArguments && !inAttributes {
+				// Capture list items into the current section (e.g. Timeouts).
+				if currentSection != nil {
+					for child := n.FirstChild(); child != nil; child = child.NextSibling() {
+						if li, ok := child.(*ast.ListItem); ok {
+							if item := parseSectionListItem(li, source); item.Name != "" {
+								item.Line = nodeLineNumber(li, source)
+								currentSection.ListItems = append(currentSection.ListItems, item)
+							}
+						}
+					}
+				}
 				return ast.WalkSkipChildren, nil
 			}
 
@@ -392,6 +430,43 @@ func extractBlocks(tree ast.Node, source []byte, doc *Document, templates Headin
 
 		return ast.WalkContinue, nil
 	})
+
+	// Finalize the last section's EndOffset.
+	closeSection(len(source))
+}
+
+// parseSectionListItem extracts a name/value pair from a list item in a
+// non-argument section (e.g. Timeouts: * `create` - (Default `60m`)).
+func parseSectionListItem(li *ast.ListItem, source []byte) SectionListItem {
+	var rawText string
+	for child := li.FirstChild(); child != nil; child = child.NextSibling() {
+		switch c := child.(type) {
+		case *ast.TextBlock:
+			rawText = string(c.Text(source))
+		case *ast.Paragraph:
+			rawText = string(c.Text(source))
+		}
+		if rawText != "" {
+			break
+		}
+	}
+	if rawText == "" {
+		return SectionListItem{}
+	}
+
+	parts := strings.SplitN(rawText, " - ", 2)
+	if len(parts) < 1 {
+		return SectionListItem{}
+	}
+	name := strings.Trim(strings.TrimSpace(parts[0]), "`")
+	if name == "" || strings.Contains(name, " ") {
+		return SectionListItem{}
+	}
+	var value string
+	if len(parts) == 2 {
+		value = strings.TrimSpace(parts[1])
+	}
+	return SectionListItem{Name: name, Value: value}
 }
 
 // hasMalformedSeparator checks if the raw source for a list item has a
