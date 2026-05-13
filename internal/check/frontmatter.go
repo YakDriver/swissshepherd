@@ -31,6 +31,10 @@ type FrontmatterRule struct {
 	ForbidSidebarCurrent bool
 
 	AllowedSubcategories []string
+	// AllowEmptySubcategoryTargets lists target names for which subcategory: ""
+	// is treated as absent (skips the allowlist check). Use for doc types such
+	// as functions that legitimately carry no subcategory.
+	AllowEmptySubcategoryTargets []string
 }
 
 func (r *FrontmatterRule) Name() string { return "frontmatter" }
@@ -132,8 +136,9 @@ func (r *FrontmatterRule) checkFields(resource string, fm *frontmatter) []Result
 		}
 	}
 
-	if len(r.AllowedSubcategories) > 0 && fm.has("subcategory") && fm.Subcategory != "" {
-		if !slices.Contains(r.AllowedSubcategories, fm.Subcategory) {
+	if len(r.AllowedSubcategories) > 0 && fm.has("subcategory") {
+		emptyOK := fm.Subcategory == "" && slices.Contains(r.AllowEmptySubcategoryTargets, resource)
+		if !emptyOK && !slices.Contains(r.AllowedSubcategories, fm.Subcategory) {
 			fail(fmt.Sprintf("YAML frontmatter subcategory %q is not in the allowed list", fm.Subcategory))
 		}
 	}

@@ -138,9 +138,10 @@ func TestFrontmatterRule_AllowedSubcategories(t *testing.T) {
 	t.Parallel()
 
 	tests := map[string]struct {
-		allowed []string
-		content string
-		wantMsg string
+		allowed             []string
+		allowEmptySubcatFor []string
+		content             string
+		wantMsg             string
 	}{
 		"value in allowlist passes": {
 			allowed: []string{"Test", "Other"},
@@ -159,18 +160,28 @@ func TestFrontmatterRule_AllowedSubcategories(t *testing.T) {
 			allowed: []string{"Other"},
 			content: replaceFrontmatter(validFrontmatter, "subcategory: \"Test\"\n", ""),
 		},
-		"allowlist does not fire when subcategory is empty string": {
-			// Functions use subcategory: "" to signal "no category".
-			// An empty value must not be validated against the allowlist.
+		"empty subcategory fails allowlist by default": {
 			allowed: []string{"Other"},
 			content: replaceFrontmatter(validFrontmatter, "subcategory: \"Test\"\n", "subcategory: \"\"\n"),
+			wantMsg: `subcategory "" is not in the allowed list`,
+		},
+		"empty subcategory passes for named target": {
+			allowed:             []string{"Other"},
+			allowEmptySubcatFor: []string{"test_instance"},
+			content:             replaceFrontmatter(validFrontmatter, "subcategory: \"Test\"\n", "subcategory: \"\"\n"),
+		},
+		"empty subcategory still fails for unlisted target": {
+			allowed:             []string{"Other"},
+			allowEmptySubcatFor: []string{"other_resource"},
+			content:             replaceFrontmatter(validFrontmatter, "subcategory: \"Test\"\n", "subcategory: \"\"\n"),
+			wantMsg:             `subcategory "" is not in the allowed list`,
 		},
 	}
 
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			rule := &check.FrontmatterRule{AllowedSubcategories: tt.allowed}
+			rule := &check.FrontmatterRule{AllowedSubcategories: tt.allowed, AllowEmptySubcategoryTargets: tt.allowEmptySubcatFor}
 			results := rule.CheckFile("test_instance", "test.md", []byte(tt.content))
 			assertMessage(t, results, tt.wantMsg)
 		})

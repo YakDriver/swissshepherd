@@ -263,15 +263,16 @@ func preferredHeadingTemplates(cfg *config.Config) doc.HeadingTemplates {
 func frontmatterRule(cfg *config.Config) *check.FrontmatterRule {
 	cc := cfg.GetCheck("frontmatter")
 	return &check.FrontmatterRule{
-		RequireSubcategory:   cc.RequireSubcategory,
-		RequirePageTitle:     cc.RequirePageTitle,
-		RequireDescription:   cc.RequireDescription,
-		RequireLayout:        cc.RequireLayout,
-		ForbidSubcategory:    cc.ForbidSubcategory,
-		ForbidPageTitle:      cc.ForbidPageTitle,
-		ForbidDescription:    cc.ForbidDescription,
-		ForbidLayout:         cc.ForbidLayout,
-		ForbidSidebarCurrent: cc.ForbidSidebarCurrent,
-		AllowedSubcategories: cc.AllowedSubcategories,
+		RequireSubcategory:           cc.RequireSubcategory,
+		RequirePageTitle:             cc.RequirePageTitle,
+		RequireDescription:           cc.RequireDescription,
+		RequireLayout:                cc.RequireLayout,
+		ForbidSubcategory:            cc.ForbidSubcategory,
+		ForbidPageTitle:              cc.ForbidPageTitle,
+		ForbidDescription:            cc.ForbidDescription,
+		ForbidLayout:                 cc.ForbidLayout,
+		ForbidSidebarCurrent:         cc.ForbidSidebarCurrent,
+		AllowedSubcategories:         cc.AllowedSubcategories,
+		AllowEmptySubcategoryTargets: cc.AllowEmptySubcategoryTargets,
 	}
 }

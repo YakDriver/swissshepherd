@@ -158,6 +158,10 @@ check "frontmatter" {
   forbid_sidebar_current = true
 
   allowed_subcategories_file = "website/allowed-subcategories.txt"
+
+  # Targets listed here may have subcategory: "" without failing the allowlist.
+  # Useful for function docs that carry no subcategory by convention.
+  # allow_empty_subcategory_targets = ["arn_build", "arn_parse"]
 }
 
 check "title_section" {
@@ -321,6 +325,16 @@ Every frontmatter toggle is off by default — the rule does nothing until at le
 | `forbid_sidebar_current` | Fail if `sidebar_current` is present (always, in modern docs) |
 
 The subcategory allowlist is set inside the `check "frontmatter"` block via `allowed_subcategories` (inline list) or `allowed_subcategories_file` (newline-separated file). When the allowlist is non-empty, a frontmatter `subcategory` value not on the list fails. An empty allowlist is equivalent to "anything goes". The allowlist only fires when `subcategory` is present in the file — use `require_subcategory` alongside it if absence should also fail.
+
+Some doc types (e.g. Terraform provider functions) use `subcategory: ""` to signal "no category" rather than omitting the key. By default that empty string is validated against the allowlist and fails. Use `allow_empty_subcategory_targets` to name the specific targets where an empty subcategory is permitted:
+
+```hcl
+check "frontmatter" {
+  allow_empty_subcategory_targets = ["arn_build", "arn_parse", "trim_iam_role_path", "user_agent"]
+}
+```
+
+All other targets with `subcategory: ""` continue to fail.
 
 An unterminated or missing frontmatter block is treated the same as an absent block: each `require_*` toggle produces a result, `forbid_*` toggles stay silent.
 

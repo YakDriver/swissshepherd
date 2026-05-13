@@ -90,8 +90,9 @@ type CheckConfig struct {
 	// frontmatter subcategory value outside this list is reported. The allowlist
 	// only fires when subcategory is actually present in the file — pair with
 	// require_subcategory if absence should also fail.
-	AllowedSubcategories     []string `hcl:"allowed_subcategories,optional"`
-	AllowedSubcategoriesFile string   `hcl:"allowed_subcategories_file,optional"`
+	AllowedSubcategories         []string `hcl:"allowed_subcategories,optional"`
+	AllowedSubcategoriesFile     string   `hcl:"allowed_subcategories_file,optional"`
+	AllowEmptySubcategoryTargets []string `hcl:"allow_empty_subcategory_targets,optional"`
 
 	// TitleSection rule options.
 	//
