@@ -227,7 +227,11 @@ func outputResultsText(results []check.Result) error {
 		} else {
 			errors++
 		}
-		fmt.Fprintf(os.Stdout, "%s  %s: %s\n", prefix, r.Resource, r.Message)
+		if r.Path != "" {
+			fmt.Fprintf(os.Stdout, "%s  %s (%s): %s\n", prefix, r.Resource, r.Path, r.Message)
+		} else {
+			fmt.Fprintf(os.Stdout, "%s  %s: %s\n", prefix, r.Resource, r.Message)
+		}
 	}
 
 	if len(results) > 0 {

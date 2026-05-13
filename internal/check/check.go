@@ -29,6 +29,7 @@ func (s Severity) String() string {
 type Result struct {
 	Rule     string   `json:"rule"`
 	Resource string   `json:"resource"`
+	Path     string   `json:"path,omitempty"`
 	Severity Severity `json:"severity"`
 	Message  string   `json:"message"`
 	Block    string   `json:"block,omitempty"`
