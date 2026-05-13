@@ -11,8 +11,9 @@ import (
 	"github.com/YakDriver/swissshepherd/internal/schema"
 )
 
-// Prefixes that indicate weak or redundant description starts.
-var badDescriptionPrefixes = []string{
+// DefaultBadDescriptionPrefixes is the list of weak or redundant description
+// starts. Overridable via check "description_style" { bad_prefixes = [...] }.
+var DefaultBadDescriptionPrefixes = []string{
 	"A ",
 	"An ",
 	"The ",
@@ -23,7 +24,17 @@ var badDescriptionPrefixes = []string{
 }
 
 // DescriptionStyleRule checks that attribute descriptions don't start with articles or fluff words.
-type DescriptionStyleRule struct{}
+type DescriptionStyleRule struct {
+	// BadPrefixes overrides DefaultBadDescriptionPrefixes when non-nil.
+	BadPrefixes []string
+}
+
+func (r *DescriptionStyleRule) prefixes() []string {
+	if r.BadPrefixes != nil {
+		return r.BadPrefixes
+	}
+	return DefaultBadDescriptionPrefixes
+}
 
 func (r *DescriptionStyleRule) Name() string { return "description_style" }
 
@@ -31,13 +42,13 @@ func (r *DescriptionStyleRule) Check(resource string, _ *schema.ResourceSchema, 
 	seen := make(map[string]bool)
 	var results []Result
 
-	results = append(results, checkDescriptions(resource, r.Name(), d.ArgumentBlocks, seen)...)
-	results = append(results, checkDescriptions(resource, r.Name(), d.AttributeBlocks, seen)...)
+	results = append(results, checkDescriptions(resource, r.Name(), r.prefixes(), d.ArgumentBlocks, seen)...)
+	results = append(results, checkDescriptions(resource, r.Name(), r.prefixes(), d.AttributeBlocks, seen)...)
 
 	return results
 }
 
-func checkDescriptions(resource, ruleName string, blocks map[string]*doc.DocBlock, seen map[string]bool) []Result {
+func checkDescriptions(resource, ruleName string, prefixes []string, blocks map[string]*doc.DocBlock, seen map[string]bool) []Result {
 	var results []Result
 
 	for blockName, block := range blocks {
@@ -49,7 +60,7 @@ func checkDescriptions(resource, ruleName string, blocks map[string]*doc.DocBloc
 			if seen[key] {
 				continue
 			}
-			for _, prefix := range badDescriptionPrefixes {
+			for _, prefix := range prefixes {
 				if strings.HasPrefix(attr.Description, prefix) {
 					seen[key] = true
 					results = append(results, Result{

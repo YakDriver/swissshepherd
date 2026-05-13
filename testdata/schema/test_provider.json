@@ -97,6 +97,78 @@
             }
           }
         }
+      },
+      "ephemeral_resource_schemas": {
+        "test_secret": {
+          "version": 0,
+          "block": {
+            "attributes": {
+              "name": {
+                "type": "string",
+                "required": true
+              },
+              "value": {
+                "type": "string",
+                "computed": true,
+                "sensitive": true
+              }
+            }
+          }
+        }
+      },
+      "list_resource_schemas": {
+        "test_instances": {
+          "version": 0,
+          "block": {
+            "attributes": {
+              "filter": {
+                "type": "string",
+                "optional": true
+              },
+              "names": {
+                "type": ["list", "string"],
+                "computed": true
+              }
+            }
+          }
+        }
+      },
+      "action_schemas": {
+        "test_reboot": {
+          "block": {
+            "attributes": {
+              "instance_id": {
+                "type": "string",
+                "required": true
+              },
+              "force": {
+                "type": "bool",
+                "optional": true
+              }
+            }
+          }
+        }
+      },
+      "functions": {
+        "test_format": {
+          "description": "Format a string with named arguments.",
+          "summary": "string formatter",
+          "return_type": "string",
+          "parameters": [
+            {
+              "name": "template",
+              "type": "string"
+            },
+            {
+              "name": "count",
+              "type": "number"
+            }
+          ],
+          "variadic_parameter": {
+            "name": "args",
+            "type": "string"
+          }
+        }
       }
     }
   }

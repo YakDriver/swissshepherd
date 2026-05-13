@@ -33,7 +33,6 @@ Create `.swissshepherd.hcl` in your provider repo root:
 ```hcl
 provider_source = "registry.terraform.io/hashicorp/aws"
 provider_dir    = "."
-docs_path       = "website/docs"
 ```
 
 Then run:
@@ -42,23 +41,29 @@ Then run:
 # Check everything
 swissshepherd
 
-# Check a single service
+# Check a single target (auto-detects type)
+swissshepherd --target aws_iam_role
+
+# Disambiguate when a name exists as both resource and data source
+swissshepherd --target aws_instance --type resource
+
+# Check all targets matching a prefix
 swissshepherd --prefix aws_dms_
 
-# Check a single resource
-swissshepherd --resource aws_iam_role
+# Check all data sources for a service
+swissshepherd --prefix aws_s3_ --type data_source
 ```
 
 That's it. swissshepherd builds the provider, generates the schema via Terraform, runs the checks, and cleans up.
 
 ### A note on paths
 
-Relative paths in the config file (`provider_dir`, `docs_path`, `schema_json`, and every `*_file` option) are interpreted relative to the **current working directory** at the time swissshepherd runs — the same convention as `terraform`, `docker`, `go`, and `make`. The location of the config file itself has no effect on path resolution.
+Relative paths in the config file (`provider_dir`, `schema_json`, and every `*_file` option) are interpreted relative to the **current working directory** at the time swissshepherd runs — the same convention as `terraform`, `docker`, `go`, and `make`. The location of the config file itself has no effect on path resolution.
 
 In practice: `cd` into the provider repo root and invoke swissshepherd from there. This works whether the config sits at the root or in a subdirectory like `.ci/`:
 
 ```bash
-# Config at repo root, one canonical layout
+# Config at repo root
 cd terraform-provider-foo
 swissshepherd
 
@@ -74,13 +79,13 @@ swissshepherd --config .ci/swissshepherd.hcl
 swissshepherd --config path/to/swissshepherd.hcl
 
 # With CLI flags (no config file needed)
-swissshepherd --provider-dir . --provider-source registry.terraform.io/hashicorp/aws --docs-path website/docs
+swissshepherd --provider-dir . --provider-source registry.terraform.io/hashicorp/aws
 
 # With pre-generated schema (skips build)
-swissshepherd --schema-json schema.json --docs-path website/docs --provider-source registry.terraform.io/hashicorp/aws
+swissshepherd --schema-json schema.json --provider-source registry.terraform.io/hashicorp/aws
 
 # JSON output
-swissshepherd --resource aws_vpc --json
+swissshepherd --target aws_vpc --json
 ```
 
 CLI flags override config file values.
@@ -92,7 +97,6 @@ CLI flags override config file values.
 
 provider_source = "registry.terraform.io/hashicorp/aws"
 provider_dir    = "."           # builds provider + generates schema automatically
-docs_path       = "website/docs"
 
 # Or use a pre-generated schema (skips build):
 # schema_json = "path/to/schema.json"
@@ -100,8 +104,9 @@ docs_path       = "website/docs"
 check "completeness" {
   enabled = true
 
-  ignore_resources    = ["aws_legacy_resource"]
-  ignore_data_sources = ["aws_kms_secrets"]
+  # Path scoping — limit this check to specific targets (see Path scoping below)
+  types    = ["resource", "data_source"]
+  prefixes = ["aws_s3", "aws_appflow"]
 
   block_heading_styles = [
     "`{Block}` Block",
@@ -110,9 +115,13 @@ check "completeness" {
     "{Block}",
     "{Title}",
   ]
-
-  # When set, emits warnings suggesting this as the canonical form
   preferred_block_heading_styles = ["`{Block}` Block"]
+
+  # Completeness-specific options (all have sensible defaults)
+  ignore_deprecated   = true
+  implicit_attributes = ["id", "tags_all"]   # never flagged as undocumented
+  phantom_allowlist   = ["tags", "tags_all"] # never flagged as phantom
+  skip_blocks         = ["timeouts"]         # blocks skipped entirely
 }
 
 check "ordering" {
@@ -121,6 +130,7 @@ check "ordering" {
 
 check "description_style" {
   enabled = true
+  # bad_prefixes = ["A ", "An ", "The ", "Specifies ", "Indicates ", "Describes ", "Defines "]
 }
 
 check "computed_attribute" {
@@ -128,41 +138,108 @@ check "computed_attribute" {
 }
 
 check "heading_style" {
-  # Only active when preferred_block_heading_styles is set on completeness
-  enabled = true
+  enabled = true   # only active when preferred_block_heading_styles is set
 }
 
 check "format_style" {
   enabled = true
+  # no_code_blocks       = true
+  # single_line_attrs    = true
+  # uninterrupted_lists  = true
 }
 
 check "frontmatter" {
   enabled = true
 
-  # Registry-layout resources forbid layout; legacy-layout resources require it.
-  # Pick the set that matches your provider's layout.
-  require_subcategory = true
-  require_page_title  = true
-  require_description = true
+  require_subcategory    = true
+  require_page_title     = true
+  require_description    = true
   forbid_layout          = true
   forbid_sidebar_current = true
 
-  # Subcategory allowlist (inline or file). When non-empty, a frontmatter
-  # subcategory outside this list fails.
   allowed_subcategories_file = "website/allowed-subcategories.txt"
+
+  # Targets listed here may have subcategory: "" without failing the allowlist.
+  # Useful for function docs that carry no subcategory by convention.
+  # allow_empty_subcategory_targets = ["arn_build", "arn_parse"]
 }
 
 check "title_section" {
   enabled = true
-
-  # Override the allow-list of accepted kinds if your provider uses custom
-  # heading prefixes. Defaults to:
-  # ["Action", "Data Source", "Ephemeral", "Function", "List Resource", "Resource"]
-  # allowed_prefixes = ["Resource", "Data Source"]
+  # allowed_prefixes = ["Resource", "Data Source", "Ephemeral", "Function", "List Resource", "Action"]
 }
 ```
 
 All rules are enabled by default. Add a `check` block with `enabled = false` to disable one.
+
+## Path scoping
+
+Every `check` block accepts path-scoping fields that limit which targets the rule runs against. This is the primary mechanism for rolling out checks incrementally across a large provider — one service or one type at a time.
+
+```hcl
+check "ordering" {
+  enabled = true
+
+  # Type axis: only run against these type names (empty = all types)
+  types = ["resource", "data_source"]
+
+  # Name axis: run against targets whose name has one of these prefixes
+  # OR whose name is listed exactly in targets. Both lists are OR'd.
+  prefixes = ["aws_s3", "aws_appflow"]
+  targets  = ["aws_instance", "aws_accessanalyzer_archive_rule"]
+
+  # Deny list: always excluded, even when allowlists include them.
+  ignored_targets      = ["aws_legacy_resource"]
+  ignored_targets_file = "website/ignore-ordering.txt"
+}
+```
+
+**Semantics:**
+
+1. `ignored_targets` wins unconditionally — a listed name is never checked.
+2. When `types` is non-empty, the target's type must be in the list.
+3. When either `prefixes` or `targets` is non-empty, the target's name must satisfy at least one (prefix match OR exact match). Both empty means "any name".
+
+**Use cases:**
+
+```bash
+# PR gate: check one specific resource
+swissshepherd --target aws_s3_bucket --type resource
+
+# Service gate: check all S3 resources
+swissshepherd --prefix aws_s3_ --type resource
+
+# Full CI: check everything
+swissshepherd
+```
+
+## Type blocks
+
+swissshepherd ships with built-in definitions for every Terraform documentation category. You can override a default or add a new one:
+
+```hcl
+# Override the resource type to use a custom doc layout
+type "resource" {
+  schema_kind   = "resource"
+  website_paths = [
+    "docs/resources/{name}.md",
+    "website/docs/r/{name}.html.markdown",
+  ]
+  title_prefix = "Resource"
+  # ... other fields
+}
+
+# Add a provider-specific category
+type "widget" {
+  schema_kind   = "none"   # no schema backing; content-only
+  website_paths = ["docs/widgets/{name}.md"]
+  title_prefix  = "Widget"
+}
+```
+
+The `{name}` placeholder in `website_paths` is replaced with the provider-prefix-stripped target name (e.g., `aws_instance` → `instance`). Templates are tried in order; the first existing file wins.
+
+Built-in types: `resource`, `data_source`, `ephemeral`, `function`, `list_resource`, `action`, `guide`, `index`.
 
 ## Heading styles
 
@@ -249,6 +326,16 @@ Every frontmatter toggle is off by default — the rule does nothing until at le
 
 The subcategory allowlist is set inside the `check "frontmatter"` block via `allowed_subcategories` (inline list) or `allowed_subcategories_file` (newline-separated file). When the allowlist is non-empty, a frontmatter `subcategory` value not on the list fails. An empty allowlist is equivalent to "anything goes". The allowlist only fires when `subcategory` is present in the file — use `require_subcategory` alongside it if absence should also fail.
 
+Some doc types (e.g. Terraform provider functions) use `subcategory: ""` to signal "no category" rather than omitting the key. By default that empty string is validated against the allowlist and fails. Use `allow_empty_subcategory_targets` to name the specific targets where an empty subcategory is permitted:
+
+```hcl
+check "frontmatter" {
+  allow_empty_subcategory_targets = ["arn_build", "arn_parse", "trim_iam_role_path", "user_agent"]
+}
+```
+
+All other targets with `subcategory: ""` continue to fail.
+
 An unterminated or missing frontmatter block is treated the same as an absent block: each `require_*` toggle produces a result, `forbid_*` toggles stay silent.
 
 ## How schema generation works
@@ -268,7 +355,9 @@ If `schema_json` is set instead, the build step is skipped entirely.
 - Schema from `terraform providers schema -json` is the source of truth — no Go source parsing
 - Markdown parsed with [goldmark](https://github.com/yuin/goldmark) AST
 - Two rule interfaces: `Rule.Check(resource, schema, doc) []Result` for schema + AST checks, `FileRule.CheckFile(resource, path, content) []Result` for raw-bytes checks (frontmatter, line-level scans). The runner reads each doc file once and feeds the bytes to both kinds
-- Supports both registry-style (`docs/resources/`) and legacy (`website/docs/r/`) doc layouts
+- Documentation categories (resource, data source, ephemeral, function, list resource, action, guide, index) are defined in `type` blocks — either the embedded defaults or user overrides. Adding a new Terraform category is a config change, not a code change
+- Doc file paths resolve from `type.website_paths` templates; `provider_dir` anchors relative paths when set, otherwise CWD
+- Per-check path scoping (`types`, `prefixes`, `targets`, `ignored_targets`) lets each rule roll out independently across a large provider
 - HCL configuration via [hcl/v2](https://github.com/hashicorp/hcl)
 - YAML frontmatter parsed with [yaml.v3](https://gopkg.in/yaml.v3)
 
