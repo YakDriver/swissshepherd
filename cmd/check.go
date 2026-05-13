@@ -157,6 +157,9 @@ func runCheck(cmd *cobra.Command, args []string) error {
 			AllowedPrefixes: cfg.GetCheck("title_section").AllowedPrefixes,
 		})
 	}
+	if cfg.IsCheckEnabled("section_presence") {
+		rules = append(rules, &check.SectionPresenceRule{})
+	}
 
 	preferred := preferredHeadingTemplates(cfg)
 	if cfg.IsCheckEnabled("heading_style") && len(preferred) > 0 {
