@@ -230,14 +230,13 @@ func outputResultsText(results []check.Result) error {
 		} else {
 			errors++
 		}
-		switch {
-		case r.Path != "" && r.Line > 0:
-			fmt.Fprintf(os.Stdout, "%s  %s (%s:%d): %s\n", prefix, r.Resource, r.Path, r.Line, r.Message)
-		case r.Path != "":
-			fmt.Fprintf(os.Stdout, "%s  %s (%s): %s\n", prefix, r.Resource, r.Path, r.Message)
-		default:
-			fmt.Fprintf(os.Stdout, "%s  %s: %s\n", prefix, r.Resource, r.Message)
+		loc := r.Resource
+		if r.Path != "" && r.Line > 0 {
+			loc = fmt.Sprintf("%s (%s:%d)", r.Resource, r.Path, r.Line)
+		} else if r.Path != "" {
+			loc = fmt.Sprintf("%s (%s)", r.Resource, r.Path)
 		}
+		fmt.Fprintf(os.Stdout, "%s  [%s] %s: %s\n", prefix, r.Rule, loc, r.Message)
 	}
 
 	if len(results) > 0 {
