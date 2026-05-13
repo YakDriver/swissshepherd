@@ -198,7 +198,7 @@ func TestSectionPresenceRule_SchemaTimeouts(t *testing.T) {
 				},
 			},
 			source:  "# Resource: test\n\n## Argument Reference\n",
-			wantErr: "schema configures timeouts but ## Timeouts section is missing",
+			wantErr: "schema configures timeouts ('create') but ## Timeouts section is missing",
 		},
 		"no timeouts section and schema has no timeouts — OK": {
 			schema: &schema.ResourceSchema{

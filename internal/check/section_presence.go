@@ -5,6 +5,7 @@ package check
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/YakDriver/swissshepherd/internal/config"
 	"github.com/YakDriver/swissshepherd/internal/doc"
@@ -58,7 +59,7 @@ func (r *SectionPresenceRule) Check(ctx CheckContext) []Result {
 	// Timeouts: schema-driven when schema is available (bidirectional).
 	// Falls back to type-level requirement only when no schema exists.
 	if ctx.Schema != nil {
-		_, hasTimeouts := ctx.Schema.Blocks["timeouts"]
+		timeoutsBlock, hasTimeouts := ctx.Schema.Blocks["timeouts"]
 		if s.Timeouts != nil && !hasTimeouts {
 			results = append(results, Result{
 				Rule:     r.Name(),
@@ -67,11 +68,15 @@ func (r *SectionPresenceRule) Check(ctx CheckContext) []Result {
 				Message:  "## Timeouts section is documented but the schema does not configure timeouts",
 			})
 		} else if s.Timeouts == nil && hasTimeouts {
+			var actions []string
+			for _, attr := range timeoutsBlock.Attributes {
+				actions = append(actions, "'"+attr.Name+"'")
+			}
 			results = append(results, Result{
 				Rule:     r.Name(),
 				Resource: ctx.Resource,
 				Severity: SeverityError,
-				Message:  "schema configures timeouts but ## Timeouts section is missing",
+				Message:  fmt.Sprintf("schema configures timeouts (%s) but ## Timeouts section is missing", strings.Join(actions, ", ")),
 			})
 		}
 	} else {
