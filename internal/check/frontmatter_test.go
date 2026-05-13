@@ -159,6 +159,12 @@ func TestFrontmatterRule_AllowedSubcategories(t *testing.T) {
 			allowed: []string{"Other"},
 			content: replaceFrontmatter(validFrontmatter, "subcategory: \"Test\"\n", ""),
 		},
+		"allowlist does not fire when subcategory is empty string": {
+			// Functions use subcategory: "" to signal "no category".
+			// An empty value must not be validated against the allowlist.
+			allowed: []string{"Other"},
+			content: replaceFrontmatter(validFrontmatter, "subcategory: \"Test\"\n", "subcategory: \"\"\n"),
+		},
 	}
 
 	for name, tt := range tests {

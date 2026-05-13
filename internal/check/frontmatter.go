@@ -132,7 +132,7 @@ func (r *FrontmatterRule) checkFields(resource string, fm *frontmatter) []Result
 		}
 	}
 
-	if len(r.AllowedSubcategories) > 0 && fm.has("subcategory") {
+	if len(r.AllowedSubcategories) > 0 && fm.has("subcategory") && fm.Subcategory != "" {
 		if !slices.Contains(r.AllowedSubcategories, fm.Subcategory) {
 			fail(fmt.Sprintf("YAML frontmatter subcategory %q is not in the allowed list", fm.Subcategory))
 		}
