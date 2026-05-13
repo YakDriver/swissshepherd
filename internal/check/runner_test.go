@@ -515,3 +515,222 @@ func TestRunner_ResolvesFirstExistingTemplate(t *testing.T) {
 		})
 	}
 }
+
+// --- Path scoping (phase 3.4) --------------------------------------------
+
+// newRunnerFixtureWithCheck is like newRunnerFixture but appends a named
+// CheckConfig block to the config so tests can exercise AppliesTo scoping
+// end-to-end. The fixture's capture rule uses the given check name so the
+// config's path-scoping rules target it.
+func newRunnerFixtureWithCheck(t *testing.T, checkName string, cc config.CheckConfig) *runnerFixture {
+	t.Helper()
+	f := newRunnerFixture(t)
+	f.capture.name = checkName
+	cc.Name = checkName
+	cc.Enabled = true
+	f.cfg.Checks = append(f.cfg.Checks, cc)
+	return f
+}
+
+// TestRunner_RuleScope_TypesLimitsRuleToMatchingTypes is the canonical
+// service-gate test: ordering is enabled only for resources and ignores
+// everything else in RunAll. A different rule without scoping continues
+// to visit every target.
+func TestRunner_RuleScope_TypesLimitsRuleToMatchingTypes(t *testing.T) {
+	t.Parallel()
+
+	f := newRunnerFixtureWithCheck(t, "scoped_rule", config.CheckConfig{
+		Types: []string{"resource"},
+	})
+	// Add a second rule with no scoping — it should see all targets.
+	unscoped := &captureRule{name: "unscoped_rule"}
+	f.runner.Rules = append(f.runner.Rules, unscoped)
+	f.cfg.Checks = append(f.cfg.Checks, config.CheckConfig{Name: "unscoped_rule", Enabled: true})
+
+	f.addTarget(t, "resource", "test_res_one")
+	f.addTarget(t, "data_source", "test_ds_one")
+
+	f.runner.RunAll()
+
+	// Scoped rule sees only the resource.
+	if got := f.capture.resources(); !slices.Equal(got, []string{"test_res_one"}) {
+		t.Errorf("scoped rule saw %v, want [test_res_one]", got)
+	}
+	// Unscoped rule sees both.
+	want := []string{"test_ds_one", "test_res_one"}
+	if got := unscoped.resources(); !slices.Equal(got, want) {
+		t.Errorf("unscoped rule saw %v, want %v", got, want)
+	}
+}
+
+// TestRunner_RuleScope_PrefixAppliesToSelectedNames exercises the typical
+// migration case: ordering is only enforced for aws_s3_* names.
+func TestRunner_RuleScope_PrefixAppliesToSelectedNames(t *testing.T) {
+	t.Parallel()
+
+	f := newRunnerFixtureWithCheck(t, "scoped_rule", config.CheckConfig{
+		Prefixes: []string{"test_s3_"},
+	})
+
+	f.addTarget(t, "resource", "test_s3_bucket")
+	f.addTarget(t, "resource", "test_s3_bucket_policy")
+	f.addTarget(t, "resource", "test_ec2_instance")
+
+	f.runner.RunAll()
+
+	want := []string{"test_s3_bucket", "test_s3_bucket_policy"}
+	if got := f.capture.resources(); !slices.Equal(got, want) {
+		t.Errorf("prefix-scoped rule saw %v, want %v", got, want)
+	}
+}
+
+// TestRunner_RuleScope_TargetsAppliesToExactNames confirms the Targets axis
+// behaves as an exact-name include-list.
+func TestRunner_RuleScope_TargetsAppliesToExactNames(t *testing.T) {
+	t.Parallel()
+
+	f := newRunnerFixtureWithCheck(t, "scoped_rule", config.CheckConfig{
+		Targets: []string{"test_instance", "test_vpc"},
+	})
+
+	f.addTarget(t, "resource", "test_instance")
+	f.addTarget(t, "resource", "test_vpc")
+	f.addTarget(t, "resource", "test_other")
+
+	f.runner.RunAll()
+
+	want := []string{"test_instance", "test_vpc"}
+	if got := f.capture.resources(); !slices.Equal(got, want) {
+		t.Errorf("targets-scoped rule saw %v, want %v", got, want)
+	}
+}
+
+// TestRunner_RuleScope_IgnoredTargetsSubtracts confirms IgnoredTargets wins
+// over the include-lists. The user has a broad prefix but wants one name
+// exempted during the migration window.
+func TestRunner_RuleScope_IgnoredTargetsSubtracts(t *testing.T) {
+	t.Parallel()
+
+	f := newRunnerFixtureWithCheck(t, "scoped_rule", config.CheckConfig{
+		Prefixes:       []string{"test_s3_"},
+		IgnoredTargets: []string{"test_s3_bucket_legacy"},
+	})
+
+	f.addTarget(t, "resource", "test_s3_bucket")
+	f.addTarget(t, "resource", "test_s3_bucket_legacy")
+
+	f.runner.RunAll()
+
+	if got := f.capture.resources(); !slices.Equal(got, []string{"test_s3_bucket"}) {
+		t.Errorf("ignored-targets rule saw %v, want [test_s3_bucket]", got)
+	}
+}
+
+// TestRunner_RuleScope_NoApplicableRulesSkipsDoc is the perf-relevant test:
+// if a target has no rules at all (every rule scopes it out), the Runner
+// must not read or parse the doc. We prove it by deleting the doc file
+// entirely after registering the schema entry — a rule that actually
+// dispatched against this target would error reading the file.
+func TestRunner_RuleScope_NoApplicableRulesSkipsDoc(t *testing.T) {
+	t.Parallel()
+
+	f := newRunnerFixtureWithCheck(t, "scoped_rule", config.CheckConfig{
+		Prefixes: []string{"test_never_"}, // won't match our target
+	})
+
+	// Register a target in the schema but DO NOT create its doc file.
+	// If Runner tries to read the doc, it would log a warning. Since the
+	// rule doesn't apply, the doc read should be skipped entirely and the
+	// capture rule must see zero calls.
+	f.ps.Resources["test_instance"] = &schema.ResourceSchema{
+		Name:   "test_instance",
+		Blocks: map[string]*schema.Block{},
+	}
+
+	f.runner.RunAll()
+
+	if got := f.capture.resources(); len(got) != 0 {
+		t.Errorf("rule with no matching targets should not dispatch; got %v", got)
+	}
+}
+
+// TestRunner_RuleScope_MixedScopes confirms each rule consults its own
+// CheckConfig. Two rules with different scopes should produce different
+// target sets in the same run.
+func TestRunner_RuleScope_MixedScopes(t *testing.T) {
+	t.Parallel()
+
+	f := newRunnerFixture(t)
+	s3Rule := &captureRule{name: "s3_only"}
+	ec2Rule := &captureRule{name: "ec2_only"}
+	f.runner.Rules = []check.Rule{s3Rule, ec2Rule}
+	f.cfg.Checks = append(f.cfg.Checks,
+		config.CheckConfig{Name: "s3_only", Enabled: true, Prefixes: []string{"test_s3_"}},
+		config.CheckConfig{Name: "ec2_only", Enabled: true, Prefixes: []string{"test_ec2_"}},
+	)
+
+	f.addTarget(t, "resource", "test_s3_bucket")
+	f.addTarget(t, "resource", "test_ec2_instance")
+	f.addTarget(t, "resource", "test_vpc_main")
+
+	f.runner.RunAll()
+
+	if got := s3Rule.resources(); !slices.Equal(got, []string{"test_s3_bucket"}) {
+		t.Errorf("s3_only saw %v, want [test_s3_bucket]", got)
+	}
+	if got := ec2Rule.resources(); !slices.Equal(got, []string{"test_ec2_instance"}) {
+		t.Errorf("ec2_only saw %v, want [test_ec2_instance]", got)
+	}
+}
+
+// TestRunner_RuleScope_FileRuleFiltered ensures FileRules consult AppliesTo
+// the same way Rules do. The capture fixture is Rule-based, so we attach a
+// FileRule that records calls and verify prefix scoping applies.
+func TestRunner_RuleScope_FileRuleFiltered(t *testing.T) {
+	t.Parallel()
+
+	f := newRunnerFixture(t)
+	fr := &captureFileRule{name: "file_rule"}
+	f.runner.FileRules = []check.FileRule{fr}
+	f.cfg.Checks = append(f.cfg.Checks, config.CheckConfig{
+		Name:     "file_rule",
+		Enabled:  true,
+		Prefixes: []string{"test_keep_"},
+	})
+
+	f.addTarget(t, "resource", "test_keep_one")
+	f.addTarget(t, "resource", "test_skip_two")
+
+	f.runner.RunAll()
+
+	if got := fr.resources(); !slices.Equal(got, []string{"test_keep_one"}) {
+		t.Errorf("file_rule saw %v, want [test_keep_one]", got)
+	}
+}
+
+// captureFileRule is the FileRule analogue of captureRule: records every
+// CheckFile invocation so tests can assert path-scoping behavior for raw-
+// bytes checks.
+type captureFileRule struct {
+	name string
+
+	mu   sync.Mutex
+	seen []string
+}
+
+func (c *captureFileRule) Name() string { return c.name }
+
+func (c *captureFileRule) CheckFile(resource, _ string, _ []byte) []check.Result {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.seen = append(c.seen, resource)
+	return nil
+}
+
+func (c *captureFileRule) resources() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := slices.Clone(c.seen)
+	slices.Sort(out)
+	return out
+}

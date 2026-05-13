@@ -139,10 +139,21 @@ func (r *Runner) resolveOne(name, kind string) (*config.Type, error) {
 }
 
 // runTarget reads and parses the doc for a single (type, name) pair and
-// runs every Rule and FileRule. When logOnError is true, file-read and
-// parse failures produce a warning log and empty results (RunAll / RunPrefix
-// semantics); when false, the error is returned to the caller (RunOne).
+// runs every Rule and FileRule whose CheckConfig.AppliesTo admits this
+// target. When logOnError is true, file-read and parse failures produce a
+// warning log and empty results (RunAll / RunPrefix semantics); when false,
+// the error is returned to the caller (RunOne).
+//
+// Per-rule scoping is checked before any doc work. If no rule applies to a
+// target, the doc is never read — important for a large provider where
+// most rules have a narrow prefix/type allowlist during a migration.
 func (r *Runner) runTarget(t *config.Type, name string, logOnError bool) ([]Result, error) {
+	applicableRules := r.applicableRules(name, t.Name)
+	applicableFileRules := r.applicableFileRules(name, t.Name)
+	if len(applicableRules) == 0 && len(applicableFileRules) == 0 {
+		return nil, nil
+	}
+
 	docPath, err := r.resolveDocPath(t, name)
 	if err != nil {
 		if logOnError {
@@ -173,13 +184,36 @@ func (r *Runner) runTarget(t *config.Type, name string, logOnError bool) ([]Resu
 	rs := r.Schema.ResourceSchemaFor(t.SchemaKind, name)
 
 	var results []Result
-	for _, rule := range r.Rules {
+	for _, rule := range applicableRules {
 		results = append(results, rule.Check(name, rs, d)...)
 	}
-	for _, rule := range r.FileRules {
+	for _, rule := range applicableFileRules {
 		results = append(results, rule.CheckFile(name, docPath, content)...)
 	}
 	return results, nil
+}
+
+// applicableRules filters r.Rules down to the Rules whose CheckConfig admits
+// the given target. Rule order is preserved.
+func (r *Runner) applicableRules(name, typeName string) []Rule {
+	out := make([]Rule, 0, len(r.Rules))
+	for _, rule := range r.Rules {
+		if r.Config.GetCheck(rule.Name()).AppliesTo(name, typeName) {
+			out = append(out, rule)
+		}
+	}
+	return out
+}
+
+// applicableFileRules is the FileRule equivalent of applicableRules.
+func (r *Runner) applicableFileRules(name, typeName string) []FileRule {
+	out := make([]FileRule, 0, len(r.FileRules))
+	for _, rule := range r.FileRules {
+		if r.Config.GetCheck(rule.Name()).AppliesTo(name, typeName) {
+			out = append(out, rule)
+		}
+	}
+	return out
 }
 
 // resolveDocPath tries every website_paths template for the given type and
