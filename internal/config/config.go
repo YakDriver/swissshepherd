@@ -25,7 +25,16 @@ type Config struct {
 	ProviderDir    string `hcl:"provider_dir,optional"`
 	SchemaJSON     string `hcl:"schema_json,optional"`
 
-	IgnoreCdktfMissingFiles bool `hcl:"ignore_cdktf_missing_files,optional"`
+	// IgnoreFileMissing suppresses "doc file not found" warnings for the
+	// listed target names. Useful for schema aliases (e.g. aws_alb → aws_lb)
+	// that intentionally have no dedicated doc file.
+	IgnoreFileMissing     []string `hcl:"ignore_file_missing,optional"`
+	IgnoreFileMissingFile string   `hcl:"ignore_file_missing_file,optional"`
+
+	// FileAliases maps a schema target name to the doc target name used for
+	// path resolution. Keys can be plain names (apply to all types) or
+	// type-qualified as "type/name" (e.g. "list_resource/aws_ebs_volume").
+	FileAliases map[string]string `hcl:"file_aliases,optional"`
 
 	// Types defines every documentation category swissshepherd knows about.
 	// A set of standard types (resource, data_source, ephemeral, function,
@@ -262,6 +271,14 @@ func (c *Config) resolveFiles() error {
 			}
 			ch.AllowedSubcategories = append(ch.AllowedSubcategories, lines...)
 		}
+	}
+
+	if c.IgnoreFileMissingFile != "" {
+		lines, err := readLines(c.IgnoreFileMissingFile)
+		if err != nil {
+			return err
+		}
+		c.IgnoreFileMissing = append(c.IgnoreFileMissing, lines...)
 	}
 
 	return nil

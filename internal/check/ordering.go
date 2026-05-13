@@ -7,7 +7,6 @@ import (
 	"fmt"
 
 	"github.com/YakDriver/swissshepherd/internal/doc"
-	"github.com/YakDriver/swissshepherd/internal/schema"
 )
 
 // OrderingRule checks that documented arguments and attributes are alphabetically ordered.
@@ -16,7 +15,8 @@ type OrderingRule struct{}
 
 func (r *OrderingRule) Name() string { return "ordering" }
 
-func (r *OrderingRule) Check(resource string, _ *schema.ResourceSchema, d *doc.Document) []Result {
+func (r *OrderingRule) Check(ctx CheckContext) []Result {
+	resource, d := ctx.Resource, ctx.Doc
 	var results []Result
 
 	results = append(results, checkBlockOrdering(resource, r.Name(), "argument", d.ArgumentBlocks)...)

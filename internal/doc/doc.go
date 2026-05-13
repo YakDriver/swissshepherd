@@ -4,6 +4,7 @@
 package doc
 
 import (
+	"bytes"
 	"fmt"
 	"maps"
 	"os"
@@ -20,6 +21,13 @@ type DocAttribute struct {
 	Required    bool
 	Optional    bool
 	Description string
+	Line        int // 1-based line number in the source file
+}
+
+// MalformedAttr records an attribute name with a formatting issue and its location.
+type MalformedAttr struct {
+	Name string
+	Line int
 }
 
 // DocBlock represents a documented block section.
@@ -27,7 +35,7 @@ type DocBlock struct {
 	Name                string
 	Heading             string
 	Attributes          []DocAttribute
-	MalformedAttributes []string // attribute names found but with formatting issues
+	MalformedAttributes []MalformedAttr // attributes found but with formatting issues
 }
 
 // HeadingTemplates defines patterns for recognizing block headings.
@@ -264,14 +272,31 @@ func extractBlocks(tree ast.Node, source []byte, doc *Document, templates Headin
 	var currentSection *Section
 	var inArguments, inAttributes bool
 
+	// closeSection finalizes the current section's EndOffset.
+	closeSection := func(endOffset int) {
+		if currentSection != nil && currentSection.EndOffset == 0 {
+			currentSection.EndOffset = endOffset
+		}
+	}
+
 	// assignSection records a freshly discovered top-level section and makes it
 	// the current accumulator target for paragraphs and code blocks that follow.
 	// Only the first occurrence of each section is captured — duplicate headings
 	// keep pointing at the first one so rules can still reason about "the"
 	// section without the walker silently replacing it.
 	assignSection := func(field **Section, heading *ast.Heading, text string) {
+		startOff := 0
+		if lines := heading.Lines(); lines.Len() > 0 {
+			// Lines().At(0).Start is the content start (after "## ").
+			// Walk backwards to find the actual line start (the # character).
+			startOff = lines.At(0).Start
+			for startOff > 0 && source[startOff-1] != '\n' {
+				startOff--
+			}
+		}
+		closeSection(startOff)
 		if *field == nil {
-			*field = &Section{Heading: heading, Text: text}
+			*field = &Section{Heading: heading, Text: text, StartOffset: startOff}
 		}
 		currentSection = *field
 	}
@@ -331,7 +356,17 @@ func extractBlocks(tree ast.Node, source []byte, doc *Document, templates Headin
 						ensureBlock(doc.AttributeBlocks, blockName, headingText)
 					}
 				}
+				if currentSection != nil {
+					currentSection.ChildHeadings = append(currentSection.ChildHeadings, ChildHeading{Level: n.Level, Text: headingText})
+				}
 				return ast.WalkSkipChildren, nil
+			}
+
+			// Level >= 3 heading outside arguments/attributes — still record
+			// as a child heading of the current section (e.g. ### Basic Usage
+			// inside ## Example Usage).
+			if n.Level >= 3 && currentSection != nil {
+				currentSection.ChildHeadings = append(currentSection.ChildHeadings, ChildHeading{Level: n.Level, Text: headingText})
 			}
 
 			return ast.WalkSkipChildren, nil
@@ -350,6 +385,17 @@ func extractBlocks(tree ast.Node, source []byte, doc *Document, templates Headin
 
 		case *ast.List:
 			if !inArguments && !inAttributes {
+				// Capture list items into the current section (e.g. Timeouts).
+				if currentSection != nil {
+					for child := n.FirstChild(); child != nil; child = child.NextSibling() {
+						if li, ok := child.(*ast.ListItem); ok {
+							if item := parseSectionListItem(li, source); item.Name != "" {
+								item.Line = nodeLineNumber(li, source)
+								currentSection.ListItems = append(currentSection.ListItems, item)
+							}
+						}
+					}
+				}
 				return ast.WalkSkipChildren, nil
 			}
 
@@ -365,11 +411,17 @@ func extractBlocks(tree ast.Node, source []byte, doc *Document, templates Headin
 
 			for child := n.FirstChild(); child != nil; child = child.NextSibling() {
 				if li, ok := child.(*ast.ListItem); ok {
+					line := nodeLineNumber(li, source)
 					attr := parseListItem(li, source)
 					if attr.Name != "" {
+						attr.Line = line
 						block.Attributes = append(block.Attributes, attr)
+						// Flag attributes with malformed separator (e.g. `mode`- instead of `mode` -).
+						if hasMalformedSeparator(li, source, attr.Name) {
+							block.MalformedAttributes = append(block.MalformedAttributes, MalformedAttr{Name: attr.Name, Line: line})
+						}
 					} else if name := malformedAttrName(li, source); name != "" {
-						block.MalformedAttributes = append(block.MalformedAttributes, name)
+						block.MalformedAttributes = append(block.MalformedAttributes, MalformedAttr{Name: name, Line: line})
 					}
 				}
 			}
@@ -378,6 +430,79 @@ func extractBlocks(tree ast.Node, source []byte, doc *Document, templates Headin
 
 		return ast.WalkContinue, nil
 	})
+
+	// Finalize the last section's EndOffset.
+	closeSection(len(source))
+}
+
+// parseSectionListItem extracts a name/value pair from a list item in a
+// non-argument section (e.g. Timeouts: * `create` - (Default `60m`)).
+func parseSectionListItem(li *ast.ListItem, source []byte) SectionListItem {
+	var rawText string
+	for child := li.FirstChild(); child != nil; child = child.NextSibling() {
+		switch c := child.(type) {
+		case *ast.TextBlock:
+			rawText = string(c.Text(source))
+		case *ast.Paragraph:
+			rawText = string(c.Text(source))
+		}
+		if rawText != "" {
+			break
+		}
+	}
+	if rawText == "" {
+		return SectionListItem{}
+	}
+
+	parts := strings.SplitN(rawText, " - ", 2)
+	if len(parts) < 1 {
+		return SectionListItem{}
+	}
+	name := strings.Trim(strings.TrimSpace(parts[0]), "`")
+	if name == "" || strings.Contains(name, " ") {
+		return SectionListItem{}
+	}
+	var value string
+	if len(parts) == 2 {
+		value = strings.TrimSpace(parts[1])
+	}
+	return SectionListItem{Name: name, Value: value}
+}
+
+// hasMalformedSeparator checks if the raw source for a list item has a
+// backtick-dash pattern (`name`- ) instead of the correct `name` - format.
+// nodeLineNumber returns the 1-based line number of a block node by inspecting
+// its first line segment or recursing into its first child.
+func nodeLineNumber(n ast.Node, source []byte) int {
+	if lines := n.Lines(); lines.Len() > 0 {
+		offset := lines.At(0).Start
+		return bytes.Count(source[:offset], []byte{'\n'}) + 1
+	}
+	// ListItem often has no direct lines; check first child.
+	if fc := n.FirstChild(); fc != nil {
+		if lines := fc.Lines(); lines.Len() > 0 {
+			offset := lines.At(0).Start
+			return bytes.Count(source[:offset], []byte{'\n'}) + 1
+		}
+	}
+	return 0
+}
+
+func hasMalformedSeparator(li *ast.ListItem, source []byte, name string) bool {
+	for child := li.FirstChild(); child != nil; child = child.NextSibling() {
+		var raw string
+		switch c := child.(type) {
+		case *ast.TextBlock:
+			raw = string(c.Text(source))
+		case *ast.Paragraph:
+			raw = string(c.Text(source))
+		}
+		if raw != "" {
+			// Look for `name`- (no space between closing backtick and dash)
+			return strings.Contains(raw, "`"+name+"`-")
+		}
+	}
+	return false
 }
 
 func ensureBlock(blocks map[string]*DocBlock, name, heading string) {
@@ -417,6 +542,14 @@ func parseListItem(li *ast.ListItem, source []byte) DocAttribute {
 		return DocAttribute{}
 	}
 
+	// Primary separator is " - " (with spaces). Also accept "`- " which appears
+	// when authors omit the space before the dash: `mode`- (Required) ...
+	sep := " - "
+	if !strings.Contains(rawText, sep) && strings.Contains(rawText, "`- ") {
+		sep = "`- "
+		// Re-attach the backtick to the name side so trimming works correctly.
+		rawText = strings.Replace(rawText, "`- ", "` - ", 1)
+	}
 	parts := strings.SplitN(rawText, " - ", 2)
 	if len(parts) < 1 {
 		return DocAttribute{}
@@ -490,11 +623,15 @@ func malformedAttrName(li *ast.ListItem, source []byte) string {
 	if len(parts) < 2 {
 		return ""
 	}
+	// Strip surrounding backticks and a trailing dash that appears when the
+	// author writes `name`- with no space before the dash.
 	name := strings.Trim(parts[0], "`")
+	name = strings.TrimRight(name, "-")
+	name = strings.TrimRight(name, "`")
 	if name == "" || strings.Contains(name, " ") || name != strings.ToLower(name) {
 		return ""
 	}
-	if strings.ContainsAny(name, ".[]*") {
+	if strings.ContainsAny(name, ".[]*`") {
 		return ""
 	}
 

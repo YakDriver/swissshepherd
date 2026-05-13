@@ -30,7 +30,7 @@ func TestFrontmatterRule_NoToggles_EmitsNothing(t *testing.T) {
 	t.Parallel()
 
 	rule := &check.FrontmatterRule{}
-	results := rule.CheckFile("test_instance", "test.md", []byte(validFrontmatter))
+	results := rule.CheckFile(check.FileCheckContext{Resource: "test_instance", Path: "test.md", Content: []byte(validFrontmatter)})
 
 	if len(results) != 0 {
 		t.Fatalf("expected 0 results with zero-value rule, got %d: %v", len(results), results)
@@ -75,7 +75,7 @@ func TestFrontmatterRule_Require(t *testing.T) {
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			results := tt.rule.CheckFile("test_instance", "test.md", []byte(tt.content))
+			results := tt.rule.CheckFile(check.FileCheckContext{Resource: "test_instance", Path: "test.md", Content: []byte(tt.content)})
 			assertMessage(t, results, tt.wantMsg)
 		})
 	}
@@ -128,7 +128,7 @@ func TestFrontmatterRule_Forbid(t *testing.T) {
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			results := tt.rule.CheckFile("test_instance", "test.md", []byte(tt.content))
+			results := tt.rule.CheckFile(check.FileCheckContext{Resource: "test_instance", Path: "test.md", Content: []byte(tt.content)})
 			assertMessage(t, results, tt.wantMsg)
 		})
 	}
@@ -182,7 +182,7 @@ func TestFrontmatterRule_AllowedSubcategories(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			rule := &check.FrontmatterRule{AllowedSubcategories: tt.allowed, AllowEmptySubcategoryTargets: tt.allowEmptySubcatFor}
-			results := rule.CheckFile("test_instance", "test.md", []byte(tt.content))
+			results := rule.CheckFile(check.FileCheckContext{Resource: "test_instance", Path: "test.md", Content: []byte(tt.content)})
 			assertMessage(t, results, tt.wantMsg)
 		})
 	}
@@ -200,7 +200,7 @@ func TestFrontmatterRule_MultipleFailuresAggregated(t *testing.T) {
 		RequirePageTitle:   true,
 		ForbidDescription:  true,
 	}
-	results := rule.CheckFile("test_instance", "test.md", []byte(content))
+	results := rule.CheckFile(check.FileCheckContext{Resource: "test_instance", Path: "test.md", Content: []byte(content)})
 
 	if len(results) != 3 {
 		t.Fatalf("expected 3 results, got %d: %v", len(results), resultMessages(results))
@@ -226,7 +226,7 @@ func TestFrontmatterRule_NoFrontmatterBlock(t *testing.T) {
 	t.Run("inert rule passes", func(t *testing.T) {
 		t.Parallel()
 		rule := &check.FrontmatterRule{}
-		if got := rule.CheckFile("test_resource", "p.md", []byte(content)); len(got) != 0 {
+		if got := rule.CheckFile(check.FileCheckContext{Resource: "test_resource", Path: "p.md", Content: []byte(content)}); len(got) != 0 {
 			t.Fatalf("expected 0 results, got %d: %v", len(got), resultMessages(got))
 		}
 	})
@@ -239,7 +239,7 @@ func TestFrontmatterRule_NoFrontmatterBlock(t *testing.T) {
 			RequireDescription: true,
 			RequireLayout:      true,
 		}
-		results := rule.CheckFile("test_resource", "p.md", []byte(content))
+		results := rule.CheckFile(check.FileCheckContext{Resource: "test_resource", Path: "p.md", Content: []byte(content)})
 		if len(results) != 4 {
 			t.Fatalf("expected 4 results, got %d: %v", len(results), resultMessages(results))
 		}
@@ -256,7 +256,7 @@ func TestFrontmatterRule_NoFrontmatterBlock(t *testing.T) {
 			ForbidLayout:         true,
 			ForbidSidebarCurrent: true,
 		}
-		if got := rule.CheckFile("test_resource", "p.md", []byte(content)); len(got) != 0 {
+		if got := rule.CheckFile(check.FileCheckContext{Resource: "test_resource", Path: "p.md", Content: []byte(content)}); len(got) != 0 {
 			t.Errorf("forbid_* must not fire without a frontmatter block, got: %v", resultMessages(got))
 		}
 	})
@@ -270,7 +270,7 @@ func TestFrontmatterRule_UnterminatedBlockTreatedAsAbsent(t *testing.T) {
 	content := "---\nsubcategory: \"Test\"\n\n# Resource: test\n"
 
 	rule := &check.FrontmatterRule{RequireSubcategory: true}
-	results := rule.CheckFile("test", "p.md", []byte(content))
+	results := rule.CheckFile(check.FileCheckContext{Resource: "test", Path: "p.md", Content: []byte(content)})
 	if len(results) != 1 {
 		t.Fatalf("expected 1 result for unterminated frontmatter, got %d: %v", len(results), resultMessages(results))
 	}
@@ -287,7 +287,7 @@ func TestFrontmatterRule_MalformedYAML(t *testing.T) {
 	content := "---\nnot a mapping, just a scalar\n---\n\n# body\n"
 
 	rule := &check.FrontmatterRule{RequireSubcategory: true}
-	results := rule.CheckFile("test", "p.md", []byte(content))
+	results := rule.CheckFile(check.FileCheckContext{Resource: "test", Path: "p.md", Content: []byte(content)})
 	if len(results) != 1 {
 		t.Fatalf("expected exactly 1 parse-error result, got %d: %v", len(results), resultMessages(results))
 	}
@@ -308,7 +308,7 @@ func TestFrontmatterRule_CRLFLineEndings(t *testing.T) {
 		RequireDescription: true,
 		RequireLayout:      true,
 	}
-	if got := rule.CheckFile("test", "p.md", []byte(content)); len(got) != 0 {
+	if got := rule.CheckFile(check.FileCheckContext{Resource: "test", Path: "p.md", Content: []byte(content)}); len(got) != 0 {
 		t.Fatalf("CRLF frontmatter should parse identically, got: %v", resultMessages(got))
 	}
 }
@@ -318,7 +318,7 @@ func TestFrontmatterRule_EmitsRuleAndResourceMetadata(t *testing.T) {
 
 	content := replaceFrontmatter(validFrontmatter, "subcategory: \"Test\"\n", "")
 	rule := &check.FrontmatterRule{RequireSubcategory: true}
-	results := rule.CheckFile("aws_example", "p.md", []byte(content))
+	results := rule.CheckFile(check.FileCheckContext{Resource: "aws_example", Path: "p.md", Content: []byte(content)})
 
 	if len(results) != 1 {
 		t.Fatalf("expected 1 result, got %d", len(results))
@@ -350,7 +350,7 @@ func TestFrontmatterRule_ValidFixture(t *testing.T) {
 		RequireDescription: true,
 	}
 
-	if got := rule.CheckFile("test_instance", "instance.html.markdown", content); len(got) != 0 {
+	if got := rule.CheckFile(check.FileCheckContext{Resource: "test_instance", Path: "instance.html.markdown", Content: content}); len(got) != 0 {
 		t.Fatalf("valid fixture should pass, got: %v", resultMessages(got))
 	}
 }
@@ -364,7 +364,7 @@ func TestFrontmatterRule_ForbiddenFixture(t *testing.T) {
 		ForbidSidebarCurrent: true,
 	}
 
-	results := rule.CheckFile("test_forbidden", "instance_forbidden_fields.html.markdown", content)
+	results := rule.CheckFile(check.FileCheckContext{Resource: "test_forbidden", Path: "instance_forbidden_fields.html.markdown", Content: content})
 	if len(results) != 2 {
 		t.Fatalf("expected 2 results (layout + sidebar_current), got %d: %v", len(results), resultMessages(results))
 	}
@@ -382,7 +382,7 @@ func TestFrontmatterRule_NoFrontmatterFixture(t *testing.T) {
 	content := mustReadFile(t, "../../testdata/docs/r/instance_no_frontmatter.html.markdown")
 	rule := &check.FrontmatterRule{RequireSubcategory: true, RequirePageTitle: true}
 
-	results := rule.CheckFile("test_no_frontmatter", "instance_no_frontmatter.html.markdown", content)
+	results := rule.CheckFile(check.FileCheckContext{Resource: "test_no_frontmatter", Path: "instance_no_frontmatter.html.markdown", Content: content})
 	if len(results) != 2 {
 		t.Fatalf("expected 2 missing-frontmatter results, got %d: %v", len(results), resultMessages(results))
 	}

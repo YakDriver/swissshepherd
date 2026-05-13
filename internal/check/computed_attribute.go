@@ -6,9 +6,6 @@ package check
 import (
 	"fmt"
 	"slices"
-
-	"github.com/YakDriver/swissshepherd/internal/doc"
-	"github.com/YakDriver/swissshepherd/internal/schema"
 )
 
 // ComputedAttributeRule checks that computed-only attributes appear in the
@@ -17,7 +14,8 @@ type ComputedAttributeRule struct{}
 
 func (r *ComputedAttributeRule) Name() string { return "computed_attribute" }
 
-func (r *ComputedAttributeRule) Check(resource string, rs *schema.ResourceSchema, d *doc.Document) []Result {
+func (r *ComputedAttributeRule) Check(ctx CheckContext) []Result {
+	resource, rs, d := ctx.Resource, ctx.Schema, ctx.Doc
 	// Non-block-schema types (functions, content-only categories) don't have
 	// root blocks to inspect. No findings.
 	if rs == nil {

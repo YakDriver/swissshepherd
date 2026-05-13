@@ -39,7 +39,8 @@ func (r *FormatStyleRule) uninterruptedLists() bool {
 func (r *FormatStyleRule) Name() string { return "format_style" }
 
 // CheckFile runs format checks against the raw bytes of a documentation file.
-func (r *FormatStyleRule) CheckFile(resource, _ string, content []byte) []Result {
+func (r *FormatStyleRule) CheckFile(ctx FileCheckContext) []Result {
+	resource, content := ctx.Resource, ctx.Content
 	var results []Result
 	var inSection bool
 	var inCodeBlock bool

@@ -18,7 +18,8 @@ type HeadingStyleRule struct {
 
 func (r *HeadingStyleRule) Name() string { return "heading_style" }
 
-func (r *HeadingStyleRule) Check(resource string, rs *schema.ResourceSchema, d *doc.Document) []Result {
+func (r *HeadingStyleRule) Check(ctx CheckContext) []Result {
+	resource, rs, d := ctx.Resource, ctx.Schema, ctx.Doc
 	if len(r.Preferred) == 0 {
 		return nil
 	}

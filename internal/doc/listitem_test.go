@@ -97,8 +97,17 @@ func TestParseListItem_Formats(t *testing.T) {
 			wantName: "status",
 		},
 		{
-			name:          "no space before paren",
+			name:          "no space before dash is malformed",
 			input:         "* `name`- (Optional) The name.",
+			wantName:      "name",
+			wantOptional:  true,
+			wantMalformed: true,
+		},
+		{
+			name:          "no space before dash required is malformed",
+			input:         "* `mode`- (Required) The mode.",
+			wantName:      "mode",
+			wantRequired:  true,
 			wantMalformed: true,
 		},
 	}
@@ -123,7 +132,10 @@ func TestParseListItem_Formats(t *testing.T) {
 				if len(root.MalformedAttributes) == 0 {
 					t.Errorf("expected malformed attribute, got none (attrs: %v)", attrNames(root.Attributes))
 				}
-				return
+				if tt.wantName == "" {
+					return
+				}
+				// Fall through to also check the attribute was parsed.
 			}
 
 			if tt.wantName == "" {

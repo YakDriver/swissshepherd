@@ -62,7 +62,7 @@ func TestCompletenessRule_MultiLevelParentDisambiguation(t *testing.T) {
 	}
 
 	rule := &check.CompletenessRule{IgnoreDeprecated: true}
-	results := rule.Check("test_resource", rs, d)
+	results := rule.Check(check.CheckContext{Resource: "test_resource", Schema: rs, Doc: d})
 
 	if len(results) != 0 {
 		t.Errorf("expected no errors, got %d:", len(results))

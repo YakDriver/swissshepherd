@@ -16,6 +16,38 @@ type Section struct {
 	Text             string
 	FencedCodeBlocks []*ast.FencedCodeBlock
 	Paragraphs       []*ast.Paragraph
+
+	// ChildHeadings are headings at level > the section's own level that
+	// appear before the next same-or-lower-level heading. Used by rules
+	// that check for required sub-sections (e.g. "### Basic Usage" inside
+	// "## Example Usage").
+	ChildHeadings []ChildHeading
+
+	// ListItems are the top-level list items found in this section. Used by
+	// rules that validate structured lists (e.g. timeout actions).
+	ListItems []SectionListItem
+
+	// StartOffset and EndOffset are byte offsets into the source marking the
+	// section's extent (from the heading's first byte to the byte before the
+	// next same-or-lower-level heading, or EOF). Rules that need raw source
+	// patterns (e.g. import block format) slice source[StartOffset:EndOffset].
+	StartOffset int
+	EndOffset   int
+}
+
+// ChildHeading records a heading nested inside a section.
+type ChildHeading struct {
+	Level int
+	Text  string
+}
+
+// SectionListItem records a single top-level list item in a section.
+// Name is the backtick-wrapped identifier (e.g. "create") and Value is the
+// remainder after the " - " separator (e.g. "(Default `60m`)").
+type SectionListItem struct {
+	Name  string
+	Value string
+	Line  int
 }
 
 // Sections is the typed view of the top-level sections of a doc file. Any

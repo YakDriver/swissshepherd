@@ -157,6 +157,9 @@ func runCheck(cmd *cobra.Command, args []string) error {
 			AllowedPrefixes: cfg.GetCheck("title_section").AllowedPrefixes,
 		})
 	}
+	if cfg.IsCheckEnabled("section_presence") {
+		rules = append(rules, &check.SectionPresenceRule{})
+	}
 
 	preferred := preferredHeadingTemplates(cfg)
 	if cfg.IsCheckEnabled("heading_style") && len(preferred) > 0 {
@@ -227,9 +230,12 @@ func outputResultsText(results []check.Result) error {
 		} else {
 			errors++
 		}
-		if r.Path != "" {
+		switch {
+		case r.Path != "" && r.Line > 0:
+			fmt.Fprintf(os.Stdout, "%s  %s (%s:%d): %s\n", prefix, r.Resource, r.Path, r.Line, r.Message)
+		case r.Path != "":
 			fmt.Fprintf(os.Stdout, "%s  %s (%s): %s\n", prefix, r.Resource, r.Path, r.Message)
-		} else {
+		default:
 			fmt.Fprintf(os.Stdout, "%s  %s: %s\n", prefix, r.Resource, r.Message)
 		}
 	}

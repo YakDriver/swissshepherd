@@ -27,7 +27,7 @@ func TestCompletenessRule_Complete(t *testing.T) {
 	}
 
 	rule := &check.CompletenessRule{IgnoreDeprecated: true}
-	results := rule.Check("test_instance", ps.Resources["test_instance"], d)
+	results := rule.Check(check.CheckContext{Resource: "test_instance", Schema: ps.Resources["test_instance"], Doc: d})
 
 	// Filter to errors only (warnings about timeouts block are expected since we don't doc those attrs)
 	var errors []check.Result
@@ -61,7 +61,7 @@ func TestCompletenessRule_Incomplete(t *testing.T) {
 	}
 
 	rule := &check.CompletenessRule{IgnoreDeprecated: true}
-	results := rule.Check("test_instance", ps.Resources["test_instance"], d)
+	results := rule.Check(check.CheckContext{Resource: "test_instance", Schema: ps.Resources["test_instance"], Doc: d})
 
 	// Should report missing: description (root), network block entirely, timeouts block
 	messages := resultMessages(results)
@@ -95,7 +95,7 @@ func TestCompletenessRule_SkipsImplicit(t *testing.T) {
 	}
 
 	rule := &check.CompletenessRule{IgnoreDeprecated: true}
-	results := rule.Check("test_instance", ps.Resources["test_instance"], d)
+	results := rule.Check(check.CheckContext{Resource: "test_instance", Schema: ps.Resources["test_instance"], Doc: d})
 
 	// Should NOT report 'id' as missing
 	for _, r := range results {
