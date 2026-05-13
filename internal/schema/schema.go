@@ -7,10 +7,35 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 
 	tfjson "github.com/hashicorp/terraform-json"
 )
+
+// Schema-kind identifiers used to select the right target map on
+// ProviderSchema. They match the schema_kind values declared in
+// internal/config/defaults.hcl.
+const (
+	KindResource     = "resource"
+	KindDataSource   = "data_source"
+	KindEphemeral    = "ephemeral"
+	KindListResource = "list_resource"
+	KindAction       = "action"
+	KindFunction     = "function"
+	KindNone         = "none" // content-only categories (guides, index)
+)
+
+// BlockKinds are the schema kinds whose targets carry a SchemaBlock and can
+// therefore be represented as *ResourceSchema. KindFunction is intentionally
+// excluded — functions have signatures, not blocks.
+var BlockKinds = []string{
+	KindResource,
+	KindDataSource,
+	KindEphemeral,
+	KindListResource,
+	KindAction,
+}
 
 // Attribute represents a single schema attribute with its properties.
 type Attribute struct {
@@ -29,19 +54,88 @@ type Block struct {
 	ChildBlocks []string // names of immediate child blocks
 }
 
-// ResourceSchema holds the flattened block map for a single resource.
+// ResourceSchema holds the flattened block map for a single block-based
+// target (resource, data source, ephemeral, list resource, or action).
 type ResourceSchema struct {
 	Name   string
 	Blocks map[string]*Block // keyed by dot-path (e.g., "", "rule", "rule.action")
 }
 
-// ProviderSchema holds all resource and data source schemas.
-type ProviderSchema struct {
-	Resources   map[string]*ResourceSchema
-	DataSources map[string]*ResourceSchema
+// FunctionSchema holds the minimal representation of a provider function.
+// Full signature data (return type, variadic parameters) is captured on
+// demand; we record only what rules consume today — the function's
+// positional parameter names and descriptions. Expand when a function-aware
+// rule needs more.
+type FunctionSchema struct {
+	Name              string
+	Description       string
+	ParameterNames    []string
+	VariadicParameter string // empty when none
 }
 
-// LoadFile reads a terraform providers schema -json file and returns the parsed schemas.
+// ProviderSchema holds every target the provider exposes, grouped by
+// schema kind. Kinds with no entries in the provider have empty (but
+// non-nil) maps so callers can iterate safely.
+type ProviderSchema struct {
+	Resources     map[string]*ResourceSchema
+	DataSources   map[string]*ResourceSchema
+	Ephemerals    map[string]*ResourceSchema
+	ListResources map[string]*ResourceSchema
+	Actions       map[string]*ResourceSchema
+	Functions     map[string]*FunctionSchema
+}
+
+// TargetNames returns the sorted set of target names for the given schema
+// kind. Unknown kinds (including KindNone) yield an empty slice. Output is
+// sorted so test assertions and log output are stable.
+func (ps *ProviderSchema) TargetNames(kind string) []string {
+	switch kind {
+	case KindResource:
+		return sortedKeys(ps.Resources)
+	case KindDataSource:
+		return sortedKeys(ps.DataSources)
+	case KindEphemeral:
+		return sortedKeys(ps.Ephemerals)
+	case KindListResource:
+		return sortedKeys(ps.ListResources)
+	case KindAction:
+		return sortedKeys(ps.Actions)
+	case KindFunction:
+		return sortedFuncKeys(ps.Functions)
+	}
+	return nil
+}
+
+// ResourceSchemaFor returns the flattened block schema for a named target
+// of a block-kind category, or nil when: the kind is unknown, the kind is
+// KindFunction or KindNone (no block schema to return), or the target name
+// does not exist in that kind.
+func (ps *ProviderSchema) ResourceSchemaFor(kind, name string) *ResourceSchema {
+	var m map[string]*ResourceSchema
+	switch kind {
+	case KindResource:
+		m = ps.Resources
+	case KindDataSource:
+		m = ps.DataSources
+	case KindEphemeral:
+		m = ps.Ephemerals
+	case KindListResource:
+		m = ps.ListResources
+	case KindAction:
+		m = ps.Actions
+	default:
+		return nil
+	}
+	return m[name]
+}
+
+// Function returns the function with the given name, or nil when absent.
+func (ps *ProviderSchema) Function(name string) *FunctionSchema {
+	return ps.Functions[name]
+}
+
+// LoadFile reads a `terraform providers schema -json` file and returns the
+// parsed schemas for every target category Terraform currently exposes.
 func LoadFile(path string, providerSource string) (*ProviderSchema, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -59,17 +153,13 @@ func LoadFile(path string, providerSource string) (*ProviderSchema, error) {
 	}
 
 	result := &ProviderSchema{
-		Resources:   make(map[string]*ResourceSchema, len(provider.ResourceSchemas)),
-		DataSources: make(map[string]*ResourceSchema, len(provider.DataSourceSchemas)),
+		Resources:     flattenBlockSchemas(provider.ResourceSchemas),
+		DataSources:   flattenBlockSchemas(provider.DataSourceSchemas),
+		Ephemerals:    flattenBlockSchemas(provider.EphemeralResourceSchemas),
+		ListResources: flattenBlockSchemas(provider.ListResourceSchemas),
+		Actions:       flattenActionSchemas(provider.ActionSchemas),
+		Functions:     flattenFunctions(provider.Functions),
 	}
-
-	for name, s := range provider.ResourceSchemas {
-		result.Resources[name] = flattenSchema(name, s)
-	}
-	for name, s := range provider.DataSourceSchemas {
-		result.DataSources[name] = flattenSchema(name, s)
-	}
-
 	return result, nil
 }
 
@@ -89,12 +179,65 @@ func findProvider(ps *tfjson.ProviderSchemas, source string) *tfjson.ProviderSch
 	return nil
 }
 
+// flattenBlockSchemas processes any map of *tfjson.Schema (resources, data
+// sources, ephemerals, list resources) through a single path. Returns an
+// empty map when the provider has none of this kind.
+func flattenBlockSchemas(in map[string]*tfjson.Schema) map[string]*ResourceSchema {
+	out := make(map[string]*ResourceSchema, len(in))
+	for name, s := range in {
+		out[name] = flattenSchema(name, s)
+	}
+	return out
+}
+
+// flattenActionSchemas adapts tfjson's ActionSchema (which wraps a
+// SchemaBlock without version) into the common ResourceSchema shape. Actions
+// live in their own tfjson type but are structurally block-based, so it
+// makes sense for rules to treat them uniformly.
+func flattenActionSchemas(in map[string]*tfjson.ActionSchema) map[string]*ResourceSchema {
+	out := make(map[string]*ResourceSchema, len(in))
+	for name, a := range in {
+		rs := &ResourceSchema{
+			Name:   name,
+			Blocks: make(map[string]*Block),
+		}
+		if a != nil && a.Block != nil {
+			flattenBlock(rs, "", a.Block)
+		}
+		out[name] = rs
+	}
+	return out
+}
+
+// flattenFunctions produces the minimal FunctionSchema records. Full
+// signature info is recoverable from the tfjson source if a future rule
+// needs it; this slice just captures parameter names for argument-order
+// style checks.
+func flattenFunctions(in map[string]*tfjson.FunctionSignature) map[string]*FunctionSchema {
+	out := make(map[string]*FunctionSchema, len(in))
+	for name, sig := range in {
+		fs := &FunctionSchema{Name: name}
+		if sig != nil {
+			fs.Description = sig.Description
+			fs.ParameterNames = make([]string, 0, len(sig.Parameters))
+			for _, p := range sig.Parameters {
+				fs.ParameterNames = append(fs.ParameterNames, p.Name)
+			}
+			if sig.VariadicParameter != nil {
+				fs.VariadicParameter = sig.VariadicParameter.Name
+			}
+		}
+		out[name] = fs
+	}
+	return out
+}
+
 func flattenSchema(name string, s *tfjson.Schema) *ResourceSchema {
 	rs := &ResourceSchema{
 		Name:   name,
 		Blocks: make(map[string]*Block),
 	}
-	if s.Block != nil {
+	if s != nil && s.Block != nil {
 		flattenBlock(rs, "", s.Block)
 	}
 	return rs
@@ -132,4 +275,22 @@ func flattenBlock(rs *ResourceSchema, path string, block *tfjson.SchemaBlock) {
 			flattenBlock(rs, childPath, childBlock.Block)
 		}
 	}
+}
+
+func sortedKeys(m map[string]*ResourceSchema) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+	return keys
+}
+
+func sortedFuncKeys(m map[string]*FunctionSchema) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+	return keys
 }
