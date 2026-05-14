@@ -13,7 +13,6 @@
 type "resource" {
   schema_kind = "resource"
   website_paths = [
-    "docs/resources/{name}.md",
     "website/docs/r/{name}.html.markdown",
   ]
 
@@ -44,7 +43,6 @@ type "resource" {
 type "data_source" {
   schema_kind = "data_source"
   website_paths = [
-    "docs/data-sources/{name}.md",
     "website/docs/d/{name}.html.markdown",
   ]
 
@@ -75,7 +73,6 @@ type "data_source" {
 type "ephemeral" {
   schema_kind = "ephemeral"
   website_paths = [
-    "docs/ephemeral-resources/{name}.md",
     "website/docs/ephemeral-resources/{name}.html.markdown",
   ]
 
@@ -106,7 +103,6 @@ type "ephemeral" {
 type "function" {
   schema_kind = "function"
   website_paths = [
-    "docs/functions/{name}.md",
     "website/docs/functions/{name}.html.markdown",
   ]
 
@@ -133,7 +129,6 @@ type "function" {
 type "list_resource" {
   schema_kind = "list_resource"
   website_paths = [
-    "docs/list-resources/{name}.md",
     "website/docs/list-resources/{name}.html.markdown",
   ]
 
@@ -160,7 +155,6 @@ type "list_resource" {
 type "action" {
   schema_kind = "action"
   website_paths = [
-    "docs/actions/{name}.md",
     "website/docs/actions/{name}.html.markdown",
   ]
 
@@ -187,7 +181,6 @@ type "action" {
 type "guide" {
   schema_kind = "none"
   website_paths = [
-    "docs/guides/{name}.md",
     "website/docs/guides/{name}.html.markdown",
   ]
 
@@ -200,7 +193,6 @@ type "guide" {
 type "index" {
   schema_kind = "none"
   website_paths = [
-    "docs/index.md",
     "website/docs/index.html.markdown",
   ]
 
