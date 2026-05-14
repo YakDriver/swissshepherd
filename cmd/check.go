@@ -212,6 +212,11 @@ func runCheck(cmd *cobra.Command, args []string) error {
 			RequireIdentitySection: cfg.CheckBool("import_section", "require_identity_section", true),
 		})
 	}
+	if cfg.IsCheckEnabled("example_section") {
+		rules = append(rules, &check.ExampleSectionRule{
+			AllowedLanguages: cfg.GetCheck("example_section").AllowedLanguages,
+		})
+	}
 
 	preferred := preferredHeadingTemplates(cfg)
 	if cfg.IsCheckEnabled("heading_style") && len(preferred) > 0 {
@@ -383,6 +388,7 @@ func logEnabledChecks(logger *slog.Logger, cfg *config.Config, rules []check.Rul
 	// Log disabled checks
 	allChecks := []string{"completeness", "ordering", "description_style", "computed_attribute",
 		"title_section", "heading_style", "section_presence", "timeouts_section", "import_section",
+		"example_section",
 		"format_style", "frontmatter"}
 	for _, name := range allChecks {
 		if !cfg.IsCheckEnabled(name) {
