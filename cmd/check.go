@@ -222,6 +222,11 @@ func runCheck(cmd *cobra.Command, args []string) error {
 		PreferredHeadingTemplates: preferred,
 	}
 
+	// Verbose: log enabled checks and their scoping
+	if verbose {
+		logEnabledChecks(logger, cfg, rules, fileRules)
+	}
+
 	// Dispatch: exactly one of (--target) / (--prefix) / (--type) / none.
 	// --target selects a single named target; when --type is set it
 	// disambiguates same-name targets across types. --prefix scopes by name
@@ -324,4 +329,58 @@ func frontmatterRule(cfg *config.Config) *check.FrontmatterRule {
 func fileExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
+}
+
+func logEnabledChecks(logger *slog.Logger, cfg *config.Config, rules []check.Rule, fileRules []check.FileRule) {
+	logger.Info("enabled checks", "schema_rules", len(rules), "file_rules", len(fileRules))
+
+	for _, r := range rules {
+		cc := cfg.GetCheck(r.Name())
+		attrs := []any{"rule", r.Name()}
+		if len(cc.Types) > 0 {
+			attrs = append(attrs, "types", cc.Types)
+		}
+		if len(cc.Prefixes) > 0 {
+			attrs = append(attrs, "prefixes", fmt.Sprintf("%d entries", len(cc.Prefixes)))
+		}
+		if len(cc.Targets) > 0 {
+			attrs = append(attrs, "targets", fmt.Sprintf("%d entries", len(cc.Targets)))
+		}
+		if len(cc.IgnoredTargets) > 0 {
+			attrs = append(attrs, "ignored", fmt.Sprintf("%d entries", len(cc.IgnoredTargets)))
+		}
+		logger.Info("  check", attrs...)
+	}
+	for _, r := range fileRules {
+		cc := cfg.GetCheck(r.Name())
+		attrs := []any{"rule", r.Name()}
+		if len(cc.Types) > 0 {
+			attrs = append(attrs, "types", cc.Types)
+		}
+		if len(cc.Prefixes) > 0 {
+			attrs = append(attrs, "prefixes", fmt.Sprintf("%d entries", len(cc.Prefixes)))
+		}
+		logger.Info("  check", attrs...)
+	}
+
+	// Log disabled checks
+	allChecks := []string{"completeness", "ordering", "description_style", "computed_attribute",
+		"title_section", "heading_style", "section_presence", "timeouts_section", "import_section",
+		"format_style", "frontmatter"}
+	for _, name := range allChecks {
+		if !cfg.IsCheckEnabled(name) {
+			logger.Info("  check (disabled)", "rule", name)
+		}
+	}
+
+	// Log ignore lists
+	if len(cfg.IgnoreFileMissing) > 0 {
+		logger.Info("ignore_file_missing", "count", len(cfg.IgnoreFileMissing))
+	}
+	if len(cfg.IgnoreContentsCheck) > 0 {
+		logger.Info("ignore_contents_check", "entries", cfg.IgnoreContentsCheck)
+	}
+	if len(cfg.FileAliases) > 0 {
+		logger.Info("file_aliases", "count", len(cfg.FileAliases))
+	}
 }
