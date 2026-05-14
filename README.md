@@ -84,11 +84,27 @@ swissshepherd --provider-dir . --provider-source registry.terraform.io/hashicorp
 # With pre-generated schema (skips build)
 swissshepherd --schema-json schema.json --provider-source registry.terraform.io/hashicorp/aws
 
+# Regenerate cached schema (when provider code changes)
+swissshepherd --refresh-schema
+
 # JSON output
 swissshepherd --target aws_vpc --json
 ```
 
 CLI flags override config file values.
+
+### Schema caching
+
+For large providers (e.g. AWS), building the schema takes minutes. Set `schema_json` to a relative path in your config to cache it:
+
+```hcl
+provider_dir    = "."
+schema_json     = "terraform-providers-schema/schema.json"
+```
+
+On first run, swissshepherd builds the provider and writes the schema to that path. Subsequent runs reuse the cached file instantly. Add the directory to `.gitignore`.
+
+When the provider code changes, regenerate with `--refresh-schema` or simply delete the cached file.
 
 ## Configuration
 
@@ -96,10 +112,12 @@ CLI flags override config file values.
 # .swissshepherd.hcl
 
 provider_source = "registry.terraform.io/hashicorp/aws"
-provider_dir    = "."           # builds provider + generates schema automatically
+provider_dir    = "."
 
-# Or use a pre-generated schema (skips build):
-# schema_json = "path/to/schema.json"
+# Schema caching: relative paths resolve against provider_dir.
+# If the file exists, it's used directly. If missing (or --refresh-schema),
+# the provider is built and the schema is generated and cached here.
+schema_json = "terraform-providers-schema/schema.json"
 
 # Suppress "doc file not found" warnings for schema aliases that have no doc.
 # ignore_file_missing = ["aws_alb", "aws_alb_listener"]

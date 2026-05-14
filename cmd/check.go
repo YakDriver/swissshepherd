@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 
 	"github.com/YakDriver/swissshepherd/internal/check"
 	"github.com/YakDriver/swissshepherd/internal/config"
@@ -27,6 +28,7 @@ var (
 	prefix         string
 	outputJSON     bool
 	verbose        bool
+	refreshSchema  bool
 )
 
 func Execute() error {
@@ -64,6 +66,7 @@ func init() {
 		fs.Flags().StringVar(&targetType, "type", "", "target type for --target or --prefix (e.g., resource, data_source)")
 		fs.Flags().StringVar(&prefix, "prefix", "", "check all targets whose name begins with this prefix (e.g., aws_dms_)")
 		fs.Flags().BoolVar(&outputJSON, "json", false, "output results as JSON")
+		fs.Flags().BoolVar(&refreshSchema, "refresh-schema", false, "regenerate cached schema even if schema_json file exists")
 	}
 }
 
@@ -85,8 +88,32 @@ func runCheck(cmd *cobra.Command, args []string) error {
 		cfg.ProviderDir = providerDir
 	}
 
-	// Auto-generate schema from provider directory
-	if cfg.ProviderDir != "" && cfg.SchemaJSON == "" {
+	// Schema resolution:
+	// 1. If schema_json is set and file exists (and no --refresh-schema): use it
+	// 2. If schema_json is set but missing (or --refresh-schema) and provider_dir is set: generate and cache
+	// 3. If no schema_json and provider_dir is set: generate to temp dir, clean up after
+	if cfg.SchemaJSON != "" && cfg.ProviderDir != "" {
+		// Resolve relative to provider_dir
+		schemaPath := cfg.SchemaJSON
+		if !filepath.IsAbs(schemaPath) {
+			schemaPath = filepath.Join(cfg.ProviderDir, schemaPath)
+		}
+		if refreshSchema || !fileExists(schemaPath) {
+			if cfg.ProviderSource == "" {
+				return fmt.Errorf("provider-source is required when generating schema")
+			}
+			fmt.Fprintf(os.Stderr, "Building schema (this may take a few minutes)...\n")
+			fmt.Fprintf(os.Stderr, "Subsequent runs will use the cached schema at %s\n", schemaPath)
+			fmt.Fprintf(os.Stderr, "Use --refresh-schema to regenerate after provider changes.\n")
+			if err := os.MkdirAll(filepath.Dir(schemaPath), 0o755); err != nil {
+				return fmt.Errorf("creating schema directory: %w", err)
+			}
+			if err := provider.GenerateSchemaTo(cfg.ProviderDir, cfg.ProviderSource, schemaPath); err != nil {
+				return fmt.Errorf("generating schema: %w", err)
+			}
+		}
+		cfg.SchemaJSON = schemaPath
+	} else if cfg.ProviderDir != "" && cfg.SchemaJSON == "" {
 		if cfg.ProviderSource == "" {
 			return fmt.Errorf("provider-source is required when using provider_dir")
 		}
@@ -292,4 +319,9 @@ func frontmatterRule(cfg *config.Config) *check.FrontmatterRule {
 		AllowedSubcategories:         cc.AllowedSubcategories,
 		AllowEmptySubcategoryTargets: cc.AllowEmptySubcategoryTargets,
 	}
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
