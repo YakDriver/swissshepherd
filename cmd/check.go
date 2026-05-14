@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 
 	"github.com/YakDriver/swissshepherd/internal/check"
 	"github.com/YakDriver/swissshepherd/internal/config"
@@ -31,6 +32,21 @@ var (
 	refreshSchema  bool
 )
 
+func version() string {
+	if info, ok := debug.ReadBuildInfo(); ok {
+		v := info.Main.Version
+		for _, s := range info.Settings {
+			if s.Key == "vcs.revision" && len(s.Value) >= 7 {
+				v += " (" + s.Value[:7] + ")"
+			}
+		}
+		if v != "" {
+			return v
+		}
+	}
+	return "dev"
+}
+
 func Execute() error {
 	return rootCmd.Execute()
 }
@@ -38,6 +54,7 @@ func Execute() error {
 var rootCmd = &cobra.Command{
 	Use:          "swissshepherd",
 	Short:        "Terraform provider documentation checker",
+	Version:      version(),
 	SilenceUsage: true,
 	// Default to check command when no subcommand is given
 	RunE: runCheck,
