@@ -76,20 +76,71 @@ func DefaultHeadingTemplates() HeadingTemplates {
 
 // Match tries each template against a heading and returns the extracted block name, or "".
 func (t HeadingTemplates) Match(heading string) string {
+	names := t.MatchAll(heading)
+	if len(names) > 0 {
+		return names[0]
+	}
+	return ""
+}
+
+// MatchAll returns all block names from a heading. Combined headings like
+// "`publish_auth_mode` and `subscribe_auth_mode`" return both names.
+func (t HeadingTemplates) MatchAll(heading string) []string {
 	h := strings.TrimSpace(heading)
 
 	// Skip example/usage headings
 	lower := strings.ToLower(h)
 	if strings.Contains(lower, "example") || strings.Contains(lower, "usage") {
-		return ""
+		return nil
+	}
+
+	// Try combined "X and Y" pattern first.
+	if parts := splitCombinedHeading(h); len(parts) > 1 {
+		var names []string
+		for _, part := range parts {
+			for _, tmpl := range t {
+				if name := matchTemplate(tmpl, part); name != "" {
+					names = append(names, name)
+					break
+				}
+			}
+		}
+		if len(names) == len(parts) {
+			return names
+		}
 	}
 
 	for _, tmpl := range t {
 		if name := matchTemplate(tmpl, h); name != "" {
-			return name
+			return []string{name}
 		}
 	}
-	return ""
+	return nil
+}
+
+// splitCombinedHeading splits headings like "X and Y" or "X, Y, and Z" into parts.
+func splitCombinedHeading(heading string) []string {
+	if !strings.Contains(heading, " and ") {
+		return nil
+	}
+	var result []string
+	for p := range strings.SplitSeq(heading, " and ") {
+		p = strings.TrimSpace(p)
+		if strings.Contains(p, ", ") || strings.HasSuffix(p, ",") {
+			for sub := range strings.SplitSeq(p, ", ") {
+				sub = strings.TrimRight(strings.TrimSpace(sub), ",")
+				if sub != "" {
+					result = append(result, sub)
+				}
+			}
+		} else if p != "" {
+			result = append(result, p)
+		}
+	}
+	if len(result) < 2 {
+		return nil
+	}
+	return result
 }
 
 // matchTemplate tries to match a single template against a heading.
@@ -264,6 +315,7 @@ func ParseWithTemplates(source []byte, name string, templates HeadingTemplates) 
 
 func extractBlocks(tree ast.Node, source []byte, doc *Document, templates HeadingTemplates) {
 	var currentBlockName string
+	var currentBlockAliases []string
 	var currentSection *Section
 	var inArguments, inAttributes bool
 
@@ -319,10 +371,12 @@ func extractBlocks(tree ast.Node, source []byte, doc *Document, templates Headin
 				switch {
 				case inArguments:
 					currentBlockName = ""
+					currentBlockAliases = nil
 					ensureBlock(doc.ArgumentBlocks, "", headingText)
 					assignSection(&doc.Sections.Arguments, n, headingText)
 				case inAttributes:
 					currentBlockName = ""
+					currentBlockAliases = nil
 					ensureBlock(doc.AttributeBlocks, "", headingText)
 					assignSection(&doc.Sections.Attributes, n, headingText)
 				case strings.HasPrefix(headingText, "Example"):
@@ -342,14 +396,17 @@ func extractBlocks(tree ast.Node, source []byte, doc *Document, templates Headin
 			}
 
 			if n.Level >= 3 && (inArguments || inAttributes) {
-				blockName := templates.Match(headingText)
-				if blockName != "" {
-					currentBlockName = blockName
-					if inArguments {
-						ensureBlock(doc.ArgumentBlocks, blockName, headingText)
-					} else {
-						ensureBlock(doc.AttributeBlocks, blockName, headingText)
+				blockNames := templates.MatchAll(headingText)
+				if len(blockNames) > 0 {
+					currentBlockName = blockNames[0]
+					for _, bn := range blockNames {
+						if inArguments {
+							ensureBlock(doc.ArgumentBlocks, bn, headingText)
+						} else {
+							ensureBlock(doc.AttributeBlocks, bn, headingText)
+						}
 					}
+					currentBlockAliases = blockNames[1:]
 				}
 				if currentSection != nil {
 					currentSection.ChildHeadings = append(currentSection.ChildHeadings, ChildHeading{Level: n.Level, Text: headingText})
@@ -414,6 +471,12 @@ func extractBlocks(tree ast.Node, source []byte, doc *Document, templates Headin
 						// Flag attributes with malformed separator (e.g. `mode`- instead of `mode` -).
 						if hasMalformedSeparator(li, source, attr.Name) {
 							block.MalformedAttributes = append(block.MalformedAttributes, MalformedAttr{Name: attr.Name, Line: line})
+						}
+						// Mirror to alias blocks (combined headings).
+						for _, alias := range currentBlockAliases {
+							if ab := target[alias]; ab != nil {
+								ab.Attributes = append(ab.Attributes, attr)
+							}
 						}
 					} else if name := malformedAttrName(li, source); name != "" {
 						block.MalformedAttributes = append(block.MalformedAttributes, MalformedAttr{Name: name, Line: line})
