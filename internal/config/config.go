@@ -129,6 +129,9 @@ type CheckConfig struct {
 	NoCodeBlocks       *bool `hcl:"no_code_blocks,optional"`
 	SingleLineAttrs    *bool `hcl:"single_line_attrs,optional"`
 	UninterruptedLists *bool `hcl:"uninterrupted_lists,optional"`
+
+	// ImportSection rule options.
+	RequireIdentitySection *bool `hcl:"require_identity_section,optional"`
 }
 
 // AppliesTo reports whether this check's path-scoping admits the given
@@ -254,6 +257,23 @@ func (c *Config) IsCheckEnabled(name string) bool {
 // the given resource name (deprecated stubs, etc.).
 func (c *Config) ShouldIgnoreContents(resource string) bool {
 	return slices.Contains(c.IgnoreContentsCheck, resource)
+}
+
+// CheckBool returns a named bool option from a check block, or the given
+// default when the check block doesn't exist or the field is nil.
+func (c *Config) CheckBool(checkName, field string, defaultVal bool) bool {
+	for _, ch := range c.Checks {
+		if ch.Name != checkName {
+			continue
+		}
+		switch field {
+		case "require_identity_section":
+			if ch.RequireIdentitySection != nil {
+				return *ch.RequireIdentitySection
+			}
+		}
+	}
+	return defaultVal
 }
 
 // ProviderName extracts the short provider name from the source.

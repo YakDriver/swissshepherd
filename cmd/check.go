@@ -163,6 +163,11 @@ func runCheck(cmd *cobra.Command, args []string) error {
 	if cfg.IsCheckEnabled("timeouts_section") {
 		rules = append(rules, &check.TimeoutsSectionRule{})
 	}
+	if cfg.IsCheckEnabled("import_section") {
+		rules = append(rules, &check.ImportSectionRule{
+			RequireIdentitySection: cfg.CheckBool("import_section", "require_identity_section", true),
+		})
+	}
 
 	preferred := preferredHeadingTemplates(cfg)
 	if cfg.IsCheckEnabled("heading_style") && len(preferred) > 0 {

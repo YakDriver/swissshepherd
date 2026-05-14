@@ -261,7 +261,11 @@ type Document struct {
 	ArgumentBlocks  map[string]*DocBlock
 	AttributeBlocks map[string]*DocBlock
 	Sections        *Sections
+	source          []byte
 }
+
+// Source returns the raw markdown source bytes.
+func (d *Document) Source() []byte { return d.source }
 
 // Blocks returns a merged view of argument + attribute blocks.
 func (d *Document) Blocks() map[string]*DocBlock {
@@ -307,6 +311,7 @@ func ParseWithTemplates(source []byte, name string, templates HeadingTemplates) 
 		ArgumentBlocks:  make(map[string]*DocBlock),
 		AttributeBlocks: make(map[string]*DocBlock),
 		Sections:        &Sections{},
+		source:          source,
 	}
 
 	extractBlocks(tree, source, doc, templates)

@@ -77,12 +77,26 @@ type FunctionSchema struct {
 // schema kind. Kinds with no entries in the provider have empty (but
 // non-nil) maps so callers can iterate safely.
 type ProviderSchema struct {
-	Resources     map[string]*ResourceSchema
-	DataSources   map[string]*ResourceSchema
-	Ephemerals    map[string]*ResourceSchema
-	ListResources map[string]*ResourceSchema
-	Actions       map[string]*ResourceSchema
-	Functions     map[string]*FunctionSchema
+	Resources       map[string]*ResourceSchema
+	DataSources     map[string]*ResourceSchema
+	Ephemerals      map[string]*ResourceSchema
+	ListResources   map[string]*ResourceSchema
+	Actions         map[string]*ResourceSchema
+	Functions       map[string]*FunctionSchema
+	IdentitySchemas map[string]*IdentitySchema
+}
+
+// IdentityAttribute describes a single attribute in a resource identity schema.
+type IdentityAttribute struct {
+	Name     string
+	Type     string
+	Required bool // required_for_import
+}
+
+// IdentitySchema holds the identity attributes for a resource that supports
+// import-by-identity (Terraform v1.12+).
+type IdentitySchema struct {
+	Attributes []IdentityAttribute
 }
 
 // TargetNames returns the sorted set of target names for the given schema
@@ -153,12 +167,13 @@ func LoadFile(path string, providerSource string) (*ProviderSchema, error) {
 	}
 
 	result := &ProviderSchema{
-		Resources:     flattenBlockSchemas(provider.ResourceSchemas),
-		DataSources:   flattenBlockSchemas(provider.DataSourceSchemas),
-		Ephemerals:    flattenBlockSchemas(provider.EphemeralResourceSchemas),
-		ListResources: flattenBlockSchemas(provider.ListResourceSchemas),
-		Actions:       flattenActionSchemas(provider.ActionSchemas),
-		Functions:     flattenFunctions(provider.Functions),
+		Resources:       flattenBlockSchemas(provider.ResourceSchemas),
+		DataSources:     flattenBlockSchemas(provider.DataSourceSchemas),
+		Ephemerals:      flattenBlockSchemas(provider.EphemeralResourceSchemas),
+		ListResources:   flattenBlockSchemas(provider.ListResourceSchemas),
+		Actions:         flattenActionSchemas(provider.ActionSchemas),
+		Functions:       flattenFunctions(provider.Functions),
+		IdentitySchemas: flattenIdentitySchemas(provider.ResourceIdentitySchemas),
 	}
 	return result, nil
 }
@@ -228,6 +243,28 @@ func flattenFunctions(in map[string]*tfjson.FunctionSignature) map[string]*Funct
 			}
 		}
 		out[name] = fs
+	}
+	return out
+}
+
+func flattenIdentitySchemas(in map[string]*tfjson.IdentitySchema) map[string]*IdentitySchema {
+	out := make(map[string]*IdentitySchema, len(in))
+	for name, is := range in {
+		if is == nil {
+			continue
+		}
+		s := &IdentitySchema{}
+		for attrName, attr := range is.Attributes {
+			s.Attributes = append(s.Attributes, IdentityAttribute{
+				Name:     attrName,
+				Type:     attr.IdentityType.FriendlyName(),
+				Required: attr.RequiredForImport,
+			})
+		}
+		slices.SortFunc(s.Attributes, func(a, b IdentityAttribute) int {
+			return strings.Compare(a.Name, b.Name)
+		})
+		out[name] = s
 	}
 	return out
 }

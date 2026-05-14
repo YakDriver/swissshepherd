@@ -187,7 +187,7 @@ func (r *Runner) runTarget(t *config.Type, name string, logOnError bool) ([]Resu
 
 	var results []Result
 	if !r.Config.ShouldIgnoreContents(name) {
-		ctx := CheckContext{Resource: name, Type: t, Schema: rs, Doc: d}
+		ctx := CheckContext{Resource: name, Type: t, Schema: rs, IdentitySchema: r.Schema.IdentitySchemas[name], Doc: d}
 		for _, rule := range applicableRules {
 			results = append(results, rule.Check(ctx)...)
 		}

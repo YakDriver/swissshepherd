@@ -39,10 +39,11 @@ type Result struct {
 
 // CheckContext carries all inputs a Rule needs to produce findings.
 type CheckContext struct {
-	Resource string
-	Type     *config.Type
-	Schema   *schema.ResourceSchema
-	Doc      *doc.Document
+	Resource       string
+	Type           *config.Type
+	Schema         *schema.ResourceSchema
+	IdentitySchema *schema.IdentitySchema
+	Doc            *doc.Document
 }
 
 // FileCheckContext carries all inputs a FileRule needs to produce findings.
