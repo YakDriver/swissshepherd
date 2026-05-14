@@ -186,9 +186,11 @@ func (r *Runner) runTarget(t *config.Type, name string, logOnError bool) ([]Resu
 	rs := r.Schema.ResourceSchemaFor(t.SchemaKind, name)
 
 	var results []Result
-	ctx := CheckContext{Resource: name, Type: t, Schema: rs, Doc: d}
-	for _, rule := range applicableRules {
-		results = append(results, rule.Check(ctx)...)
+	if !r.Config.ShouldIgnoreContents(name) {
+		ctx := CheckContext{Resource: name, Type: t, Schema: rs, Doc: d}
+		for _, rule := range applicableRules {
+			results = append(results, rule.Check(ctx)...)
+		}
 	}
 	fctx := FileCheckContext{Resource: name, Type: t, Path: docPath, Content: content}
 	for _, rule := range applicableFileRules {

@@ -475,44 +475,31 @@ func TestRunner_BlockTargetGetsSchemaPopulated(t *testing.T) {
 
 // TestRunner_ResolvesFirstExistingTemplate verifies the "try each
 // website_paths entry in order" contract. The resource type's defaults list
-// registry style first, legacy style second. Dropping the registry file in
-// place and omitting the legacy one should still work; likewise the reverse.
+// the legacy style path. Dropping the doc file in place should work.
 func TestRunner_ResolvesFirstExistingTemplate(t *testing.T) {
 	t.Parallel()
 
-	tests := map[string]struct {
-		relPath string
-	}{
-		"registry style wins when present": {"docs/resources/instance.md"},
-		"legacy style picked up too":       {"website/docs/r/instance.html.markdown"},
+	f := newRunnerFixture(t)
+
+	// Write a doc to the legacy layout and register the schema entry.
+	docPath := filepath.Join(f.root, "website/docs/r/instance.html.markdown")
+	if err := os.MkdirAll(filepath.Dir(docPath), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	body := "---\npage_title: x\n---\n# Resource: test_instance\nBody.\n"
+	if err := os.WriteFile(docPath, []byte(body), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	f.ps.Resources["test_instance"] = &schema.ResourceSchema{
+		Name:   "test_instance",
+		Blocks: map[string]*schema.Block{},
 	}
 
-	for name, tt := range tests {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			f := newRunnerFixture(t)
+	f.runner.RunAll()
 
-			// Write a doc to the chosen layout and register the schema entry.
-			docPath := filepath.Join(f.root, tt.relPath)
-			if err := os.MkdirAll(filepath.Dir(docPath), 0o755); err != nil {
-				t.Fatalf("mkdir: %v", err)
-			}
-			body := "---\npage_title: x\n---\n# Resource: test_instance\nBody.\n"
-			if err := os.WriteFile(docPath, []byte(body), 0o600); err != nil {
-				t.Fatalf("write: %v", err)
-			}
-			f.ps.Resources["test_instance"] = &schema.ResourceSchema{
-				Name:   "test_instance",
-				Blocks: map[string]*schema.Block{},
-			}
-
-			f.runner.RunAll()
-
-			got := f.capture.resources()
-			if !slices.Equal(got, []string{"test_instance"}) {
-				t.Errorf("capture = %v, want [test_instance] (layout %q)", got, tt.relPath)
-			}
-		})
+	got := f.capture.resources()
+	if !slices.Equal(got, []string{"test_instance"}) {
+		t.Errorf("capture = %v, want [test_instance]", got)
 	}
 }
 

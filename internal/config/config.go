@@ -31,6 +31,12 @@ type Config struct {
 	IgnoreFileMissing     []string `hcl:"ignore_file_missing,optional"`
 	IgnoreFileMissingFile string   `hcl:"ignore_file_missing_file,optional"`
 
+	// IgnoreContentsCheck suppresses all schema+doc rule findings for the
+	// listed target names. Useful for deprecated/removed resources whose docs
+	// are intentionally minimal stubs.
+	IgnoreContentsCheck     []string `hcl:"ignore_contents_check,optional"`
+	IgnoreContentsCheckFile string   `hcl:"ignore_contents_check_file,optional"`
+
 	// FileAliases maps a schema target name to the doc target name used for
 	// path resolution. Keys can be plain names (apply to all types) or
 	// type-qualified as "type/name" (e.g. "list_resource/aws_ebs_volume").
@@ -244,6 +250,12 @@ func (c *Config) IsCheckEnabled(name string) bool {
 	return true // enabled by default if not mentioned in config
 }
 
+// ShouldIgnoreContents reports whether schema+doc rules should be skipped for
+// the given resource name (deprecated stubs, etc.).
+func (c *Config) ShouldIgnoreContents(resource string) bool {
+	return slices.Contains(c.IgnoreContentsCheck, resource)
+}
+
 // ProviderName extracts the short provider name from the source.
 func (c *Config) ProviderName() string {
 	parts := strings.Split(c.ProviderSource, "/")
@@ -279,6 +291,14 @@ func (c *Config) resolveFiles() error {
 			return err
 		}
 		c.IgnoreFileMissing = append(c.IgnoreFileMissing, lines...)
+	}
+
+	if c.IgnoreContentsCheckFile != "" {
+		lines, err := readLines(c.IgnoreContentsCheckFile)
+		if err != nil {
+			return err
+		}
+		c.IgnoreContentsCheck = append(c.IgnoreContentsCheck, lines...)
 	}
 
 	return nil
