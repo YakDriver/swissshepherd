@@ -47,22 +47,35 @@ func (r *ExampleSectionRule) Check(ctx CheckContext) []Result {
 		allowed = []string{"terraform", "hcl"}
 	}
 
+	// Check that at least one code block uses an allowed language.
+	// Non-terraform blocks (json, console, etc.) are permitted as
+	// supplementary material.
+	hasAllowed := false
 	for _, cb := range section.FencedCodeBlocks {
 		lang := string(cb.Language(source))
-
-		if lang != "" && !contains(allowed, lang) {
-			add(SeverityError, fmt.Sprintf("example code block language %q should be one of: %s", lang, strings.Join(allowed, ", ")))
+		if lang == "" || slices.Contains(allowed, lang) {
+			hasAllowed = true
 		}
+	}
+	if len(section.FencedCodeBlocks) > 0 && !hasAllowed {
+		add(SeverityError, fmt.Sprintf("example section has no code block with an allowed language (%s)", strings.Join(allowed, ", ")))
+	}
 
-		text := codeBlockText(cb, source)
-		if !strings.Contains(text, ctx.Resource) {
-			add(SeverityWarning, fmt.Sprintf("example code block should contain resource name %q", ctx.Resource))
+	// Check that at least one allowed-language code block contains the resource name.
+	hasResource := false
+	for _, cb := range section.FencedCodeBlocks {
+		lang := string(cb.Language(source))
+		if lang != "" && !slices.Contains(allowed, lang) {
+			continue
 		}
+		if strings.Contains(codeBlockText(cb, source), ctx.Resource) {
+			hasResource = true
+			break
+		}
+	}
+	if len(section.FencedCodeBlocks) > 0 && !hasResource {
+		add(SeverityWarning, fmt.Sprintf("no example code block contains resource name %q", ctx.Resource))
 	}
 
 	return results
-}
-
-func contains(ss []string, s string) bool {
-	return slices.Contains(ss, s)
 }

@@ -28,9 +28,10 @@ func TestExampleSectionRule(t *testing.T) {
 			markdown: "# Resource: aws_thing\n\n## Example Usage\n\n```hcl\nresource \"aws_thing\" \"example\" {}\n```\n",
 		},
 		{
-			name:     "error — wrong language",
-			markdown: "# Resource: aws_thing\n\n## Example Usage\n\n```python\nimport aws_thing\n```\n",
-			wantErrs: 1,
+			name:      "error — only non-allowed language",
+			markdown:  "# Resource: aws_thing\n\n## Example Usage\n\n```python\nimport aws_thing\n```\n",
+			wantErrs:  1,
+			wantWarns: 1,
 		},
 		{
 			name:      "warning — missing resource name",
@@ -38,10 +39,11 @@ func TestExampleSectionRule(t *testing.T) {
 			wantWarns: 1,
 		},
 		{
-			name:     "error — wrong language with custom allowed",
-			markdown: "# Resource: aws_thing\n\n## Example Usage\n\n```terraform\nresource \"aws_thing\" \"example\" {}\n```\n",
-			langs:    []string{"hcl"},
-			wantErrs: 1,
+			name:      "error — wrong language with custom allowed",
+			markdown:  "# Resource: aws_thing\n\n## Example Usage\n\n```terraform\nresource \"aws_thing\" \"example\" {}\n```\n",
+			langs:     []string{"hcl"},
+			wantErrs:  1,
+			wantWarns: 1,
 		},
 		{
 			name:     "no section — no errors",
@@ -55,6 +57,14 @@ func TestExampleSectionRule(t *testing.T) {
 			name:     "error — wrong heading text",
 			markdown: "# Resource: aws_thing\n\n## Examples\n\n```terraform\nresource \"aws_thing\" \"example\" {}\n```\n",
 			wantErrs: 1,
+		},
+		{
+			name:     "valid — supplementary json block alongside terraform",
+			markdown: "# Resource: aws_thing\n\n## Example Usage\n\n```terraform\nresource \"aws_thing\" \"example\" {}\n```\n\n```json\n{\"key\": \"value\"}\n```\n",
+		},
+		{
+			name:     "valid — supplementary console block alongside terraform",
+			markdown: "# Resource: aws_thing\n\n## Example Usage\n\n```terraform\nresource \"aws_thing\" \"example\" {}\n```\n\n```console\n% aws s3 ls\n```\n",
 		},
 	}
 
