@@ -43,6 +43,7 @@ type CheckContext struct {
 	DocName        string // aliased name used in doc file (empty = same as Resource)
 	Type           *config.Type
 	Schema         *schema.ResourceSchema
+	FunctionSchema *schema.FunctionSchema
 	IdentitySchema *schema.IdentitySchema
 	Doc            *doc.Document
 }
