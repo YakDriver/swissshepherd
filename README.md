@@ -214,6 +214,11 @@ check "example_section" {
   enabled = true
   allowed_languages = ["terraform", "hcl"]         # code block languages allowed (default: terraform, hcl)
 }
+
+check "signature_section" {
+  enabled = true
+  # No config — validates function signature code block contains function name and parameters.
+}
 ```
 
 All rules are enabled by default. Add a `check` block with `enabled = false` to disable one.
@@ -237,12 +242,13 @@ check "schema_docs" {
   # Deny list: always excluded, even when allowlists include them.
   ignored_targets      = ["aws_legacy_resource"]
   ignored_targets_file = "website/ignore-ordering.txt"
+  ignored_prefixes     = ["aws_appstream"]
 }
 ```
 
 **Semantics:**
 
-1. `ignored_targets` wins unconditionally — a listed name is never checked.
+1. `ignored_targets` and `ignored_prefixes` win unconditionally — a matching name is never checked.
 2. When `types` is non-empty, the target's type must be in the list.
 3. When either `prefixes` or `targets` is non-empty, the target's name must satisfy at least one (prefix match OR exact match). Both empty means "any name".
 
@@ -349,6 +355,7 @@ If `block_heading_styles` is omitted, a sensible default is used.
 | `timeouts_section` | schema + doc | Documented timeout actions match the schema (bidirectional) |
 | `import_section` | schema + doc | Import section style (no passive voice, no "e.g."), structure (code blocks present, correct types, ordering), and identity-aware validation |
 | `example_section` | schema + doc | Example code blocks use allowed languages and contain the resource name |
+| `signature_section` | schema + doc | Function signature code block present, contains function name and schema parameter names |
 | `frontmatter` | raw file | YAML frontmatter field presence/absence and subcategory allowlist |
 
 Rules fall into two categories: `schema + doc` rules compare the parsed markdown AST against the schema (including type-level requirements); `raw file` rules operate on the file bytes so they can catch whitespace, line-structure, and frontmatter issues the AST normalizes away.
@@ -426,7 +433,7 @@ If `schema_json` is set instead, the build step is skipped entirely.
 - Two rule interfaces: `Rule.Check(resource, schema, doc) []Result` for schema + AST checks, `FileRule.CheckFile(resource, path, content) []Result` for raw-bytes checks (frontmatter, line-level scans). The runner reads each doc file once and feeds the bytes to both kinds
 - Documentation categories (resource, data source, ephemeral, function, list resource, action, guide, index) are defined in `type` blocks — either the embedded defaults or user overrides. Adding a new Terraform category is a config change, not a code change
 - Doc file paths resolve from `type.website_paths` templates; `provider_dir` anchors relative paths when set, otherwise CWD
-- Per-check path scoping (`types`, `prefixes`, `targets`, `ignored_targets`) lets each rule roll out independently across a large provider
+- Per-check path scoping (`types`, `prefixes`, `targets`, `ignored_targets`, `ignored_prefixes`) lets each rule roll out independently across a large provider
 - HCL configuration via [hcl/v2](https://github.com/hashicorp/hcl)
 - YAML frontmatter parsed with [yaml.v3](https://gopkg.in/yaml.v3)
 
