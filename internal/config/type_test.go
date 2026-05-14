@@ -61,7 +61,6 @@ func TestLoad_DefaultResourceShape(t *testing.T) {
 		t.Errorf("TitlePrefix = %q, want %q", r.TitlePrefix, "Resource")
 	}
 	wantPaths := []string{
-		"docs/resources/{name}.md",
 		"website/docs/r/{name}.html.markdown",
 	}
 	if !slices.Equal(r.WebsitePaths, wantPaths) {

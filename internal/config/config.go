@@ -31,6 +31,12 @@ type Config struct {
 	IgnoreFileMissing     []string `hcl:"ignore_file_missing,optional"`
 	IgnoreFileMissingFile string   `hcl:"ignore_file_missing_file,optional"`
 
+	// IgnoreContentsCheck suppresses all schema+doc rule findings for the
+	// listed target names. Useful for deprecated/removed resources whose docs
+	// are intentionally minimal stubs.
+	IgnoreContentsCheck     []string `hcl:"ignore_contents_check,optional"`
+	IgnoreContentsCheckFile string   `hcl:"ignore_contents_check_file,optional"`
+
 	// FileAliases maps a schema target name to the doc target name used for
 	// path resolution. Keys can be plain names (apply to all types) or
 	// type-qualified as "type/name" (e.g. "list_resource/aws_ebs_volume").
@@ -123,6 +129,9 @@ type CheckConfig struct {
 	NoCodeBlocks       *bool `hcl:"no_code_blocks,optional"`
 	SingleLineAttrs    *bool `hcl:"single_line_attrs,optional"`
 	UninterruptedLists *bool `hcl:"uninterrupted_lists,optional"`
+
+	// ImportSection rule options.
+	RequireIdentitySection *bool `hcl:"require_identity_section,optional"`
 }
 
 // AppliesTo reports whether this check's path-scoping admits the given
@@ -244,6 +253,35 @@ func (c *Config) IsCheckEnabled(name string) bool {
 	return true // enabled by default if not mentioned in config
 }
 
+// ShouldIgnoreContents reports whether schema+doc rules should be skipped for
+// the given resource name (deprecated stubs, etc.). Entries can be bare names
+// ("aws_kms_secret") matching any type, or type-qualified ("data_source/aws_kms_secret").
+func (c *Config) ShouldIgnoreContents(resource, typeName string) bool {
+	for _, entry := range c.IgnoreContentsCheck {
+		if entry == resource || entry == typeName+"/"+resource {
+			return true
+		}
+	}
+	return false
+}
+
+// CheckBool returns a named bool option from a check block, or the given
+// default when the check block doesn't exist or the field is nil.
+func (c *Config) CheckBool(checkName, field string, defaultVal bool) bool {
+	for _, ch := range c.Checks {
+		if ch.Name != checkName {
+			continue
+		}
+		switch field {
+		case "require_identity_section":
+			if ch.RequireIdentitySection != nil {
+				return *ch.RequireIdentitySection
+			}
+		}
+	}
+	return defaultVal
+}
+
 // ProviderName extracts the short provider name from the source.
 func (c *Config) ProviderName() string {
 	parts := strings.Split(c.ProviderSource, "/")
@@ -279,6 +317,14 @@ func (c *Config) resolveFiles() error {
 			return err
 		}
 		c.IgnoreFileMissing = append(c.IgnoreFileMissing, lines...)
+	}
+
+	if c.IgnoreContentsCheckFile != "" {
+		lines, err := readLines(c.IgnoreContentsCheckFile)
+		if err != nil {
+			return err
+		}
+		c.IgnoreContentsCheck = append(c.IgnoreContentsCheck, lines...)
 	}
 
 	return nil

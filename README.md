@@ -101,6 +101,21 @@ provider_dir    = "."           # builds provider + generates schema automatical
 # Or use a pre-generated schema (skips build):
 # schema_json = "path/to/schema.json"
 
+# Suppress "doc file not found" warnings for schema aliases that have no doc.
+# ignore_file_missing = ["aws_alb", "aws_alb_listener"]
+# ignore_file_missing_file = "website/ignore-file-missing.txt"
+
+# Suppress all schema+doc rule findings for deprecated/removed resource stubs.
+# File rules (frontmatter, format_style) still run.
+# ignore_contents_check = ["aws_kms_secret", "aws_db_security_group"]
+# ignore_contents_check_file = "website/ignore-contents-check.txt"
+
+# Map schema names to doc names when they differ (doc is still checked).
+# Keys can be "name" (all types) or "type/name" (scoped to one type).
+# file_aliases = {
+#   "list_resource/aws_ebs_volume" = "aws_ec2_ebs_volume"
+# }
+
 check "completeness" {
   enabled = true
 
@@ -167,6 +182,17 @@ check "frontmatter" {
 check "title_section" {
   enabled = true
   # allowed_prefixes = ["Resource", "Data Source", "Ephemeral", "Function", "List Resource", "Action"]
+}
+
+check "section_presence" {
+  enabled = true
+  # No config — reads require_import/require_timeouts/require_signature/require_attributes from the type block.
+  # Timeouts are schema-driven: section required iff schema has a timeouts block.
+}
+
+check "timeouts_section" {
+  enabled = true
+  # No config — validates documented timeout actions match schema bidirectionally.
 }
 ```
 
@@ -303,10 +329,21 @@ If `block_heading_styles` is omitted, a sensible default is used.
 | `computed_attribute` | schema + doc | Computed-only attributes appear in Attribute Reference, not Argument Reference |
 | `heading_style` | schema + doc | Nested block headings match the preferred template (requires `preferred_block_heading_styles`) |
 | `title_section` | schema + doc | Level-1 heading is present, at level 1, begins with one of the allowed `<Kind>: ` prefixes, and contains no code blocks |
+| `section_presence` | schema + doc | Required sections are present; forbidden sections are absent. Schema-driven for timeouts (if-and-only-if), type-level fallback otherwise |
+| `timeouts_section` | schema + doc | Documented timeout actions match the schema (bidirectional) |
 | `format_style` | raw file | No code blocks inside argument/attribute sections, single-line attribute entries, uninterrupted attribute lists |
 | `frontmatter` | raw file | YAML frontmatter field presence/absence and subcategory allowlist |
 
-Two kinds of rule share a config surface. `schema + doc` rules compare the parsed markdown AST against the schema; `raw file` rules operate on the file bytes so they can catch whitespace, line-structure, and frontmatter issues the AST normalizes away.
+Rules fall into two categories: `schema + doc` rules compare the parsed markdown AST against the schema (including type-level requirements); `raw file` rules operate on the file bytes so they can catch whitespace, line-structure, and frontmatter issues the AST normalizes away.
+
+### Output format
+
+Each finding includes the rule name, target, file path (with line number when available), and message:
+
+```
+ERROR  [section_presence] aws_vpn_gateway (website/docs/d/vpn_gateway.html.markdown): section ## Timeouts is not allowed for type "data_source"
+WARN   [completeness] aws_instance (website/docs/r/instance.html.markdown:42): attribute "mode" in block "spec.tls" is documented but missing the " - " separator
+```
 
 ## Frontmatter options
 
