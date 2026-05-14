@@ -194,7 +194,7 @@ func TestIsCheckEnabled_DefaultTrue(t *testing.T) {
 
 	cfg := &config.Config{
 		Checks: []config.CheckConfig{
-			{Name: "computed_attribute", Enabled: false},
+			{Name: "attributes_section", Enabled: false},
 		},
 	}
 
@@ -202,8 +202,8 @@ func TestIsCheckEnabled_DefaultTrue(t *testing.T) {
 		name string
 		want bool
 	}{
-		{"completeness", true},        // not mentioned → enabled
-		{"computed_attribute", false}, // explicitly disabled
+		{"arguments_section", true},   // not mentioned → enabled
+		{"attributes_section", false}, // explicitly disabled
 		{"nonexistent_rule", true},    // future-compat: unknown → enabled
 	}
 	for _, tt := range tests {

@@ -134,7 +134,7 @@ schema_json = "terraform-providers-schema/schema.json"
 #   "list_resource/aws_ebs_volume" = "aws_ec2_ebs_volume"
 # }
 
-check "completeness" {
+check "arguments_section" {
   enabled = true
 
   # Path scoping — limit this check to specific targets (see Path scoping below)
@@ -150,24 +150,21 @@ check "completeness" {
   ]
   preferred_block_heading_styles = ["`{Block}` Block"]
 
-  # Completeness-specific options (all have sensible defaults)
+  # Schema coverage options (all have sensible defaults)
   ignore_deprecated   = true
   implicit_attributes = ["id", "tags_all"]   # never flagged as undocumented
   phantom_allowlist   = ["tags", "tags_all"] # never flagged as phantom
   skip_blocks         = ["timeouts"]         # blocks skipped entirely
 }
 
-check "ordering" {
+check "attributes_section" {
   enabled = true
+  implicit_attributes = ["id", "tags_all"]
 }
 
 check "description_style" {
   enabled = true
   # bad_prefixes = ["A ", "An ", "The ", "Specifies ", "Indicates ", "Describes ", "Defines "]
-}
-
-check "computed_attribute" {
-  enabled = false  # disable this rule
 }
 
 check "heading_style" {
@@ -231,7 +228,7 @@ All rules are enabled by default. Add a `check` block with `enabled = false` to 
 Every `check` block accepts path-scoping fields that limit which targets the rule runs against. This is the primary mechanism for rolling out checks incrementally across a large provider — one service or one type at a time.
 
 ```hcl
-check "ordering" {
+check "arguments_section" {
   enabled = true
 
   # Type axis: only run against these type names (empty = all types)
@@ -297,7 +294,7 @@ Built-in types: `resource`, `data_source`, `ephemeral`, `function`, `list_resour
 
 ## Heading styles
 
-The `block_heading_styles` list in the `completeness` check controls which `###` heading formats are recognized as block documentation. Each entry is a template with placeholders:
+The `block_heading_styles` list in the `arguments_section` check controls which `###` heading formats are recognized as block documentation. Each entry is a template with placeholders:
 
 | Placeholder | Matches | Example heading | Extracted name |
 |-------------|---------|-----------------|----------------|
@@ -351,10 +348,9 @@ If `block_heading_styles` is omitted, a sensible default is used.
 
 | Rule | Kind | Description |
 |------|------|-------------|
-| `completeness` | schema + doc | Every schema attribute is documented; every documented attribute exists in schema |
-| `ordering` | schema + doc | Arguments and attributes are alphabetically ordered within required/optional groups |
+| `arguments_section` | schema + doc | Schema coverage for configurable attributes, alphabetical ordering, computed-only misplacement, phantom detection |
+| `attributes_section` | schema + doc | Schema coverage for computed-only attributes, alphabetical ordering |
 | `description_style` | schema + doc | Descriptions don't start with weak prefixes (`A`, `An`, `The`, `Specifies`, `Indicates`, `Describes`, `Defines`) |
-| `computed_attribute` | schema + doc | Computed-only attributes appear in Attribute Reference, not Argument Reference |
 | `heading_style` | schema + doc | Nested block headings match the preferred template (requires `preferred_block_heading_styles`) |
 | `title_section` | schema + doc | Level-1 heading is present, at level 1, begins with one of the allowed `<Kind>: ` prefixes, and contains no code blocks |
 | `section_presence` | schema + doc | Required sections are present; forbidden sections are absent. Schema-driven for timeouts (if-and-only-if), type-level fallback otherwise |
@@ -373,8 +369,8 @@ Section headings are currently hardcoded. The parser recognizes these level-2 he
 | Section | Expected heading | Used by |
 |---------|-----------------|---------|
 | Example | `Example Usage` | `section_presence`, `example_section` |
-| Arguments | `Argument Reference` | `section_presence`, `completeness` |
-| Attributes | `Attribute Reference` | `section_presence`, `completeness` |
+| Arguments | `Argument Reference` | `section_presence`, `arguments_section` |
+| Attributes | `Attribute Reference` | `section_presence`, `attributes_section` |
 | Timeouts | `Timeouts` | `section_presence`, `timeouts_section` |
 | Import | `Import` | `section_presence`, `import_section` |
 | Signature | `Signature` | `section_presence` |
@@ -387,7 +383,7 @@ Each finding includes the rule name, target, file path (with line number when av
 
 ```
 ERROR  [section_presence] aws_vpn_gateway (website/docs/d/vpn_gateway.html.markdown): section ## Timeouts is not allowed for type "data_source"
-WARN   [completeness] aws_instance (website/docs/r/instance.html.markdown:42): attribute "mode" in block "spec.tls" is documented but missing the " - " separator
+WARN   [arguments_section] aws_instance (website/docs/r/instance.html.markdown:42): attribute "mode" in block "spec.tls" is documented but missing the " - " separator
 ```
 
 ## Frontmatter options

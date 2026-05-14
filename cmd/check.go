@@ -177,24 +177,24 @@ func runCheck(cmd *cobra.Command, args []string) error {
 	var rules []check.Rule
 	var fileRules []check.FileRule
 
-	if cfg.IsCheckEnabled("completeness") {
-		cc := cfg.GetCheck("completeness")
-		rules = append(rules, &check.CompletenessRule{
+	if cfg.IsCheckEnabled("arguments_section") {
+		cc := cfg.GetCheck("arguments_section")
+		rules = append(rules, &check.ArgumentsSectionRule{
 			IgnoreDeprecated:   cc.IgnoreDeprecated == nil || *cc.IgnoreDeprecated,
 			ImplicitAttributes: cc.ImplicitAttributes,
 			PhantomAllowlist:   cc.PhantomAllowlist,
 			SkipBlocks:         cc.SkipBlocks,
 		})
 	}
-	if cfg.IsCheckEnabled("ordering") {
-		rules = append(rules, &check.OrderingRule{})
+	if cfg.IsCheckEnabled("attributes_section") {
+		cc := cfg.GetCheck("attributes_section")
+		rules = append(rules, &check.AttributesSectionRule{
+			ImplicitAttributes: cc.ImplicitAttributes,
+		})
 	}
 	if cfg.IsCheckEnabled("description_style") {
 		cc := cfg.GetCheck("description_style")
 		rules = append(rules, &check.DescriptionStyleRule{BadPrefixes: cc.BadPrefixes})
-	}
-	if cfg.IsCheckEnabled("computed_attribute") {
-		rules = append(rules, &check.ComputedAttributeRule{})
 	}
 	if cfg.IsCheckEnabled("title_section") {
 		rules = append(rules, &check.TitleSectionRule{
@@ -317,7 +317,7 @@ func outputResultsText(results []check.Result) error {
 }
 
 func headingTemplates(cfg *config.Config) doc.HeadingTemplates {
-	checkCfg := cfg.GetCheck("completeness")
+	checkCfg := cfg.GetCheck("arguments_section")
 	if len(checkCfg.BlockHeadingStyles) > 0 {
 		return doc.HeadingTemplates(checkCfg.BlockHeadingStyles)
 	}
@@ -325,7 +325,7 @@ func headingTemplates(cfg *config.Config) doc.HeadingTemplates {
 }
 
 func preferredHeadingTemplates(cfg *config.Config) doc.HeadingTemplates {
-	checkCfg := cfg.GetCheck("completeness")
+	checkCfg := cfg.GetCheck("arguments_section")
 	if len(checkCfg.PreferredBlockHeadingStyles) > 0 {
 		return doc.HeadingTemplates(checkCfg.PreferredBlockHeadingStyles)
 	}
@@ -389,7 +389,7 @@ func logEnabledChecks(logger *slog.Logger, cfg *config.Config, rules []check.Rul
 	}
 
 	// Log disabled checks
-	allChecks := []string{"completeness", "ordering", "description_style", "computed_attribute",
+	allChecks := []string{"arguments_section", "attributes_section", "description_style",
 		"title_section", "heading_style", "section_presence", "timeouts_section", "import_section",
 		"example_section", "signature_section",
 		"format_style", "frontmatter"}

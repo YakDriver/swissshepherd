@@ -12,9 +12,9 @@ import (
 	"github.com/YakDriver/swissshepherd/internal/schema"
 )
 
-// --- CompletenessRule magic-value config tests ---------------------------
+// --- ArgumentsSectionRule magic-value config tests ---------------------------
 
-func TestCompletenessRule_DefaultImplicitAttributesSkipped(t *testing.T) {
+func TestArgumentsSectionRule_DefaultImplicitAttributesSkipped(t *testing.T) {
 	t.Parallel()
 
 	// "id" and "tags_all" are in DefaultImplicitAttributes and must never
@@ -40,7 +40,7 @@ func TestCompletenessRule_DefaultImplicitAttributesSkipped(t *testing.T) {
 This resource exports no additional attributes.
 `), "test_thing")
 
-	rule := &check.CompletenessRule{IgnoreDeprecated: true}
+	rule := &check.ArgumentsSectionRule{IgnoreDeprecated: true}
 	results := rule.Check(check.CheckContext{Resource: "test_thing", Schema: rs, Doc: d})
 
 	for _, r := range results {
@@ -50,7 +50,7 @@ This resource exports no additional attributes.
 	}
 }
 
-func TestCompletenessRule_CustomImplicitAttributes(t *testing.T) {
+func TestArgumentsSectionRule_CustomImplicitAttributes(t *testing.T) {
 	t.Parallel()
 
 	// Override implicit list to include "region" — a provider-injected attr.
@@ -74,7 +74,7 @@ func TestCompletenessRule_CustomImplicitAttributes(t *testing.T) {
 This resource exports no additional attributes.
 `), "test_thing")
 
-	rule := &check.CompletenessRule{
+	rule := &check.ArgumentsSectionRule{
 		IgnoreDeprecated:   true,
 		ImplicitAttributes: []string{"id", "tags_all", "region"},
 	}
@@ -87,7 +87,7 @@ This resource exports no additional attributes.
 	}
 }
 
-func TestCompletenessRule_CustomSkipBlocks(t *testing.T) {
+func TestArgumentsSectionRule_CustomSkipBlocks(t *testing.T) {
 	t.Parallel()
 
 	// Override skip_blocks to also skip "network" — useful for providers
@@ -113,7 +113,7 @@ func TestCompletenessRule_CustomSkipBlocks(t *testing.T) {
 This resource exports no additional attributes.
 `), "test_thing")
 
-	rule := &check.CompletenessRule{
+	rule := &check.ArgumentsSectionRule{
 		IgnoreDeprecated: true,
 		SkipBlocks:       []string{"timeouts", "network"},
 	}
@@ -126,7 +126,7 @@ This resource exports no additional attributes.
 	}
 }
 
-func TestCompletenessRule_DefaultSkipBlocksContainsTimeouts(t *testing.T) {
+func TestArgumentsSectionRule_DefaultSkipBlocksContainsTimeouts(t *testing.T) {
 	t.Parallel()
 
 	if !slices.Contains(check.DefaultSkipBlocks, "timeouts") {

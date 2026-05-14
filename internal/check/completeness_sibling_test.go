@@ -12,11 +12,11 @@ import (
 	"github.com/YakDriver/swissshepherd/internal/schema"
 )
 
-// TestCompletenessRule_DuplicateBlockNames exercises the scenario where
+// TestArgumentsSectionRule_DuplicateBlockNames exercises the scenario where
 // multiple schema paths share the same leaf block name (e.g. connection_pool.tcp
 // and timeout.tcp) and the doc merges them into a single "### tcp Block" section.
 // This is the appmesh_virtual_node pattern.
-func TestCompletenessRule_DuplicateBlockNames(t *testing.T) {
+func TestArgumentsSectionRule_DuplicateBlockNames(t *testing.T) {
 	t.Parallel()
 
 	// Schema: two "tcp" blocks under different parents with different attrs.
@@ -79,13 +79,13 @@ func TestCompletenessRule_DuplicateBlockNames(t *testing.T) {
 
 ### ` + "`connection_pool`" + ` Block
 
-* ` + "`tcp`" + ` - (Optional) TCP pool. See [` + "`tcp`" + ` Block](#tcp-block) for details.
 * ` + "`grpc`" + ` - (Optional) gRPC pool. See [` + "`grpc`" + ` Block](#grpc-block) for details.
+* ` + "`tcp`" + ` - (Optional) TCP pool. See [` + "`tcp`" + ` Block](#tcp-block) for details.
 
 ### ` + "`timeout`" + ` Block
 
-* ` + "`tcp`" + ` - (Optional) TCP timeout. See [` + "`tcp`" + ` Block](#tcp-block-1) for details.
 * ` + "`grpc`" + ` - (Optional) gRPC timeout. See [` + "`grpc`" + ` Block](#grpc-block-1) for details.
+* ` + "`tcp`" + ` - (Optional) TCP timeout. See [` + "`tcp`" + ` Block](#tcp-block-1) for details.
 
 ### ` + "`tcp`" + ` Block
 
@@ -124,7 +124,7 @@ This resource exports no additional attributes.
 		t.Fatalf("parse error: %v", err)
 	}
 
-	rule := &check.CompletenessRule{IgnoreDeprecated: true}
+	rule := &check.ArgumentsSectionRule{IgnoreDeprecated: true}
 	results := rule.Check(check.CheckContext{Resource: "aws_test_resource", Schema: rs, Doc: d})
 
 	// Filter to errors and warnings
@@ -151,10 +151,10 @@ This resource exports no additional attributes.
 	}
 }
 
-// TestCompletenessRule_DuplicateBlockNames_RealPhantom verifies that a truly
+// TestArgumentsSectionRule_DuplicateBlockNames_RealPhantom verifies that a truly
 // phantom attribute (one that doesn't exist in ANY sibling block) is still
 // reported even when blocks share a leaf name.
-func TestCompletenessRule_DuplicateBlockNames_RealPhantom(t *testing.T) {
+func TestArgumentsSectionRule_DuplicateBlockNames_RealPhantom(t *testing.T) {
 	t.Parallel()
 
 	rs := &schema.ResourceSchema{
@@ -211,7 +211,7 @@ This resource exports no additional attributes.
 		t.Fatalf("parse error: %v", err)
 	}
 
-	rule := &check.CompletenessRule{IgnoreDeprecated: true}
+	rule := &check.ArgumentsSectionRule{IgnoreDeprecated: true}
 	results := rule.Check(check.CheckContext{Resource: "aws_test_resource", Schema: rs, Doc: d})
 
 	// max_connections and timeout should NOT be phantom (they exist in siblings).
@@ -232,12 +232,12 @@ This resource exports no additional attributes.
 	}
 }
 
-// TestCompletenessRule_DuplicateBlockNames_ChildBlockAsAttr verifies that a
+// TestArgumentsSectionRule_DuplicateBlockNames_ChildBlockAsAttr verifies that a
 // child block name documented as an attribute in a sibling's merged doc section
 // is not reported as phantom. This is the per_request case: timeout.grpc has
 // per_request as a child block, but the merged grpc doc section lists it as an
 // attribute reference to the per_request block.
-func TestCompletenessRule_DuplicateBlockNames_ChildBlockAsAttr(t *testing.T) {
+func TestArgumentsSectionRule_DuplicateBlockNames_ChildBlockAsAttr(t *testing.T) {
 	t.Parallel()
 
 	rs := &schema.ResourceSchema{
@@ -306,7 +306,7 @@ This resource exports no additional attributes.
 		t.Fatalf("parse error: %v", err)
 	}
 
-	rule := &check.CompletenessRule{IgnoreDeprecated: true}
+	rule := &check.ArgumentsSectionRule{IgnoreDeprecated: true}
 	results := rule.Check(check.CheckContext{Resource: "aws_test_resource", Schema: rs, Doc: d})
 
 	// per_request should NOT be phantom — it's a child block of slow.grpc.
@@ -325,11 +325,11 @@ This resource exports no additional attributes.
 	}
 }
 
-// TestCompletenessRule_DuplicateBlockNames_MissingAttrStillReported ensures
+// TestArgumentsSectionRule_DuplicateBlockNames_MissingAttrStillReported ensures
 // that a genuinely undocumented attribute is still reported even when sibling
 // blocks exist. The sibling suppression only applies to phantom checks, not
 // missing-documentation checks.
-func TestCompletenessRule_DuplicateBlockNames_MissingAttrStillReported(t *testing.T) {
+func TestArgumentsSectionRule_DuplicateBlockNames_MissingAttrStillReported(t *testing.T) {
 	t.Parallel()
 
 	rs := &schema.ResourceSchema{
@@ -388,7 +388,7 @@ This resource exports no additional attributes.
 		t.Fatalf("parse error: %v", err)
 	}
 
-	rule := &check.CompletenessRule{IgnoreDeprecated: true}
+	rule := &check.ArgumentsSectionRule{IgnoreDeprecated: true}
 	results := rule.Check(check.CheckContext{Resource: "aws_test_resource", Schema: rs, Doc: d})
 
 	// max_pending should be reported as undocumented.

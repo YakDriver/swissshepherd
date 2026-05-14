@@ -11,11 +11,11 @@ import (
 	"github.com/YakDriver/swissshepherd/internal/schema"
 )
 
-// TestCompletenessRule_MultiLevelParentDisambiguation tests that blocks with
+// TestArgumentsSectionRule_MultiLevelParentDisambiguation tests that blocks with
 // the same leaf name but different parent paths are correctly disambiguated.
 // Regression test for issue where s3.s3_output_format_config.aggregation_config
 // and upsolver.s3_output_format_config.aggregation_config were confused.
-func TestCompletenessRule_MultiLevelParentDisambiguation(t *testing.T) {
+func TestArgumentsSectionRule_MultiLevelParentDisambiguation(t *testing.T) {
 	t.Parallel()
 
 	// Schema with two similar paths that differ only in the second-to-last segment
@@ -24,15 +24,15 @@ func TestCompletenessRule_MultiLevelParentDisambiguation(t *testing.T) {
 			"destination.s3.format.config": {
 				Path: "destination.s3.format.config",
 				Attributes: []schema.Attribute{
-					{Name: "s3_only_attr", Optional: true},
 					{Name: "common_attr", Optional: true},
+					{Name: "s3_only_attr", Optional: true},
 				},
 			},
 			"destination.upsolver.format.config": {
 				Path: "destination.upsolver.format.config",
 				Attributes: []schema.Attribute{
-					{Name: "upsolver_only_attr", Optional: true},
 					{Name: "common_attr", Optional: true},
+					{Name: "upsolver_only_attr", Optional: true},
 				},
 			},
 		},
@@ -45,23 +45,23 @@ func TestCompletenessRule_MultiLevelParentDisambiguation(t *testing.T) {
 				Name:    "s3.format.config",
 				Heading: "destination s3 format config Block",
 				Attributes: []doc.DocAttribute{
-					{Name: "s3_only_attr", Optional: true},
 					{Name: "common_attr", Optional: true},
+					{Name: "s3_only_attr", Optional: true},
 				},
 			},
 			"upsolver.format.config": {
 				Name:    "upsolver.format.config",
 				Heading: "destination upsolver format config Block",
 				Attributes: []doc.DocAttribute{
-					{Name: "upsolver_only_attr", Optional: true},
 					{Name: "common_attr", Optional: true},
+					{Name: "upsolver_only_attr", Optional: true},
 				},
 			},
 		},
 		AttributeBlocks: map[string]*doc.DocBlock{},
 	}
 
-	rule := &check.CompletenessRule{IgnoreDeprecated: true}
+	rule := &check.ArgumentsSectionRule{IgnoreDeprecated: true}
 	results := rule.Check(check.CheckContext{Resource: "test_resource", Schema: rs, Doc: d})
 
 	if len(results) != 0 {
