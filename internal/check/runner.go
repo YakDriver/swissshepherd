@@ -154,7 +154,7 @@ func (r *Runner) runTarget(t *config.Type, name string, logOnError bool) ([]Resu
 		return nil, nil
 	}
 
-	docPath, err := r.resolveDocPath(t, name)
+	docPath, docName, err := r.resolveDocPath(t, name)
 	if err != nil {
 		if logOnError {
 			if !slices.Contains(r.Config.IgnoreFileMissing, name) {
@@ -187,7 +187,7 @@ func (r *Runner) runTarget(t *config.Type, name string, logOnError bool) ([]Resu
 
 	var results []Result
 	if !r.Config.ShouldIgnoreContents(name, t.Name) {
-		ctx := CheckContext{Resource: name, Type: t, Schema: rs, IdentitySchema: r.Schema.IdentitySchemas[name], Doc: d}
+		ctx := CheckContext{Resource: name, DocName: docName, Type: t, Schema: rs, IdentitySchema: r.Schema.IdentitySchemas[name], Doc: d}
 		for _, rule := range applicableRules {
 			results = append(results, rule.Check(ctx)...)
 		}
@@ -230,7 +230,7 @@ func (r *Runner) applicableFileRules(name, typeName string) []FileRule {
 // is set, templates resolve relative to that directory; otherwise they
 // resolve relative to the current working directory. Returns an error
 // identifying every path tried when none exist.
-func (r *Runner) resolveDocPath(t *config.Type, name string) (string, error) {
+func (r *Runner) resolveDocPath(t *config.Type, name string) (string, string, error) {
 	docName := name
 	if alias, ok := r.Config.FileAliases[t.Name+"/"+name]; ok {
 		docName = alias
@@ -247,9 +247,9 @@ func (r *Runner) resolveDocPath(t *config.Type, name string) (string, error) {
 		}
 		tried = append(tried, full)
 		if _, err := os.Stat(full); err == nil {
-			return full, nil
+			return full, docName, nil
 		}
 	}
-	return "", fmt.Errorf("no doc file found for %s %q (tried: %s)",
+	return "", "", fmt.Errorf("no doc file found for %s %q (tried: %s)",
 		t.Name, name, strings.Join(tried, ", "))
 }

@@ -63,13 +63,20 @@ func (r *ExampleSectionRule) Check(ctx CheckContext) []Result {
 
 	// Check that at least one allowed-language code block contains the resource name.
 	hasResource := false
+	names := ctx.ResourceNames()
 	for _, cb := range section.FencedCodeBlocks {
 		lang := string(cb.Language(source))
 		if lang != "" && !slices.Contains(allowed, lang) {
 			continue
 		}
-		if strings.Contains(codeBlockText(cb, source), ctx.Resource) {
-			hasResource = true
+		text := codeBlockText(cb, source)
+		for _, n := range names {
+			if strings.Contains(text, n) {
+				hasResource = true
+				break
+			}
+		}
+		if hasResource {
 			break
 		}
 	}
