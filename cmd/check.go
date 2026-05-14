@@ -177,24 +177,25 @@ func runCheck(cmd *cobra.Command, args []string) error {
 	var rules []check.Rule
 	var fileRules []check.FileRule
 
-	if cfg.IsCheckEnabled("completeness") {
-		cc := cfg.GetCheck("completeness")
-		rules = append(rules, &check.CompletenessRule{
+	if cfg.IsCheckEnabled("schema_docs") {
+		cc := cfg.GetCheck("schema_docs")
+		rules = append(rules, &check.SchemaDocsRule{
 			IgnoreDeprecated:   cc.IgnoreDeprecated == nil || *cc.IgnoreDeprecated,
 			ImplicitAttributes: cc.ImplicitAttributes,
 			PhantomAllowlist:   cc.PhantomAllowlist,
 			SkipBlocks:         cc.SkipBlocks,
+			Coverage:           cc.Coverage,
+			Ordering:           cc.Ordering,
+			Description:        cc.Description,
+			Heading:            cc.Heading,
+			Format:             cc.Format,
+			Labels:             cc.Labels,
+			BadPrefixes:        cc.BadPrefixes,
+			Preferred:          preferredHeadingTemplates(cfg),
+			NoCodeBlocks:       cc.NoCodeBlocks,
+			SingleLineAttrs:    cc.SingleLineAttrs,
+			UninterruptedLists: cc.UninterruptedLists,
 		})
-	}
-	if cfg.IsCheckEnabled("ordering") {
-		rules = append(rules, &check.OrderingRule{})
-	}
-	if cfg.IsCheckEnabled("description_style") {
-		cc := cfg.GetCheck("description_style")
-		rules = append(rules, &check.DescriptionStyleRule{BadPrefixes: cc.BadPrefixes})
-	}
-	if cfg.IsCheckEnabled("computed_attribute") {
-		rules = append(rules, &check.ComputedAttributeRule{})
 	}
 	if cfg.IsCheckEnabled("title_section") {
 		rules = append(rules, &check.TitleSectionRule{
@@ -220,19 +221,6 @@ func runCheck(cmd *cobra.Command, args []string) error {
 	if cfg.IsCheckEnabled("signature_section") {
 		rules = append(rules, &check.SignatureSectionRule{})
 	}
-
-	preferred := preferredHeadingTemplates(cfg)
-	if cfg.IsCheckEnabled("heading_style") && len(preferred) > 0 {
-		rules = append(rules, &check.HeadingStyleRule{Preferred: preferred})
-	}
-	if cfg.IsCheckEnabled("format_style") {
-		cc := cfg.GetCheck("format_style")
-		fileRules = append(fileRules, &check.FormatStyleRule{
-			NoCodeBlocks:       cc.NoCodeBlocks,
-			SingleLineAttrs:    cc.SingleLineAttrs,
-			UninterruptedLists: cc.UninterruptedLists,
-		})
-	}
 	if cfg.IsCheckEnabled("frontmatter") {
 		fileRules = append(fileRules, frontmatterRule(cfg))
 	}
@@ -244,7 +232,7 @@ func runCheck(cmd *cobra.Command, args []string) error {
 		FileRules:                 fileRules,
 		Logger:                    logger,
 		HeadingTemplates:          headingTemplates(cfg),
-		PreferredHeadingTemplates: preferred,
+		PreferredHeadingTemplates: preferredHeadingTemplates(cfg),
 	}
 
 	// Verbose: log enabled checks and their scoping
@@ -317,7 +305,7 @@ func outputResultsText(results []check.Result) error {
 }
 
 func headingTemplates(cfg *config.Config) doc.HeadingTemplates {
-	checkCfg := cfg.GetCheck("completeness")
+	checkCfg := cfg.GetCheck("schema_docs")
 	if len(checkCfg.BlockHeadingStyles) > 0 {
 		return doc.HeadingTemplates(checkCfg.BlockHeadingStyles)
 	}
@@ -325,7 +313,7 @@ func headingTemplates(cfg *config.Config) doc.HeadingTemplates {
 }
 
 func preferredHeadingTemplates(cfg *config.Config) doc.HeadingTemplates {
-	checkCfg := cfg.GetCheck("completeness")
+	checkCfg := cfg.GetCheck("schema_docs")
 	if len(checkCfg.PreferredBlockHeadingStyles) > 0 {
 		return doc.HeadingTemplates(checkCfg.PreferredBlockHeadingStyles)
 	}
@@ -389,8 +377,8 @@ func logEnabledChecks(logger *slog.Logger, cfg *config.Config, rules []check.Rul
 	}
 
 	// Log disabled checks
-	allChecks := []string{"completeness", "ordering", "description_style", "computed_attribute",
-		"title_section", "heading_style", "section_presence", "timeouts_section", "import_section",
+	allChecks := []string{"schema_docs", "title_section",
+		"section_presence", "timeouts_section", "import_section",
 		"example_section", "signature_section",
 		"format_style", "frontmatter"}
 	for _, name := range allChecks {

@@ -13,7 +13,7 @@ import (
 	"github.com/YakDriver/swissshepherd/internal/schema"
 )
 
-func TestCompletenessRule_Complete(t *testing.T) {
+func TestSchemaDocsRule_Complete(t *testing.T) {
 	t.Parallel()
 
 	ps, err := schema.LoadFile("../../testdata/schema/test_provider.json", "registry.terraform.io/hashicorp/test")
@@ -26,7 +26,7 @@ func TestCompletenessRule_Complete(t *testing.T) {
 		t.Fatalf("loading doc: %s", err)
 	}
 
-	rule := &check.CompletenessRule{IgnoreDeprecated: true}
+	rule := &check.SchemaDocsRule{IgnoreDeprecated: true}
 	results := rule.Check(check.CheckContext{Resource: "test_instance", Schema: ps.Resources["test_instance"], Doc: d})
 
 	// Filter to errors only (warnings about timeouts block are expected since we don't doc those attrs)
@@ -47,7 +47,7 @@ func TestCompletenessRule_Complete(t *testing.T) {
 	}
 }
 
-func TestCompletenessRule_Incomplete(t *testing.T) {
+func TestSchemaDocsRule_Incomplete(t *testing.T) {
 	t.Parallel()
 
 	ps, err := schema.LoadFile("../../testdata/schema/test_provider.json", "registry.terraform.io/hashicorp/test")
@@ -60,7 +60,7 @@ func TestCompletenessRule_Incomplete(t *testing.T) {
 		t.Fatalf("loading doc: %s", err)
 	}
 
-	rule := &check.CompletenessRule{IgnoreDeprecated: true}
+	rule := &check.SchemaDocsRule{IgnoreDeprecated: true}
 	results := rule.Check(check.CheckContext{Resource: "test_instance", Schema: ps.Resources["test_instance"], Doc: d})
 
 	// Should report missing: description (root), network block entirely, timeouts block
@@ -81,7 +81,7 @@ func TestCompletenessRule_Incomplete(t *testing.T) {
 	}
 }
 
-func TestCompletenessRule_SkipsImplicit(t *testing.T) {
+func TestSchemaDocsRule_SkipsImplicit(t *testing.T) {
 	t.Parallel()
 
 	ps, err := schema.LoadFile("../../testdata/schema/test_provider.json", "registry.terraform.io/hashicorp/test")
@@ -94,7 +94,7 @@ func TestCompletenessRule_SkipsImplicit(t *testing.T) {
 		t.Fatalf("loading doc: %s", err)
 	}
 
-	rule := &check.CompletenessRule{IgnoreDeprecated: true}
+	rule := &check.SchemaDocsRule{IgnoreDeprecated: true}
 	results := rule.Check(check.CheckContext{Resource: "test_instance", Schema: ps.Resources["test_instance"], Doc: d})
 
 	// Should NOT report 'id' as missing

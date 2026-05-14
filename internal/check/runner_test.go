@@ -436,11 +436,11 @@ func TestRunner_FunctionTargetGetsNilSchema(t *testing.T) {
 
 	// Add every production rule — if any panics on nil rs, the test fails.
 	f.runner.Rules = append(f.runner.Rules,
-		&check.CompletenessRule{IgnoreDeprecated: true},
-		&check.OrderingRule{},
-		&check.DescriptionStyleRule{},
-		&check.ComputedAttributeRule{},
-		&check.HeadingStyleRule{Preferred: doc.HeadingTemplates{"`{Block}` Block"}},
+		&check.SchemaDocsRule{IgnoreDeprecated: true},
+		&check.SchemaDocsRule{},
+		&check.SchemaDocsRule{},
+		&check.SchemaDocsRule{},
+		&check.SchemaDocsRule{Preferred: doc.HeadingTemplates{"`{Block}` Block"}},
 		&check.TitleSectionRule{AllowedPrefixes: []string{"Function"}},
 	)
 

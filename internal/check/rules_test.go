@@ -12,7 +12,7 @@ import (
 	"github.com/YakDriver/swissshepherd/internal/schema"
 )
 
-func TestOrderingRule_Ordered(t *testing.T) {
+func TestSchemaDocsRule_Ordered(t *testing.T) {
 	t.Parallel()
 
 	d, err := doc.ParseFile("../../testdata/docs/r/instance.html.markdown")
@@ -20,7 +20,7 @@ func TestOrderingRule_Ordered(t *testing.T) {
 		t.Fatalf("loading doc: %s", err)
 	}
 
-	rule := &check.OrderingRule{}
+	rule := &check.SchemaDocsRule{}
 	results := rule.Check(check.CheckContext{Resource: "test_instance", Schema: nil, Doc: d})
 
 	for _, r := range results {
@@ -30,7 +30,7 @@ func TestOrderingRule_Ordered(t *testing.T) {
 	}
 }
 
-func TestOrderingRule_Unordered(t *testing.T) {
+func TestSchemaDocsRule_Unordered(t *testing.T) {
 	t.Parallel()
 
 	d, err := doc.ParseFile("../../testdata/docs/r/instance_unordered.html.markdown")
@@ -38,16 +38,13 @@ func TestOrderingRule_Unordered(t *testing.T) {
 		t.Fatalf("loading doc: %s", err)
 	}
 
-	rule := &check.OrderingRule{}
+	rule := &check.SchemaDocsRule{}
 	results := rule.Check(check.CheckContext{Resource: "test_instance", Schema: nil, Doc: d})
 
-	// Arguments: name, description, arn_prefix — "description" < "name" so "description" after "name" is wrong
-	// Actually: name > description, so description should come before name
 	if len(results) == 0 {
 		t.Fatal("expected ordering errors, got none")
 	}
 
-	// Should flag the argument section
 	found := false
 	for _, r := range results {
 		if strings.Contains(r.Message, "argument") {
@@ -58,8 +55,19 @@ func TestOrderingRule_Unordered(t *testing.T) {
 	if !found {
 		t.Error("expected an ordering error in argument section")
 	}
+}
 
-	// Attributes: zebra, arn — "arn" < "zebra" so arn after zebra is wrong
+func TestSchemaDocsRule_UnorderedAttributes(t *testing.T) {
+	t.Parallel()
+
+	d, err := doc.ParseFile("../../testdata/docs/r/instance_unordered.html.markdown")
+	if err != nil {
+		t.Fatalf("loading doc: %s", err)
+	}
+
+	rule := &check.SchemaDocsRule{}
+	results := rule.Check(check.CheckContext{Resource: "test_instance", Schema: nil, Doc: d})
+
 	foundAttr := false
 	for _, r := range results {
 		if strings.Contains(r.Message, "attribute") {
@@ -72,7 +80,7 @@ func TestOrderingRule_Unordered(t *testing.T) {
 	}
 }
 
-func TestDescriptionStyleRule_Good(t *testing.T) {
+func TestSchemaDocsRule_Good(t *testing.T) {
 	t.Parallel()
 
 	d, err := doc.ParseFile("../../testdata/docs/r/instance.html.markdown")
@@ -80,7 +88,7 @@ func TestDescriptionStyleRule_Good(t *testing.T) {
 		t.Fatalf("loading doc: %s", err)
 	}
 
-	rule := &check.DescriptionStyleRule{}
+	rule := &check.SchemaDocsRule{}
 	results := rule.Check(check.CheckContext{Resource: "test_instance", Schema: nil, Doc: d})
 
 	if len(results) > 0 {
@@ -88,7 +96,7 @@ func TestDescriptionStyleRule_Good(t *testing.T) {
 	}
 }
 
-func TestDescriptionStyleRule_Bad(t *testing.T) {
+func TestSchemaDocsRule_Bad(t *testing.T) {
 	t.Parallel()
 
 	d, err := doc.ParseFile("../../testdata/docs/r/instance_bad_style.html.markdown")
@@ -96,7 +104,7 @@ func TestDescriptionStyleRule_Bad(t *testing.T) {
 		t.Fatalf("loading doc: %s", err)
 	}
 
-	rule := &check.DescriptionStyleRule{}
+	rule := &check.SchemaDocsRule{}
 	results := rule.Check(check.CheckContext{Resource: "test_instance", Schema: nil, Doc: d})
 
 	// Should flag: "The name", "A description", "Specifies the mode", "Indicates the type", "An ARN"
@@ -124,7 +132,7 @@ func TestDescriptionStyleRule_Bad(t *testing.T) {
 	}
 }
 
-func TestComputedAttributeRule_Correct(t *testing.T) {
+func TestSchemaDocsRule_Correct(t *testing.T) {
 	t.Parallel()
 
 	ps, err := schema.LoadFile("../../testdata/schema/test_provider.json", "registry.terraform.io/hashicorp/test")
@@ -137,7 +145,7 @@ func TestComputedAttributeRule_Correct(t *testing.T) {
 		t.Fatalf("loading doc: %s", err)
 	}
 
-	rule := &check.ComputedAttributeRule{}
+	rule := &check.SchemaDocsRule{}
 	results := rule.Check(check.CheckContext{Resource: "test_instance", Schema: ps.Resources["test_instance"], Doc: d})
 
 	// arn is computed-only and is in the Attribute Reference section — should pass
@@ -148,7 +156,7 @@ func TestComputedAttributeRule_Correct(t *testing.T) {
 	}
 }
 
-func TestComputedAttributeRule_Wrong(t *testing.T) {
+func TestSchemaDocsRule_Wrong(t *testing.T) {
 	t.Parallel()
 
 	ps, err := schema.LoadFile("../../testdata/schema/test_provider.json", "registry.terraform.io/hashicorp/test")
@@ -161,22 +169,29 @@ func TestComputedAttributeRule_Wrong(t *testing.T) {
 		t.Fatalf("loading doc: %s", err)
 	}
 
-	rule := &check.ComputedAttributeRule{}
-	results := rule.Check(check.CheckContext{Resource: "test_instance", Schema: ps.Resources["test_instance"], Doc: d})
+	// SchemaDocsRule: arn is computed-only but NOT in Attribute Reference
+	attrRule := &check.SchemaDocsRule{}
+	attrResults := attrRule.Check(check.CheckContext{Resource: "test_instance", Schema: ps.Resources["test_instance"], Doc: d})
 
-	// arn is computed-only but is in Argument Reference and NOT in Attribute Reference
-	var foundMissing, foundWrongSection bool
-	for _, r := range results {
+	var foundMissing bool
+	for _, r := range attrResults {
 		if strings.Contains(r.Message, "should be documented in Attribute Reference") {
 			foundMissing = true
 		}
+	}
+	if !foundMissing {
+		t.Error("expected error about 'arn' missing from Attribute Reference section")
+	}
+
+	// SchemaDocsRule: arn is computed-only but IS in Argument Reference
+	argRule := &check.SchemaDocsRule{}
+	argResults := argRule.Check(check.CheckContext{Resource: "test_instance", Schema: ps.Resources["test_instance"], Doc: d})
+
+	var foundWrongSection bool
+	for _, r := range argResults {
 		if strings.Contains(r.Message, "should not appear in Argument Reference") {
 			foundWrongSection = true
 		}
-	}
-
-	if !foundMissing {
-		t.Error("expected error about 'arn' missing from Attribute Reference section")
 	}
 	if !foundWrongSection {
 		t.Error("expected warning about 'arn' appearing in Argument Reference section")
