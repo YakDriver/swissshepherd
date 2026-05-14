@@ -11,11 +11,11 @@ import (
 	"github.com/YakDriver/swissshepherd/internal/schema"
 )
 
-// TestArgumentsSectionRule_MultiLevelParentDisambiguation tests that blocks with
+// TestSchemaDocsRule_MultiLevelParentDisambiguation tests that blocks with
 // the same leaf name but different parent paths are correctly disambiguated.
 // Regression test for issue where s3.s3_output_format_config.aggregation_config
 // and upsolver.s3_output_format_config.aggregation_config were confused.
-func TestArgumentsSectionRule_MultiLevelParentDisambiguation(t *testing.T) {
+func TestSchemaDocsRule_MultiLevelParentDisambiguation(t *testing.T) {
 	t.Parallel()
 
 	// Schema with two similar paths that differ only in the second-to-last segment
@@ -61,7 +61,7 @@ func TestArgumentsSectionRule_MultiLevelParentDisambiguation(t *testing.T) {
 		AttributeBlocks: map[string]*doc.DocBlock{},
 	}
 
-	rule := &check.ArgumentsSectionRule{IgnoreDeprecated: true}
+	rule := &check.SchemaDocsRule{IgnoreDeprecated: true}
 	results := rule.Check(check.CheckContext{Resource: "test_resource", Schema: rs, Doc: d})
 
 	if len(results) != 0 {

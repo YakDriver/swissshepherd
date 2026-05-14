@@ -5,6 +5,7 @@ package check_test
 
 import (
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/YakDriver/swissshepherd/internal/check"
@@ -12,9 +13,9 @@ import (
 	"github.com/YakDriver/swissshepherd/internal/schema"
 )
 
-// --- ArgumentsSectionRule magic-value config tests ---------------------------
+// --- SchemaDocsRule magic-value config tests ---------------------------
 
-func TestArgumentsSectionRule_DefaultImplicitAttributesSkipped(t *testing.T) {
+func TestSchemaDocsRule_DefaultImplicitAttributesSkipped(t *testing.T) {
 	t.Parallel()
 
 	// "id" and "tags_all" are in DefaultImplicitAttributes and must never
@@ -40,7 +41,7 @@ func TestArgumentsSectionRule_DefaultImplicitAttributesSkipped(t *testing.T) {
 This resource exports no additional attributes.
 `), "test_thing")
 
-	rule := &check.ArgumentsSectionRule{IgnoreDeprecated: true}
+	rule := &check.SchemaDocsRule{IgnoreDeprecated: true}
 	results := rule.Check(check.CheckContext{Resource: "test_thing", Schema: rs, Doc: d})
 
 	for _, r := range results {
@@ -50,7 +51,7 @@ This resource exports no additional attributes.
 	}
 }
 
-func TestArgumentsSectionRule_CustomImplicitAttributes(t *testing.T) {
+func TestSchemaDocsRule_CustomImplicitAttributes(t *testing.T) {
 	t.Parallel()
 
 	// Override implicit list to include "region" — a provider-injected attr.
@@ -74,7 +75,7 @@ func TestArgumentsSectionRule_CustomImplicitAttributes(t *testing.T) {
 This resource exports no additional attributes.
 `), "test_thing")
 
-	rule := &check.ArgumentsSectionRule{
+	rule := &check.SchemaDocsRule{
 		IgnoreDeprecated:   true,
 		ImplicitAttributes: []string{"id", "tags_all", "region"},
 	}
@@ -87,7 +88,7 @@ This resource exports no additional attributes.
 	}
 }
 
-func TestArgumentsSectionRule_CustomSkipBlocks(t *testing.T) {
+func TestSchemaDocsRule_CustomSkipBlocks(t *testing.T) {
 	t.Parallel()
 
 	// Override skip_blocks to also skip "network" — useful for providers
@@ -113,7 +114,7 @@ func TestArgumentsSectionRule_CustomSkipBlocks(t *testing.T) {
 This resource exports no additional attributes.
 `), "test_thing")
 
-	rule := &check.ArgumentsSectionRule{
+	rule := &check.SchemaDocsRule{
 		IgnoreDeprecated: true,
 		SkipBlocks:       []string{"timeouts", "network"},
 	}
@@ -126,7 +127,7 @@ This resource exports no additional attributes.
 	}
 }
 
-func TestArgumentsSectionRule_DefaultSkipBlocksContainsTimeouts(t *testing.T) {
+func TestSchemaDocsRule_DefaultSkipBlocksContainsTimeouts(t *testing.T) {
 	t.Parallel()
 
 	if !slices.Contains(check.DefaultSkipBlocks, "timeouts") {
@@ -134,9 +135,9 @@ func TestArgumentsSectionRule_DefaultSkipBlocksContainsTimeouts(t *testing.T) {
 	}
 }
 
-// --- DescriptionStyleRule magic-value config tests -----------------------
+// --- SchemaDocsRule magic-value config tests -----------------------
 
-func TestDescriptionStyleRule_DefaultPrefixesFire(t *testing.T) {
+func TestSchemaDocsRule_DefaultPrefixesFire(t *testing.T) {
 	t.Parallel()
 
 	d, _ := doc.Parse([]byte(`## Argument Reference
@@ -144,7 +145,7 @@ func TestDescriptionStyleRule_DefaultPrefixesFire(t *testing.T) {
 * `+"`name`"+` - (Required) The name of the thing.
 `), "test")
 
-	rule := &check.DescriptionStyleRule{}
+	rule := &check.SchemaDocsRule{}
 	results := rule.Check(check.CheckContext{Resource: "test", Schema: nil, Doc: d})
 
 	if len(results) != 1 {
@@ -152,7 +153,7 @@ func TestDescriptionStyleRule_DefaultPrefixesFire(t *testing.T) {
 	}
 }
 
-func TestDescriptionStyleRule_CustomBadPrefixes(t *testing.T) {
+func TestSchemaDocsRule_CustomBadPrefixes(t *testing.T) {
 	t.Parallel()
 
 	d, _ := doc.Parse([]byte(`## Argument Reference
@@ -162,7 +163,7 @@ func TestDescriptionStyleRule_CustomBadPrefixes(t *testing.T) {
 `), "test")
 
 	// Replace the default list with a custom one that only flags "FORBIDDEN".
-	rule := &check.DescriptionStyleRule{BadPrefixes: []string{"FORBIDDEN "}}
+	rule := &check.SchemaDocsRule{BadPrefixes: []string{"FORBIDDEN "}}
 	results := rule.Check(check.CheckContext{Resource: "test", Schema: nil, Doc: d})
 
 	if len(results) != 1 {
@@ -173,7 +174,7 @@ func TestDescriptionStyleRule_CustomBadPrefixes(t *testing.T) {
 	}
 }
 
-func TestDescriptionStyleRule_EmptyBadPrefixesMatchesNothing(t *testing.T) {
+func TestSchemaDocsRule_EmptyBadPrefixesMatchesNothing(t *testing.T) {
 	t.Parallel()
 
 	d, _ := doc.Parse([]byte(`## Argument Reference
@@ -181,7 +182,7 @@ func TestDescriptionStyleRule_EmptyBadPrefixesMatchesNothing(t *testing.T) {
 * `+"`name`"+` - (Required) The name of the thing.
 `), "test")
 
-	rule := &check.DescriptionStyleRule{BadPrefixes: []string{}}
+	rule := &check.SchemaDocsRule{BadPrefixes: []string{}}
 	results := rule.Check(check.CheckContext{Resource: "test", Schema: nil, Doc: d})
 
 	if len(results) != 0 {
@@ -189,7 +190,7 @@ func TestDescriptionStyleRule_EmptyBadPrefixesMatchesNothing(t *testing.T) {
 	}
 }
 
-func TestDescriptionStyleRule_DefaultPrefixesMatchesTfproviderdocs(t *testing.T) {
+func TestSchemaDocsRule_DefaultPrefixesMatchesTfproviderdocs(t *testing.T) {
 	t.Parallel()
 
 	// Pin the default list so a future refactor can't silently drop a prefix
@@ -200,48 +201,42 @@ func TestDescriptionStyleRule_DefaultPrefixesMatchesTfproviderdocs(t *testing.T)
 	}
 }
 
-// --- FormatStyleRule magic-value config tests ----------------------------
+// --- SchemaDocsRule magic-value config tests ----------------------------
 
-func TestFormatStyleRule_DefaultsAllEnabled(t *testing.T) {
+func TestSchemaDocsRule_DefaultsAllEnabled(t *testing.T) {
 	t.Parallel()
 
-	// A zero-value FormatStyleRule should behave identically to the old
-	// hard-coded {NoCodeBlocks: true, SingleLineAttrs: true, UninterruptedLists: true}.
-	content := []byte(`## Argument Reference
+	src := "# Resource: test\n\n## Argument Reference\n\n```\ncode block here\n```\n\n* `name` - (Required) Name.\n"
 
-` + "```" + `
-code block here
-` + "```" + `
+	d, err := doc.Parse([]byte(src), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
 
-* ` + "`name`" + ` - (Required) Name.
-`)
-
-	rule := &check.FormatStyleRule{} // all nil → all enabled
-	results := rule.CheckFile(check.FileCheckContext{Resource: "test", Path: "test.md", Content: content})
+	rule := &check.SchemaDocsRule{} // all nil → all enabled
+	results := rule.Check(check.CheckContext{Resource: "test", Doc: d})
 
 	if len(results) == 0 {
-		t.Error("zero-value FormatStyleRule should flag the code block (default enabled)")
+		t.Error("zero-value SchemaDocsRule should flag the code block (default enabled)")
 	}
 }
 
-func TestFormatStyleRule_DisableNoCodeBlocks(t *testing.T) {
+func TestSchemaDocsRule_DisableNoCodeBlocks(t *testing.T) {
 	t.Parallel()
 
 	f := false
-	rule := &check.FormatStyleRule{NoCodeBlocks: &f}
+	rule := &check.SchemaDocsRule{NoCodeBlocks: &f}
 
-	content := []byte(`## Argument Reference
+	src := "# Resource: test\n\n## Argument Reference\n\n```\ncode block here\n```\n\n* `name` - (Required) Name.\n"
 
-` + "```" + `
-code block here
-` + "```" + `
+	d, err := doc.Parse([]byte(src), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
 
-* ` + "`name`" + ` - (Required) Name.
-`)
-
-	results := rule.CheckFile(check.FileCheckContext{Resource: "test", Path: "test.md", Content: content})
+	results := rule.Check(check.CheckContext{Resource: "test", Doc: d})
 	for _, r := range results {
-		if r.Rule == "format_style" && r.Severity == check.SeverityError {
+		if r.Rule == "schema_docs" && strings.Contains(r.Message, "code block") {
 			t.Errorf("NoCodeBlocks=false should suppress code-block errors; got: %s", r.Message)
 		}
 	}

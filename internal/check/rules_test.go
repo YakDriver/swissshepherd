@@ -12,7 +12,7 @@ import (
 	"github.com/YakDriver/swissshepherd/internal/schema"
 )
 
-func TestArgumentsSectionRule_Ordered(t *testing.T) {
+func TestSchemaDocsRule_Ordered(t *testing.T) {
 	t.Parallel()
 
 	d, err := doc.ParseFile("../../testdata/docs/r/instance.html.markdown")
@@ -20,7 +20,7 @@ func TestArgumentsSectionRule_Ordered(t *testing.T) {
 		t.Fatalf("loading doc: %s", err)
 	}
 
-	rule := &check.ArgumentsSectionRule{}
+	rule := &check.SchemaDocsRule{}
 	results := rule.Check(check.CheckContext{Resource: "test_instance", Schema: nil, Doc: d})
 
 	for _, r := range results {
@@ -30,7 +30,7 @@ func TestArgumentsSectionRule_Ordered(t *testing.T) {
 	}
 }
 
-func TestArgumentsSectionRule_Unordered(t *testing.T) {
+func TestSchemaDocsRule_Unordered(t *testing.T) {
 	t.Parallel()
 
 	d, err := doc.ParseFile("../../testdata/docs/r/instance_unordered.html.markdown")
@@ -38,7 +38,7 @@ func TestArgumentsSectionRule_Unordered(t *testing.T) {
 		t.Fatalf("loading doc: %s", err)
 	}
 
-	rule := &check.ArgumentsSectionRule{}
+	rule := &check.SchemaDocsRule{}
 	results := rule.Check(check.CheckContext{Resource: "test_instance", Schema: nil, Doc: d})
 
 	if len(results) == 0 {
@@ -57,7 +57,7 @@ func TestArgumentsSectionRule_Unordered(t *testing.T) {
 	}
 }
 
-func TestAttributesSectionRule_Unordered(t *testing.T) {
+func TestSchemaDocsRule_UnorderedAttributes(t *testing.T) {
 	t.Parallel()
 
 	d, err := doc.ParseFile("../../testdata/docs/r/instance_unordered.html.markdown")
@@ -65,7 +65,7 @@ func TestAttributesSectionRule_Unordered(t *testing.T) {
 		t.Fatalf("loading doc: %s", err)
 	}
 
-	rule := &check.AttributesSectionRule{}
+	rule := &check.SchemaDocsRule{}
 	results := rule.Check(check.CheckContext{Resource: "test_instance", Schema: nil, Doc: d})
 
 	foundAttr := false
@@ -80,7 +80,7 @@ func TestAttributesSectionRule_Unordered(t *testing.T) {
 	}
 }
 
-func TestDescriptionStyleRule_Good(t *testing.T) {
+func TestSchemaDocsRule_Good(t *testing.T) {
 	t.Parallel()
 
 	d, err := doc.ParseFile("../../testdata/docs/r/instance.html.markdown")
@@ -88,7 +88,7 @@ func TestDescriptionStyleRule_Good(t *testing.T) {
 		t.Fatalf("loading doc: %s", err)
 	}
 
-	rule := &check.DescriptionStyleRule{}
+	rule := &check.SchemaDocsRule{}
 	results := rule.Check(check.CheckContext{Resource: "test_instance", Schema: nil, Doc: d})
 
 	if len(results) > 0 {
@@ -96,7 +96,7 @@ func TestDescriptionStyleRule_Good(t *testing.T) {
 	}
 }
 
-func TestDescriptionStyleRule_Bad(t *testing.T) {
+func TestSchemaDocsRule_Bad(t *testing.T) {
 	t.Parallel()
 
 	d, err := doc.ParseFile("../../testdata/docs/r/instance_bad_style.html.markdown")
@@ -104,7 +104,7 @@ func TestDescriptionStyleRule_Bad(t *testing.T) {
 		t.Fatalf("loading doc: %s", err)
 	}
 
-	rule := &check.DescriptionStyleRule{}
+	rule := &check.SchemaDocsRule{}
 	results := rule.Check(check.CheckContext{Resource: "test_instance", Schema: nil, Doc: d})
 
 	// Should flag: "The name", "A description", "Specifies the mode", "Indicates the type", "An ARN"
@@ -132,7 +132,7 @@ func TestDescriptionStyleRule_Bad(t *testing.T) {
 	}
 }
 
-func TestAttributesSectionRule_Correct(t *testing.T) {
+func TestSchemaDocsRule_Correct(t *testing.T) {
 	t.Parallel()
 
 	ps, err := schema.LoadFile("../../testdata/schema/test_provider.json", "registry.terraform.io/hashicorp/test")
@@ -145,7 +145,7 @@ func TestAttributesSectionRule_Correct(t *testing.T) {
 		t.Fatalf("loading doc: %s", err)
 	}
 
-	rule := &check.AttributesSectionRule{}
+	rule := &check.SchemaDocsRule{}
 	results := rule.Check(check.CheckContext{Resource: "test_instance", Schema: ps.Resources["test_instance"], Doc: d})
 
 	// arn is computed-only and is in the Attribute Reference section — should pass
@@ -156,7 +156,7 @@ func TestAttributesSectionRule_Correct(t *testing.T) {
 	}
 }
 
-func TestAttributesSectionRule_Wrong(t *testing.T) {
+func TestSchemaDocsRule_Wrong(t *testing.T) {
 	t.Parallel()
 
 	ps, err := schema.LoadFile("../../testdata/schema/test_provider.json", "registry.terraform.io/hashicorp/test")
@@ -169,8 +169,8 @@ func TestAttributesSectionRule_Wrong(t *testing.T) {
 		t.Fatalf("loading doc: %s", err)
 	}
 
-	// AttributesSectionRule: arn is computed-only but NOT in Attribute Reference
-	attrRule := &check.AttributesSectionRule{}
+	// SchemaDocsRule: arn is computed-only but NOT in Attribute Reference
+	attrRule := &check.SchemaDocsRule{}
 	attrResults := attrRule.Check(check.CheckContext{Resource: "test_instance", Schema: ps.Resources["test_instance"], Doc: d})
 
 	var foundMissing bool
@@ -183,8 +183,8 @@ func TestAttributesSectionRule_Wrong(t *testing.T) {
 		t.Error("expected error about 'arn' missing from Attribute Reference section")
 	}
 
-	// ArgumentsSectionRule: arn is computed-only but IS in Argument Reference
-	argRule := &check.ArgumentsSectionRule{}
+	// SchemaDocsRule: arn is computed-only but IS in Argument Reference
+	argRule := &check.SchemaDocsRule{}
 	argResults := argRule.Check(check.CheckContext{Resource: "test_instance", Schema: ps.Resources["test_instance"], Doc: d})
 
 	var foundWrongSection bool

@@ -130,6 +130,14 @@ type CheckConfig struct {
 	SingleLineAttrs    *bool `hcl:"single_line_attrs,optional"`
 	UninterruptedLists *bool `hcl:"uninterrupted_lists,optional"`
 
+	// SchemaDocsRule sub-check toggles. nil means enabled (default true).
+	Coverage    *bool `hcl:"coverage,optional"`
+	Ordering    *bool `hcl:"ordering,optional"`
+	Description *bool `hcl:"description,optional"`
+	Heading     *bool `hcl:"heading,optional"`
+	Format      *bool `hcl:"format,optional"`
+	Labels      *bool `hcl:"labels,optional"`
+
 	// ImportSection rule options.
 	RequireIdentitySection *bool `hcl:"require_identity_section,optional"`
 
