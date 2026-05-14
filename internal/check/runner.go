@@ -186,7 +186,7 @@ func (r *Runner) runTarget(t *config.Type, name string, logOnError bool) ([]Resu
 	rs := r.Schema.ResourceSchemaFor(t.SchemaKind, name)
 
 	var results []Result
-	if !r.Config.ShouldIgnoreContents(name) {
+	if !r.Config.ShouldIgnoreContents(name, t.Name) {
 		ctx := CheckContext{Resource: name, Type: t, Schema: rs, IdentitySchema: r.Schema.IdentitySchemas[name], Doc: d}
 		for _, rule := range applicableRules {
 			results = append(results, rule.Check(ctx)...)

@@ -254,9 +254,15 @@ func (c *Config) IsCheckEnabled(name string) bool {
 }
 
 // ShouldIgnoreContents reports whether schema+doc rules should be skipped for
-// the given resource name (deprecated stubs, etc.).
-func (c *Config) ShouldIgnoreContents(resource string) bool {
-	return slices.Contains(c.IgnoreContentsCheck, resource)
+// the given resource name (deprecated stubs, etc.). Entries can be bare names
+// ("aws_kms_secret") matching any type, or type-qualified ("data_source/aws_kms_secret").
+func (c *Config) ShouldIgnoreContents(resource, typeName string) bool {
+	for _, entry := range c.IgnoreContentsCheck {
+		if entry == resource || entry == typeName+"/"+resource {
+			return true
+		}
+	}
+	return false
 }
 
 // CheckBool returns a named bool option from a check block, or the given
