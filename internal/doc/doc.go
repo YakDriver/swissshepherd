@@ -198,11 +198,6 @@ func matchTemplate(tmpl, heading string) string {
 		if title[0] < 'A' || title[0] > 'Z' {
 			return ""
 		}
-		// For bare {Title} (no suffix/prefix), require multiple words to avoid
-		// matching single capitalized words that may not be block names.
-		if suffix == "" && prefix == "" && !strings.Contains(title, " ") {
-			return ""
-		}
 		return titleToSnake(title)
 	}
 
