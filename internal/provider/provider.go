@@ -119,6 +119,25 @@ func CleanupSchema(schemaPath string) {
 	}
 }
 
+// GenerateSchemaTo builds the provider, generates the schema, and writes it
+// to the specified destination path. The temp working directory is cleaned up.
+func GenerateSchemaTo(providerDir, providerSource, destPath string) error {
+	schemaPath, err := GenerateSchema(providerDir, providerSource)
+	if err != nil {
+		return err
+	}
+	defer CleanupSchema(schemaPath)
+
+	src, err := os.ReadFile(schemaPath)
+	if err != nil {
+		return fmt.Errorf("reading generated schema: %w", err)
+	}
+	if err := os.WriteFile(destPath, src, 0o644); err != nil {
+		return fmt.Errorf("writing schema to %s: %w", destPath, err)
+	}
+	return nil
+}
+
 func requireTerraform() error {
 	_, err := exec.LookPath("terraform")
 	if err != nil {

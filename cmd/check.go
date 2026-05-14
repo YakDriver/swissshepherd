@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
+	"runtime/debug"
 
 	"github.com/YakDriver/swissshepherd/internal/check"
 	"github.com/YakDriver/swissshepherd/internal/config"
@@ -27,7 +29,23 @@ var (
 	prefix         string
 	outputJSON     bool
 	verbose        bool
+	refreshSchema  bool
 )
+
+func version() string {
+	if info, ok := debug.ReadBuildInfo(); ok {
+		v := info.Main.Version
+		for _, s := range info.Settings {
+			if s.Key == "vcs.revision" && len(s.Value) >= 7 {
+				v += " (" + s.Value[:7] + ")"
+			}
+		}
+		if v != "" {
+			return v
+		}
+	}
+	return "dev"
+}
 
 func Execute() error {
 	return rootCmd.Execute()
@@ -36,6 +54,7 @@ func Execute() error {
 var rootCmd = &cobra.Command{
 	Use:          "swissshepherd",
 	Short:        "Terraform provider documentation checker",
+	Version:      version(),
 	SilenceUsage: true,
 	// Default to check command when no subcommand is given
 	RunE: runCheck,
@@ -64,6 +83,7 @@ func init() {
 		fs.Flags().StringVar(&targetType, "type", "", "target type for --target or --prefix (e.g., resource, data_source)")
 		fs.Flags().StringVar(&prefix, "prefix", "", "check all targets whose name begins with this prefix (e.g., aws_dms_)")
 		fs.Flags().BoolVar(&outputJSON, "json", false, "output results as JSON")
+		fs.Flags().BoolVar(&refreshSchema, "refresh-schema", false, "regenerate cached schema even if schema_json file exists")
 	}
 }
 
@@ -85,8 +105,32 @@ func runCheck(cmd *cobra.Command, args []string) error {
 		cfg.ProviderDir = providerDir
 	}
 
-	// Auto-generate schema from provider directory
-	if cfg.ProviderDir != "" && cfg.SchemaJSON == "" {
+	// Schema resolution:
+	// 1. If schema_json is set and file exists (and no --refresh-schema): use it
+	// 2. If schema_json is set but missing (or --refresh-schema) and provider_dir is set: generate and cache
+	// 3. If no schema_json and provider_dir is set: generate to temp dir, clean up after
+	if cfg.SchemaJSON != "" && cfg.ProviderDir != "" {
+		// Resolve relative to provider_dir
+		schemaPath := cfg.SchemaJSON
+		if !filepath.IsAbs(schemaPath) {
+			schemaPath = filepath.Join(cfg.ProviderDir, schemaPath)
+		}
+		if refreshSchema || !fileExists(schemaPath) {
+			if cfg.ProviderSource == "" {
+				return fmt.Errorf("provider-source is required when generating schema")
+			}
+			fmt.Fprintf(os.Stderr, "Building schema (this may take a few minutes)...\n")
+			fmt.Fprintf(os.Stderr, "Subsequent runs will use the cached schema at %s\n", schemaPath)
+			fmt.Fprintf(os.Stderr, "Use --refresh-schema to regenerate after provider changes.\n")
+			if err := os.MkdirAll(filepath.Dir(schemaPath), 0o755); err != nil {
+				return fmt.Errorf("creating schema directory: %w", err)
+			}
+			if err := provider.GenerateSchemaTo(cfg.ProviderDir, cfg.ProviderSource, schemaPath); err != nil {
+				return fmt.Errorf("generating schema: %w", err)
+			}
+		}
+		cfg.SchemaJSON = schemaPath
+	} else if cfg.ProviderDir != "" && cfg.SchemaJSON == "" {
 		if cfg.ProviderSource == "" {
 			return fmt.Errorf("provider-source is required when using provider_dir")
 		}
@@ -195,6 +239,11 @@ func runCheck(cmd *cobra.Command, args []string) error {
 		PreferredHeadingTemplates: preferred,
 	}
 
+	// Verbose: log enabled checks and their scoping
+	if verbose {
+		logEnabledChecks(logger, cfg, rules, fileRules)
+	}
+
 	// Dispatch: exactly one of (--target) / (--prefix) / (--type) / none.
 	// --target selects a single named target; when --type is set it
 	// disambiguates same-name targets across types. --prefix scopes by name
@@ -291,5 +340,64 @@ func frontmatterRule(cfg *config.Config) *check.FrontmatterRule {
 		ForbidSidebarCurrent:         cc.ForbidSidebarCurrent,
 		AllowedSubcategories:         cc.AllowedSubcategories,
 		AllowEmptySubcategoryTargets: cc.AllowEmptySubcategoryTargets,
+	}
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+func logEnabledChecks(logger *slog.Logger, cfg *config.Config, rules []check.Rule, fileRules []check.FileRule) {
+	logger.Info("enabled checks", "schema_rules", len(rules), "file_rules", len(fileRules))
+
+	for _, r := range rules {
+		cc := cfg.GetCheck(r.Name())
+		attrs := []any{"rule", r.Name()}
+		if len(cc.Types) > 0 {
+			attrs = append(attrs, "types", cc.Types)
+		}
+		if len(cc.Prefixes) > 0 {
+			attrs = append(attrs, "prefixes", fmt.Sprintf("%d entries", len(cc.Prefixes)))
+		}
+		if len(cc.Targets) > 0 {
+			attrs = append(attrs, "targets", fmt.Sprintf("%d entries", len(cc.Targets)))
+		}
+		if len(cc.IgnoredTargets) > 0 {
+			attrs = append(attrs, "ignored", fmt.Sprintf("%d entries", len(cc.IgnoredTargets)))
+		}
+		logger.Info("  check", attrs...)
+	}
+	for _, r := range fileRules {
+		cc := cfg.GetCheck(r.Name())
+		attrs := []any{"rule", r.Name()}
+		if len(cc.Types) > 0 {
+			attrs = append(attrs, "types", cc.Types)
+		}
+		if len(cc.Prefixes) > 0 {
+			attrs = append(attrs, "prefixes", fmt.Sprintf("%d entries", len(cc.Prefixes)))
+		}
+		logger.Info("  check", attrs...)
+	}
+
+	// Log disabled checks
+	allChecks := []string{"completeness", "ordering", "description_style", "computed_attribute",
+		"title_section", "heading_style", "section_presence", "timeouts_section", "import_section",
+		"format_style", "frontmatter"}
+	for _, name := range allChecks {
+		if !cfg.IsCheckEnabled(name) {
+			logger.Info("  check (disabled)", "rule", name)
+		}
+	}
+
+	// Log ignore lists
+	if len(cfg.IgnoreFileMissing) > 0 {
+		logger.Info("ignore_file_missing", "count", len(cfg.IgnoreFileMissing))
+	}
+	if len(cfg.IgnoreContentsCheck) > 0 {
+		logger.Info("ignore_contents_check", "entries", cfg.IgnoreContentsCheck)
+	}
+	if len(cfg.FileAliases) > 0 {
+		logger.Info("file_aliases", "count", len(cfg.FileAliases))
 	}
 }
