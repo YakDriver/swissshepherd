@@ -40,10 +40,20 @@ type Result struct {
 // CheckContext carries all inputs a Rule needs to produce findings.
 type CheckContext struct {
 	Resource       string
+	DocName        string // aliased name used in doc file (empty = same as Resource)
 	Type           *config.Type
 	Schema         *schema.ResourceSchema
+	FunctionSchema *schema.FunctionSchema
 	IdentitySchema *schema.IdentitySchema
 	Doc            *doc.Document
+}
+
+// ResourceNames returns the resource name and, if different, the doc alias name.
+func (c CheckContext) ResourceNames() []string {
+	if c.DocName != "" && c.DocName != c.Resource {
+		return []string{c.Resource, c.DocName}
+	}
+	return []string{c.Resource}
 }
 
 // FileCheckContext carries all inputs a FileRule needs to produce findings.

@@ -132,6 +132,9 @@ type CheckConfig struct {
 
 	// ImportSection rule options.
 	RequireIdentitySection *bool `hcl:"require_identity_section,optional"`
+
+	// ExampleSection rule options.
+	AllowedLanguages []string `hcl:"allowed_languages,optional"`
 }
 
 // AppliesTo reports whether this check's path-scoping admits the given

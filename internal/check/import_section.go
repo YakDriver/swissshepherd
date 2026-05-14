@@ -74,7 +74,14 @@ func (r *ImportSectionRule) Check(ctx CheckContext) []Result {
 		lang := string(cb.Language(source))
 		text := codeBlockText(cb, source)
 
-		if !strings.Contains(text, ctx.Resource) {
+		hasName := false
+		for _, n := range ctx.ResourceNames() {
+			if strings.Contains(text, n) {
+				hasName = true
+				break
+			}
+		}
+		if !hasName {
 			add(SeverityError, fmt.Sprintf("import code block should contain resource name %q", ctx.Resource))
 		}
 
