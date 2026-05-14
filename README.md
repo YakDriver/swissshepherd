@@ -212,6 +212,16 @@ check "timeouts_section" {
   enabled = true
   # No config — validates documented timeout actions match schema bidirectionally.
 }
+
+check "import_section" {
+  enabled = true
+  require_identity_section = true  # validate identity import block + ### Identity Schema subsection (default: true)
+}
+
+check "example_section" {
+  enabled = true
+  allowed_languages = ["terraform", "hcl"]         # code block languages allowed (default: terraform, hcl)
+}
 ```
 
 All rules are enabled by default. Add a `check` block with `enabled = false` to disable one.
@@ -349,10 +359,27 @@ If `block_heading_styles` is omitted, a sensible default is used.
 | `title_section` | schema + doc | Level-1 heading is present, at level 1, begins with one of the allowed `<Kind>: ` prefixes, and contains no code blocks |
 | `section_presence` | schema + doc | Required sections are present; forbidden sections are absent. Schema-driven for timeouts (if-and-only-if), type-level fallback otherwise |
 | `timeouts_section` | schema + doc | Documented timeout actions match the schema (bidirectional) |
+| `import_section` | schema + doc | Import section style (no passive voice, no "e.g."), structure (code blocks present, correct types, ordering), and identity-aware validation |
+| `example_section` | schema + doc | Example code blocks use allowed languages and contain the resource name |
 | `format_style` | raw file | No code blocks inside argument/attribute sections, single-line attribute entries, uninterrupted attribute lists |
 | `frontmatter` | raw file | YAML frontmatter field presence/absence and subcategory allowlist |
 
 Rules fall into two categories: `schema + doc` rules compare the parsed markdown AST against the schema (including type-level requirements); `raw file` rules operate on the file bytes so they can catch whitespace, line-structure, and frontmatter issues the AST normalizes away.
+
+### Section headings
+
+Section headings are currently hardcoded. The parser recognizes these level-2 headings:
+
+| Section | Expected heading | Used by |
+|---------|-----------------|---------|
+| Example | `Example Usage` | `section_presence`, `example_section` |
+| Arguments | `Argument Reference` | `section_presence`, `completeness` |
+| Attributes | `Attribute Reference` | `section_presence`, `completeness` |
+| Timeouts | `Timeouts` | `section_presence`, `timeouts_section` |
+| Import | `Import` | `section_presence`, `import_section` |
+| Signature | `Signature` | `section_presence` |
+
+These may become configurable in a future release if providers need custom heading text.
 
 ### Output format
 

@@ -11,6 +11,7 @@ import (
 
 // ExampleSectionRule validates the content of the ## Example Usage section.
 // Checks:
+//   - Heading text is "Example Usage"
 //   - All fenced code blocks use an allowed language (default: terraform, hcl)
 //   - All code blocks contain the resource name
 type ExampleSectionRule struct {
@@ -30,14 +31,20 @@ func (r *ExampleSectionRule) Check(ctx CheckContext) []Result {
 		return nil
 	}
 
-	allowed := r.AllowedLanguages
-	if len(allowed) == 0 {
-		allowed = []string{"terraform", "hcl"}
-	}
+	expected := "Example Usage"
 
 	var results []Result
 	add := func(sev Severity, msg string) {
 		results = append(results, Result{Severity: sev, Rule: r.Name(), Resource: ctx.Resource, Message: msg})
+	}
+
+	if section.Text != expected {
+		add(SeverityError, fmt.Sprintf("example section heading %q should be: %q", section.Text, expected))
+	}
+
+	allowed := r.AllowedLanguages
+	if len(allowed) == 0 {
+		allowed = []string{"terraform", "hcl"}
 	}
 
 	for _, cb := range section.FencedCodeBlocks {

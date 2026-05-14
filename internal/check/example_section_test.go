@@ -51,6 +51,11 @@ func TestExampleSectionRule(t *testing.T) {
 			name:     "valid — no language on code block (allowed)",
 			markdown: "# Resource: aws_thing\n\n## Example Usage\n\n```\nresource \"aws_thing\" \"example\" {}\n```\n",
 		},
+		{
+			name:     "error — wrong heading text",
+			markdown: "# Resource: aws_thing\n\n## Examples\n\n```terraform\nresource \"aws_thing\" \"example\" {}\n```\n",
+			wantErrs: 1,
+		},
 	}
 
 	for _, tt := range tests {
