@@ -25,18 +25,6 @@ type Config struct {
 	ProviderDir    string `hcl:"provider_dir,optional"`
 	SchemaJSON     string `hcl:"schema_json,optional"`
 
-	// IgnoreFileMissing suppresses "doc file not found" warnings for the
-	// listed target names. Useful for schema aliases (e.g. aws_alb → aws_lb)
-	// that intentionally have no dedicated doc file.
-	IgnoreFileMissing     []string `hcl:"ignore_file_missing,optional"`
-	IgnoreFileMissingFile string   `hcl:"ignore_file_missing_file,optional"`
-
-	// IgnoreFileMismatch suppresses "doc file has no matching resource"
-	// findings for the listed target names. Useful for docs that cover
-	// removed resources or provider-internal pages.
-	IgnoreFileMismatch     []string `hcl:"ignore_file_mismatch,optional"`
-	IgnoreFileMismatchFile string   `hcl:"ignore_file_mismatch_file,optional"`
-
 	// IgnoreContentsCheck suppresses all schema+doc rule findings for the
 	// listed target names. Useful for deprecated/removed resources whose docs
 	// are intentionally minimal stubs.
@@ -336,6 +324,12 @@ func (c *Config) ProviderName() string {
 	return ""
 }
 
+// FileMatchIgnoreMissing returns the ignore_missing list from the file_match
+// check block. Used by the Runner to suppress "doc not found" log warnings.
+func (c *Config) FileMatchIgnoreMissing() []string {
+	return c.GetCheck("file_match").IgnoreMissing
+}
+
 // resolveFiles loads any _file references into their corresponding slice fields.
 func (c *Config) resolveFiles() error {
 	for i := range c.Checks {
@@ -356,28 +350,12 @@ func (c *Config) resolveFiles() error {
 		}
 	}
 
-	if c.IgnoreFileMissingFile != "" {
-		lines, err := readLines(c.IgnoreFileMissingFile)
-		if err != nil {
-			return err
-		}
-		c.IgnoreFileMissing = append(c.IgnoreFileMissing, lines...)
-	}
-
 	if c.IgnoreContentsCheckFile != "" {
 		lines, err := readLines(c.IgnoreContentsCheckFile)
 		if err != nil {
 			return err
 		}
 		c.IgnoreContentsCheck = append(c.IgnoreContentsCheck, lines...)
-	}
-
-	if c.IgnoreFileMismatchFile != "" {
-		lines, err := readLines(c.IgnoreFileMismatchFile)
-		if err != nil {
-			return err
-		}
-		c.IgnoreFileMismatch = append(c.IgnoreFileMismatch, lines...)
 	}
 
 	for i := range c.Checks {
