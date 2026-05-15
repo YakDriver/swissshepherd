@@ -183,21 +183,21 @@ func TestCheckConfig_AppliesTo_TypesAndNameAreAnded(t *testing.T) {
 	}
 }
 
-// TestCheckConfig_AppliesTo_IgnoredTargetsWins locks down the deny-wins
-// semantic: IgnoredTargets excludes a name even when every allowlist would
+// TestCheckConfig_AppliesTo_IgnoreTargetsWins locks down the deny-wins
+// semantic: IgnoreTargets excludes a name even when every allowlist would
 // include it.
-func TestCheckConfig_AppliesTo_IgnoredTargetsWins(t *testing.T) {
+func TestCheckConfig_AppliesTo_IgnoreTargetsWins(t *testing.T) {
 	t.Parallel()
 
 	cc := config.CheckConfig{
-		Name:           "ordering",
-		Prefixes:       []string{"aws_s3"},
-		Targets:        []string{"aws_s3_bucket"},
-		IgnoredTargets: []string{"aws_s3_bucket"},
+		Name:          "ordering",
+		Prefixes:      []string{"aws_s3"},
+		Targets:       []string{"aws_s3_bucket"},
+		IgnoreTargets: []string{"aws_s3_bucket"},
 	}
 
 	if cc.AppliesTo("aws_s3_bucket", "resource") {
-		t.Error("IgnoredTargets must win over allowlists, but AppliesTo returned true")
+		t.Error("IgnoreTargets must win over allowlists, but AppliesTo returned true")
 	}
 	// Other targets under the prefix still match.
 	if !cc.AppliesTo("aws_s3_bucket_policy", "resource") {
@@ -205,19 +205,19 @@ func TestCheckConfig_AppliesTo_IgnoredTargetsWins(t *testing.T) {
 	}
 }
 
-// TestLoad_IgnoredTargetsFile confirms the file form loads into IgnoredTargets
+// TestLoad_IgnoreTargetsFile confirms the file form loads into IgnoreTargets
 // alongside any inline list, matching every other *_file option's behavior.
 //
 // Not parallel: t.Chdir mutates process-global state.
-func TestLoad_IgnoredTargetsFile(t *testing.T) {
+func TestLoad_IgnoreTargetsFile(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, root+"/ignored.txt", "# comment line\naws_legacy_one\naws_legacy_two\n\n")
 	cfgPath := root + "/swissshepherd.hcl"
 	writeFile(t, cfgPath, `
 check "ordering" {
   enabled               = true
-  ignored_targets       = ["aws_inline_ignore"]
-  ignored_targets_file  = "ignored.txt"
+  ignore_targets       = ["aws_inline_ignore"]
+  ignore_targets_file  = "ignored.txt"
 }
 `)
 
@@ -230,12 +230,12 @@ check "ordering" {
 
 	cc := cfg.GetCheck("ordering")
 	want := []string{"aws_inline_ignore", "aws_legacy_one", "aws_legacy_two"}
-	if len(cc.IgnoredTargets) != len(want) {
-		t.Fatalf("IgnoredTargets = %v, want %v", cc.IgnoredTargets, want)
+	if len(cc.IgnoreTargets) != len(want) {
+		t.Fatalf("IgnoreTargets = %v, want %v", cc.IgnoreTargets, want)
 	}
 	for i, v := range want {
-		if cc.IgnoredTargets[i] != v {
-			t.Errorf("IgnoredTargets[%d] = %q, want %q", i, cc.IgnoredTargets[i], v)
+		if cc.IgnoreTargets[i] != v {
+			t.Errorf("IgnoreTargets[%d] = %q, want %q", i, cc.IgnoreTargets[i], v)
 		}
 	}
 	// Cross-check: AppliesTo actually uses the loaded list.

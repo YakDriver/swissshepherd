@@ -75,7 +75,7 @@ func TestExampleSectionRule(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			rule := &ExampleSectionRule{AllowedLanguages: tt.langs}
+			rule := &ExampleSectionRule{AllowLanguages: tt.langs}
 			ctx := CheckContext{Resource: "aws_thing", Doc: d}
 			results := rule.Check(ctx)
 

@@ -13,7 +13,7 @@ import (
 // Terraform Registry and historical legacy layouts accept on a level-1
 // documentation heading. Kept in sync with tfproviderdocs so migrating
 // providers see identical verdicts. Callers may supply their own list via
-// TitleSectionRule.AllowedPrefixes when a provider needs a different set.
+// TitleSectionRule.AllowPrefixes when a provider needs a different set.
 var DefaultTitleSectionPrefixes = []string{
 	"Action",
 	"Data Source",
@@ -35,9 +35,9 @@ var DefaultTitleSectionPrefixes = []string{
 // are chosen to look familiar to anyone migrating from the older tool so the
 // signal a provider acts on is unchanged.
 type TitleSectionRule struct {
-	// AllowedPrefixes overrides DefaultTitleSectionPrefixes. Empty uses the
+	// AllowPrefixes overrides DefaultTitleSectionPrefixes. Empty uses the
 	// default.
-	AllowedPrefixes []string
+	AllowPrefixes []string
 }
 
 func (r *TitleSectionRule) Name() string { return "title_section" }
@@ -68,9 +68,15 @@ func (r *TitleSectionRule) Check(ctx CheckContext) []Result {
 		fail(fmt.Sprintf("title section heading level (%d) should be: 1", level))
 	}
 
-	prefixes := r.AllowedPrefixes
+	prefixes := r.AllowPrefixes
 	if len(prefixes) == 0 {
 		prefixes = DefaultTitleSectionPrefixes
+	}
+	// If the type defines a specific title prefix, include it.
+	if ctx.Type != nil && ctx.Type.TitlePrefix != "" {
+		if !slices.Contains(prefixes, ctx.Type.TitlePrefix) {
+			prefixes = append(prefixes, ctx.Type.TitlePrefix)
+		}
 	}
 	if !hasAnyPrefix(section.Text, prefixes) {
 		fail(fmt.Sprintf("title section heading %q should have one of these prefixes: %v",

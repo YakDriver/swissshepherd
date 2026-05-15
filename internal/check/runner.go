@@ -253,3 +253,5 @@ func (r *Runner) resolveDocPath(t *config.Type, name string) (string, string, er
 	return "", "", fmt.Errorf("no doc file found for %s %q (tried: %s)",
 		t.Name, name, strings.Join(tried, ", "))
 }
+
+// CheckFileMismatch detects doc files that have no matching schema resource

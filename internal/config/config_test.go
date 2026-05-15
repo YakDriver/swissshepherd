@@ -73,14 +73,14 @@ schema_json     = "schema.json"
 	}
 }
 
-// TestLoad_AllowedSubcategoriesFile_RelativeToCWD simulates the real failure
+// TestLoad_AllowSubcategoriesFile_RelativeToCWD simulates the real failure
 // case the user hit: config lives in a subdirectory (.ci/), the referenced
 // file lives at the project root, and swissshepherd is invoked from the
 // project root. The path is resolved relative to the process CWD, not to the
 // config file's directory.
 //
 // Not parallel: t.Chdir mutates process-global state.
-func TestLoad_AllowedSubcategoriesFile_RelativeToCWD(t *testing.T) {
+func TestLoad_AllowSubcategoriesFile_RelativeToCWD(t *testing.T) {
 	root := t.TempDir()
 
 	// Layout: root/website/allowed-subcategories.txt + root/.ci/swissshepherd.hcl
@@ -90,7 +90,7 @@ func TestLoad_AllowedSubcategoriesFile_RelativeToCWD(t *testing.T) {
 	writeFile(t, cfgPath, `
 check "frontmatter" {
   enabled                    = true
-  allowed_subcategories_file = "website/allowed-subcategories.txt"
+  allow_subcategories_file = "website/allowed-subcategories.txt"
 }
 `)
 
@@ -104,14 +104,14 @@ check "frontmatter" {
 
 	fm := cfg.GetCheck("frontmatter")
 	want := []string{"Alpha", "Bravo", "Charlie"}
-	if !slices.Equal(fm.AllowedSubcategories, want) {
-		t.Errorf("AllowedSubcategories = %v, want %v", fm.AllowedSubcategories, want)
+	if !slices.Equal(fm.AllowSubcategories, want) {
+		t.Errorf("AllowSubcategories = %v, want %v", fm.AllowSubcategories, want)
 	}
 }
 
-// TestLoad_AllowedSubcategoriesFile_Absolute confirms absolute paths aren't
+// TestLoad_AllowSubcategoriesFile_Absolute confirms absolute paths aren't
 // affected by the CWD and work regardless of where swissshepherd is invoked.
-func TestLoad_AllowedSubcategoriesFile_Absolute(t *testing.T) {
+func TestLoad_AllowSubcategoriesFile_Absolute(t *testing.T) {
 	t.Parallel()
 
 	listPath := filepath.Join(t.TempDir(), "allowed.txt")
@@ -121,7 +121,7 @@ func TestLoad_AllowedSubcategoriesFile_Absolute(t *testing.T) {
 	writeFile(t, cfgPath, `
 check "frontmatter" {
   enabled                    = true
-  allowed_subcategories_file = "`+listPath+`"
+  allow_subcategories_file = "`+listPath+`"
 }
 `)
 
@@ -130,47 +130,47 @@ check "frontmatter" {
 		t.Fatalf("Load() error = %v", err)
 	}
 	fm := cfg.GetCheck("frontmatter")
-	if !slices.Equal(fm.AllowedSubcategories, []string{"OnlyOne"}) {
-		t.Errorf("AllowedSubcategories = %v, want [OnlyOne]", fm.AllowedSubcategories)
+	if !slices.Equal(fm.AllowSubcategories, []string{"OnlyOne"}) {
+		t.Errorf("AllowSubcategories = %v, want [OnlyOne]", fm.AllowSubcategories)
 	}
 }
 
-// TestLoad_AllowedSubcategoriesFile_MissingErrors ensures the error path stays
+// TestLoad_AllowSubcategoriesFile_MissingErrors ensures the error path stays
 // clear. The message must include the path so CI failures are diagnosable.
-func TestLoad_AllowedSubcategoriesFile_MissingErrors(t *testing.T) {
+func TestLoad_AllowSubcategoriesFile_MissingErrors(t *testing.T) {
 	t.Parallel()
 
 	cfgPath := filepath.Join(t.TempDir(), "swissshepherd.hcl")
 	writeFile(t, cfgPath, `
 check "frontmatter" {
   enabled                    = true
-  allowed_subcategories_file = "does-not-exist.txt"
+  allow_subcategories_file = "does-not-exist.txt"
 }
 `)
 
 	_, err := config.Load(cfgPath)
 	if err == nil {
-		t.Fatal("Load() error = nil, want error for missing allowed_subcategories_file")
+		t.Fatal("Load() error = nil, want error for missing allow_subcategories_file")
 	}
 	if !strings.Contains(err.Error(), "does-not-exist.txt") {
 		t.Errorf("error message should name the missing file; got: %v", err)
 	}
 }
 
-// TestLoad_AllowedSubcategoriesFileAndInlineMerge confirms inline values are
+// TestLoad_AllowSubcategoriesFileAndInlineMerge confirms inline values are
 // preserved and the file-loaded values are appended, matching the behavior
 // every *_file option in CheckConfig shares.
 //
 // Not parallel: t.Chdir mutates process-global state.
-func TestLoad_AllowedSubcategoriesFileAndInlineMerge(t *testing.T) {
+func TestLoad_AllowSubcategoriesFileAndInlineMerge(t *testing.T) {
 	root := t.TempDir()
 	writeFile(t, filepath.Join(root, "allowed.txt"), "FromFile\n")
 	cfgPath := filepath.Join(root, "swissshepherd.hcl")
 	writeFile(t, cfgPath, `
 check "frontmatter" {
   enabled                    = true
-  allowed_subcategories      = ["Inline"]
-  allowed_subcategories_file = "allowed.txt"
+  allow_subcategories      = ["Inline"]
+  allow_subcategories_file = "allowed.txt"
 }
 `)
 	t.Chdir(root)
@@ -182,8 +182,8 @@ check "frontmatter" {
 
 	fm := cfg.GetCheck("frontmatter")
 	want := []string{"Inline", "FromFile"}
-	if !slices.Equal(fm.AllowedSubcategories, want) {
-		t.Errorf("AllowedSubcategories = %v, want %v", fm.AllowedSubcategories, want)
+	if !slices.Equal(fm.AllowSubcategories, want) {
+		t.Errorf("AllowSubcategories = %v, want %v", fm.AllowSubcategories, want)
 	}
 }
 
