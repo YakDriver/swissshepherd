@@ -243,3 +243,54 @@ check "ordering" {
 		t.Error("file-loaded ignored target should exclude AppliesTo")
 	}
 }
+
+func TestCheckConfig_AppliesTo_QualifiedTargets(t *testing.T) {
+	t.Parallel()
+	cc := config.CheckConfig{Targets: []string{"data_source/aws_thing"}}
+
+	if !cc.AppliesTo("aws_thing", "data_source") {
+		t.Error("qualified target should match when type matches")
+	}
+	if cc.AppliesTo("aws_thing", "resource") {
+		t.Error("qualified target should not match different type")
+	}
+}
+
+func TestCheckConfig_AppliesTo_QualifiedPrefixes(t *testing.T) {
+	t.Parallel()
+	cc := config.CheckConfig{Prefixes: []string{"data_source/aws_s3"}}
+
+	if !cc.AppliesTo("aws_s3_bucket", "data_source") {
+		t.Error("qualified prefix should match when type and prefix match")
+	}
+	if cc.AppliesTo("aws_s3_bucket", "resource") {
+		t.Error("qualified prefix should not match different type")
+	}
+	if cc.AppliesTo("aws_ec2_instance", "data_source") {
+		t.Error("qualified prefix should not match different name")
+	}
+}
+
+func TestCheckConfig_AppliesTo_QualifiedIgnoreTargets(t *testing.T) {
+	t.Parallel()
+	cc := config.CheckConfig{IgnoreTargets: []string{"data_source/aws_thing"}}
+
+	if cc.AppliesTo("aws_thing", "data_source") {
+		t.Error("qualified ignore_target should exclude matching type")
+	}
+	if !cc.AppliesTo("aws_thing", "resource") {
+		t.Error("qualified ignore_target should not exclude different type")
+	}
+}
+
+func TestCheckConfig_AppliesTo_QualifiedIgnorePrefixes(t *testing.T) {
+	t.Parallel()
+	cc := config.CheckConfig{IgnorePrefixes: []string{"resource/aws_legacy"}}
+
+	if cc.AppliesTo("aws_legacy_thing", "resource") {
+		t.Error("qualified ignore_prefix should exclude matching type+prefix")
+	}
+	if !cc.AppliesTo("aws_legacy_thing", "data_source") {
+		t.Error("qualified ignore_prefix should not exclude different type")
+	}
+}

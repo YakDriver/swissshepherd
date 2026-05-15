@@ -140,15 +140,6 @@ schema_json = "terraform-providers-schema/schema.json"
 
 # ─── Global ignore lists ────────────────────────────────────────────────────
 
-# Suppress "doc file not found" warnings for schema aliases with no doc.
-ignore_file_missing      = ["aws_alb", "aws_alb_listener"]
-ignore_file_missing_file = "website/ignore-file-missing.txt"
-
-# Suppress "doc file has no matching resource" (reverse mismatch).
-# These also feed into the file_match rule's ignore lists.
-ignore_file_mismatch      = ["aws_removed_thing"]
-ignore_file_mismatch_file = "website/ignore-file-mismatch.txt"
-
 # Suppress all schema+doc rule findings for deprecated/removed stubs.
 # File rules (frontmatter, file_check) still run.
 ignore_contents_check      = ["aws_kms_secret"]
@@ -179,7 +170,7 @@ swissshepherd --config .ci/swissshepherd.hcl
 
 ### List files
 
-Options ending in `_file` (`ignore_file_missing_file`, `ignore_targets_file`, `allow_subcategories_file`, etc.) read one entry per line. Empty lines and lines starting with `#` are ignored.
+Options ending in `_file` (`ignore_targets_file`, `allow_subcategories_file`, `ignore_missing_file`, etc.) read one entry per line. Empty lines and lines starting with `#` are ignored.
 
 ## Rules reference
 
@@ -251,7 +242,7 @@ check "file_match" {
 }
 ```
 
-The top-level `ignore_file_missing` and `ignore_file_mismatch` options are also supported for backward compatibility and are merged into `ignore_missing` / `ignore_extra` respectively.
+The `ignore_missing` and `ignore_extra` lists suppress findings for specific targets. Use `ignore_missing_file` / `ignore_extra_file` for file-based lists.
 
 ---
 
@@ -434,6 +425,20 @@ check "schema_docs" {
   ignore_prefixes     = ["aws_appstream"]
 }
 ```
+
+All four name-axis fields (`prefixes`, `targets`, `ignore_targets`, `ignore_prefixes`) support **type/name notation** for type-scoped entries:
+
+```hcl
+check "schema_docs" {
+  # Only match aws_thing when it's a data source, not a resource
+  ignore_targets = ["data_source/aws_thing"]
+
+  # Only match aws_s3_ prefixed data sources
+  prefixes = ["data_source/aws_s3_"]
+}
+```
+
+Plain entries (no `/`) match any type. Qualified entries (`type/name` or `type/prefix`) only match when the type matches.
 
 **Evaluation order:**
 

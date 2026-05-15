@@ -178,11 +178,13 @@ type CheckConfig struct {
 // so each check can roll out independently across a large provider (the
 // service-by-service migration the phase-3 design was built for).
 func (c CheckConfig) AppliesTo(name, typeName string) bool {
-	if slices.Contains(c.IgnoreTargets, name) {
+	qualified := typeName + "/" + name
+
+	if slices.Contains(c.IgnoreTargets, name) || slices.Contains(c.IgnoreTargets, qualified) {
 		return false
 	}
 	for _, p := range c.IgnorePrefixes {
-		if strings.HasPrefix(name, p) {
+		if matchesQualifiedPrefix(name, typeName, p) {
 			return false
 		}
 	}
@@ -192,15 +194,25 @@ func (c CheckConfig) AppliesTo(name, typeName string) bool {
 	if len(c.Prefixes) == 0 && len(c.Targets) == 0 {
 		return true
 	}
-	if slices.Contains(c.Targets, name) {
+	if slices.Contains(c.Targets, name) || slices.Contains(c.Targets, qualified) {
 		return true
 	}
 	for _, p := range c.Prefixes {
-		if strings.HasPrefix(name, p) {
+		if matchesQualifiedPrefix(name, typeName, p) {
 			return true
 		}
 	}
 	return false
+}
+
+// matchesQualifiedPrefix checks if a prefix matches, supporting type/prefix
+// notation. "data_source/aws_s3" matches only when typeName is "data_source"
+// and name starts with "aws_s3". A plain prefix "aws_s3" matches any type.
+func matchesQualifiedPrefix(name, typeName, prefix string) bool {
+	if t, p, ok := strings.Cut(prefix, "/"); ok {
+		return typeName == t && strings.HasPrefix(name, p)
+	}
+	return strings.HasPrefix(name, prefix)
 }
 
 // Load reads and parses an HCL config file. Returns a zero-value Config if
