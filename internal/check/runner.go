@@ -157,7 +157,7 @@ func (r *Runner) runTarget(t *config.Type, name string, logOnError bool) ([]Resu
 	docPath, docName, err := r.resolveDocPath(t, name)
 	if err != nil {
 		if logOnError {
-			if !slices.Contains(r.Config.IgnoreFileMissing, name) {
+			if !slices.Contains(r.Config.FileMatchIgnoreMissing(), name) {
 				r.Logger.Warn("doc file not found", "type", t.Name, "name", name, "error", err)
 			}
 			return nil, nil

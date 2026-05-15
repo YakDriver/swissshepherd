@@ -25,18 +25,6 @@ type Config struct {
 	ProviderDir    string `hcl:"provider_dir,optional"`
 	SchemaJSON     string `hcl:"schema_json,optional"`
 
-	// IgnoreFileMissing suppresses "doc file not found" warnings for the
-	// listed target names. Useful for schema aliases (e.g. aws_alb → aws_lb)
-	// that intentionally have no dedicated doc file.
-	IgnoreFileMissing     []string `hcl:"ignore_file_missing,optional"`
-	IgnoreFileMissingFile string   `hcl:"ignore_file_missing_file,optional"`
-
-	// IgnoreFileMismatch suppresses "doc file has no matching resource"
-	// findings for the listed target names. Useful for docs that cover
-	// removed resources or provider-internal pages.
-	IgnoreFileMismatch     []string `hcl:"ignore_file_mismatch,optional"`
-	IgnoreFileMismatchFile string   `hcl:"ignore_file_mismatch_file,optional"`
-
 	// IgnoreContentsCheck suppresses all schema+doc rule findings for the
 	// listed target names. Useful for deprecated/removed resources whose docs
 	// are intentionally minimal stubs.
@@ -190,11 +178,13 @@ type CheckConfig struct {
 // so each check can roll out independently across a large provider (the
 // service-by-service migration the phase-3 design was built for).
 func (c CheckConfig) AppliesTo(name, typeName string) bool {
-	if slices.Contains(c.IgnoreTargets, name) {
+	qualified := typeName + "/" + name
+
+	if slices.Contains(c.IgnoreTargets, name) || slices.Contains(c.IgnoreTargets, qualified) {
 		return false
 	}
 	for _, p := range c.IgnorePrefixes {
-		if strings.HasPrefix(name, p) {
+		if matchesQualifiedPrefix(name, typeName, p) {
 			return false
 		}
 	}
@@ -204,15 +194,25 @@ func (c CheckConfig) AppliesTo(name, typeName string) bool {
 	if len(c.Prefixes) == 0 && len(c.Targets) == 0 {
 		return true
 	}
-	if slices.Contains(c.Targets, name) {
+	if slices.Contains(c.Targets, name) || slices.Contains(c.Targets, qualified) {
 		return true
 	}
 	for _, p := range c.Prefixes {
-		if strings.HasPrefix(name, p) {
+		if matchesQualifiedPrefix(name, typeName, p) {
 			return true
 		}
 	}
 	return false
+}
+
+// matchesQualifiedPrefix checks if a prefix matches, supporting type/prefix
+// notation. "data_source/aws_s3" matches only when typeName is "data_source"
+// and name starts with "aws_s3". A plain prefix "aws_s3" matches any type.
+func matchesQualifiedPrefix(name, typeName, prefix string) bool {
+	if t, p, ok := strings.Cut(prefix, "/"); ok {
+		return typeName == t && strings.HasPrefix(name, p)
+	}
+	return strings.HasPrefix(name, prefix)
 }
 
 // Load reads and parses an HCL config file. Returns a zero-value Config if
@@ -336,6 +336,12 @@ func (c *Config) ProviderName() string {
 	return ""
 }
 
+// FileMatchIgnoreMissing returns the ignore_missing list from the file_match
+// check block. Used by the Runner to suppress "doc not found" log warnings.
+func (c *Config) FileMatchIgnoreMissing() []string {
+	return c.GetCheck("file_match").IgnoreMissing
+}
+
 // resolveFiles loads any _file references into their corresponding slice fields.
 func (c *Config) resolveFiles() error {
 	for i := range c.Checks {
@@ -356,28 +362,12 @@ func (c *Config) resolveFiles() error {
 		}
 	}
 
-	if c.IgnoreFileMissingFile != "" {
-		lines, err := readLines(c.IgnoreFileMissingFile)
-		if err != nil {
-			return err
-		}
-		c.IgnoreFileMissing = append(c.IgnoreFileMissing, lines...)
-	}
-
 	if c.IgnoreContentsCheckFile != "" {
 		lines, err := readLines(c.IgnoreContentsCheckFile)
 		if err != nil {
 			return err
 		}
 		c.IgnoreContentsCheck = append(c.IgnoreContentsCheck, lines...)
-	}
-
-	if c.IgnoreFileMismatchFile != "" {
-		lines, err := readLines(c.IgnoreFileMismatchFile)
-		if err != nil {
-			return err
-		}
-		c.IgnoreFileMismatch = append(c.IgnoreFileMismatch, lines...)
 	}
 
 	for i := range c.Checks {

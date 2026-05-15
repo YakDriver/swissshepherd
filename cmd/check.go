@@ -265,15 +265,12 @@ func runCheck(cmd *cobra.Command, args []string) error {
 	// Global checks (run once, not per-target).
 	if cfg.IsCheckEnabled("file_match") {
 		cc := cfg.GetCheck("file_match")
-		// Merge top-level ignore lists into the check's lists for backward compat.
-		ignoreMissing := append(cc.IgnoreMissing, cfg.IgnoreFileMissing...)
-		ignoreExtra := append(cc.IgnoreExtra, cfg.IgnoreFileMismatch...)
 		fmRule := &check.FileMatchRule{
 			RequireDoc:    cc.RequireDoc,
 			RequireSchema: cc.RequireSchema,
 			MixedLayout:   cc.MixedLayout,
-			IgnoreMissing: ignoreMissing,
-			IgnoreExtra:   ignoreExtra,
+			IgnoreMissing: cc.IgnoreMissing,
+			IgnoreExtra:   cc.IgnoreExtra,
 		}
 		results = append(results, fmRule.Check(cfg, ps)...)
 	}
@@ -421,8 +418,8 @@ func logEnabledChecks(logger *slog.Logger, cfg *config.Config, rules []check.Rul
 	}
 
 	// Log ignore lists
-	if len(cfg.IgnoreFileMissing) > 0 {
-		logger.Info("ignore_file_missing", "count", len(cfg.IgnoreFileMissing))
+	if fm := cfg.FileMatchIgnoreMissing(); len(fm) > 0 {
+		logger.Info("file_match.ignore_missing", "count", len(fm))
 	}
 	if len(cfg.IgnoreContentsCheck) > 0 {
 		logger.Info("ignore_contents_check", "entries", cfg.IgnoreContentsCheck)

@@ -140,15 +140,6 @@ schema_json = "terraform-providers-schema/schema.json"
 
 # ─── Global ignore lists ────────────────────────────────────────────────────
 
-# Suppress "doc file not found" warnings for schema aliases with no doc.
-ignore_file_missing      = ["aws_alb", "aws_alb_listener"]
-ignore_file_missing_file = "website/ignore-file-missing.txt"
-
-# Suppress "doc file has no matching resource" (reverse mismatch).
-# These also feed into the file_match rule's ignore lists.
-ignore_file_mismatch      = ["aws_removed_thing"]
-ignore_file_mismatch_file = "website/ignore-file-mismatch.txt"
-
 # Suppress all schema+doc rule findings for deprecated/removed stubs.
 # File rules (frontmatter, file_check) still run.
 ignore_contents_check      = ["aws_kms_secret"]
@@ -179,7 +170,7 @@ swissshepherd --config .ci/swissshepherd.hcl
 
 ### List files
 
-Options ending in `_file` (`ignore_file_missing_file`, `ignore_targets_file`, `allow_subcategories_file`, etc.) read one entry per line. Empty lines and lines starting with `#` are ignored.
+Options ending in `_file` (`ignore_targets_file`, `allow_subcategories_file`, `ignore_missing_file`, etc.) read one entry per line. Empty lines and lines starting with `#` are ignored.
 
 ## Rules reference
 
@@ -187,127 +178,19 @@ Options ending in `_file` (`ignore_file_missing_file`, `ignore_targets_file`, `a
 
 | Rule | Kind | Description |
 |------|------|-------------|
-| `schema_docs` | per-target | Schema coverage, ordering, description style, heading style, format, labels, and bylines |
-| `title_section` | per-target | Level-1 heading validation |
-| `section_presence` | per-target | Required/forbidden section enforcement |
-| `timeouts_section` | per-target | Timeout actions match schema bidirectionally |
-| `import_section` | per-target | Import section style and structure |
 | `example_section` | per-target | Example code block validation |
-| `signature_section` | per-target | Function signature validation |
-| `region_argument` | per-target | Region argument presence for region-aware types |
-| `frontmatter` | per-file | YAML frontmatter field validation |
 | `file_check` | per-file | File size and extension validation |
 | `file_match` | global | File↔schema alignment: missing docs, orphan files, mixed layouts |
+| `frontmatter` | per-file | YAML frontmatter field validation |
+| `import_section` | per-target | Import section style and structure |
+| `region_argument` | per-target | Region argument presence for region-aware types |
+| `schema_docs` | per-target | Schema coverage, ordering, description style, heading style, format, labels, and bylines |
+| `section_presence` | per-target | Required/forbidden section enforcement |
+| `signature_section` | per-target | Function signature validation |
+| `timeouts_section` | per-target | Timeout actions match schema bidirectionally |
+| `title_section` | per-target | Level-1 heading validation |
 
 **Per-target** rules run once per (resource, data source, etc.) and compare schema against parsed markdown. **Per-file** rules run on raw file bytes. **Global** rules run once per invocation.
-
----
-
-### `schema_docs`
-
-The primary rule. Validates argument and attribute documentation against the provider schema.
-
-**Sub-checks** (all enabled by default; disable individually):
-
-| Sub-check | What it validates |
-|-----------|-------------------|
-| `coverage` | Every schema attr is documented; every documented attr exists in schema |
-| `ordering` | Attributes are alphabetical within required/optional groups |
-| `description` | Descriptions don't start with bad prefixes ("A ", "The ", "Specifies ", etc.) |
-| `heading` | Block headings match the preferred template style |
-| `format` | No code blocks in arg/attr sections; single-line attrs; uninterrupted lists |
-| `labels` | Arguments have (Required)/(Optional); attributes do not |
-| `byline` | First paragraph after section heading matches expected byline text (from type) |
-
-**Config:**
-
-```hcl
-check "schema_docs" {
-  # Sub-check toggles
-  coverage    = true
-  ordering    = true
-  description = true
-  heading     = true
-  format      = true
-  labels      = true
-  byline      = true
-
-  # Heading templates (see "Heading templates" section)
-  block_heading_styles           = ["`{Block}` Block", "{Block}", "{Title}"]
-  prefer_block_heading_styles = ["`{Block}` Block"]
-
-  # Coverage options
-  ignore_deprecated   = true                     # skip deprecated schema attrs
-  implicit_attributes = ["id", "tags_all"]       # never flagged as undocumented
-  allow_phantoms   = ["tags", "tags_all"]     # never flagged as phantom
-  skip_blocks         = ["timeouts"]             # blocks skipped entirely
-
-  # Description options
-  bad_prefixes = ["A ", "An ", "The ", "Specifies "]
-
-  # Format options
-  no_code_blocks       = true   # no fenced code blocks in arg/attr sections
-  single_line_attrs    = true   # each attribute on one line
-  uninterrupted_lists  = true   # no paragraphs between list items
-}
-```
-
----
-
-### `title_section`
-
-Validates the level-1 heading (`# Resource: aws_thing`).
-
-Checks:
-- Heading exists and is at level 1
-- Begins with an allowed `<Kind>: ` prefix (from `allow_prefixes` or the type's `title_prefix`)
-- No code blocks appear above the first `##` heading
-
-```hcl
-check "title_section" {
-  allow_prefixes = ["Resource", "Data Source", "Ephemeral", "Function"]
-}
-```
-
----
-
-### `section_presence`
-
-Enforces that required sections exist and forbidden sections are absent. Requirements come from the `type` block:
-
-- `require_attributes` = `"required"` / `"optional"` / `"forbidden"`
-- `require_import` = same
-- `require_timeouts` = same (overridden by schema: if schema has timeouts block, section is required regardless)
-- `require_signature` = same
-
-No check-level config — entirely driven by type definitions.
-
----
-
-### `timeouts_section`
-
-Validates that documented timeout actions match the schema bidirectionally:
-- Every schema timeout action must be documented
-- Every documented timeout action must exist in the schema
-
-No config options.
-
----
-
-### `import_section`
-
-Validates import section content and structure:
-- No passive voice ("can be imported" → use imperative)
-- No "e.g." (use "For example" or just show the example)
-- Code blocks present with correct types (`terraform` and `console`)
-- Correct ordering (terraform block before console block)
-- Identity-aware: when resource has identity schema, validates `### Identity Schema` subsection
-
-```hcl
-check "import_section" {
-  require_identity_section = true  # default: true
-}
-```
 
 ---
 
@@ -320,60 +203,6 @@ Validates example code blocks:
 ```hcl
 check "example_section" {
   allow_languages = ["terraform", "hcl"]  # default
-}
-```
-
----
-
-### `signature_section`
-
-Validates function signature documentation:
-- Signature code block is present
-- Contains the function name
-- Contains all schema parameter names
-
-No config options.
-
----
-
-### `region_argument`
-
-Validates that region-aware resources document the `region` argument. Only fires for types with `region_aware = true` in their type block (resources, data sources, ephemerals by default).
-
-```hcl
-check "region_argument" {
-  ignore_resources      = ["aws_global_accelerator"]
-  ignore_resources_file = "website/ignore-region.txt"
-}
-```
-
----
-
-### `frontmatter`
-
-Validates YAML frontmatter at the top of each doc file. Requirements can come from both the check block (global) and the type block (per-type via `frontmatter_require` / `frontmatter_forbid`). Both sources are merged — a field required by either is enforced.
-
-```hcl
-check "frontmatter" {
-  # Require fields to be present
-  require_subcategory = true
-  require_page_title  = true
-  require_description = true
-  require_layout      = false  # legacy layout only
-
-  # Forbid fields from being present
-  forbid_subcategory    = false
-  forbid_page_title     = false
-  forbid_description    = false
-  forbid_layout         = true   # registry layout
-  forbid_sidebar_current = true  # always forbidden in modern docs
-
-  # Subcategory allowlist (empty = anything goes)
-  allow_subcategories      = ["S3", "VPC", "IAM"]
-  allow_subcategories_file = "website/allowed-subcategories.txt"
-
-  # Targets where subcategory: "" is acceptable
-  allow_empty_subcategory_targets = ["arn_build", "arn_parse"]
 }
 ```
 
@@ -413,7 +242,169 @@ check "file_match" {
 }
 ```
 
-The top-level `ignore_file_missing` and `ignore_file_mismatch` options are also supported for backward compatibility and are merged into `ignore_missing` / `ignore_extra` respectively.
+The `ignore_missing` and `ignore_extra` lists suppress findings for specific targets. Use `ignore_missing_file` / `ignore_extra_file` for file-based lists.
+
+---
+
+### `frontmatter`
+
+Validates YAML frontmatter at the top of each doc file. Requirements can come from both the check block (global) and the type block (per-type via `frontmatter_require` / `frontmatter_forbid`). Both sources are merged — a field required by either is enforced.
+
+```hcl
+check "frontmatter" {
+  # Require fields to be present
+  require_subcategory = true
+  require_page_title  = true
+  require_description = true
+  require_layout      = false  # legacy layout only
+
+  # Forbid fields from being present
+  forbid_subcategory    = false
+  forbid_page_title     = false
+  forbid_description    = false
+  forbid_layout         = true   # registry layout
+  forbid_sidebar_current = true  # always forbidden in modern docs
+
+  # Subcategory allowlist (empty = anything goes)
+  allow_subcategories      = ["S3", "VPC", "IAM"]
+  allow_subcategories_file = "website/allowed-subcategories.txt"
+
+  # Targets where subcategory: "" is acceptable
+  allow_empty_subcategory_targets = ["arn_build", "arn_parse"]
+}
+```
+
+---
+
+### `import_section`
+
+Validates import section content and structure:
+- No passive voice ("can be imported" → use imperative)
+- No "e.g." (use "For example" or just show the example)
+- Code blocks present with correct types (`terraform` and `console`)
+- Correct ordering (terraform block before console block)
+- Identity-aware: when resource has identity schema, validates `### Identity Schema` subsection
+
+```hcl
+check "import_section" {
+  require_identity_section = true  # default: true
+}
+```
+
+---
+
+### `region_argument`
+
+Validates that region-aware resources document the `region` argument. Only fires for types with `region_aware = true` in their type block (resources, data sources, ephemerals by default).
+
+```hcl
+check "region_argument" {
+  ignore_resources      = ["aws_global_accelerator"]
+  ignore_resources_file = "website/ignore-region.txt"
+}
+```
+
+---
+
+### `schema_docs`
+
+The primary rule. Validates argument and attribute documentation against the provider schema.
+
+**Sub-checks** (all enabled by default; disable individually):
+
+| Sub-check | What it validates |
+|-----------|-------------------|
+| `byline` | First paragraph after section heading matches expected byline text (from type) |
+| `coverage` | Every schema attr is documented; every documented attr exists in schema |
+| `description` | Descriptions don't start with bad prefixes ("A ", "The ", "Specifies ", etc.) |
+| `format` | No code blocks in arg/attr sections; single-line attrs; uninterrupted lists |
+| `heading` | Block headings match the preferred template style |
+| `labels` | Arguments have (Required)/(Optional); attributes do not |
+| `ordering` | Attributes are alphabetical within required/optional groups |
+
+**Config:**
+
+```hcl
+check "schema_docs" {
+  # Sub-check toggles
+  byline      = true
+  coverage    = true
+  description = true
+  format      = true
+  heading     = true
+  labels      = true
+  ordering    = true
+
+  # Heading templates (see "Heading templates" section)
+  block_heading_styles           = ["`{Block}` Block", "{Block}", "{Title}"]
+  prefer_block_heading_styles = ["`{Block}` Block"]
+
+  # Coverage options
+  ignore_deprecated   = true                     # skip deprecated schema attrs
+  implicit_attributes = ["id", "tags_all"]       # never flagged as undocumented
+  allow_phantoms   = ["tags", "tags_all"]     # never flagged as phantom
+  skip_blocks         = ["timeouts"]             # blocks skipped entirely
+
+  # Description options
+  bad_prefixes = ["A ", "An ", "The ", "Specifies "]
+
+  # Format options
+  no_code_blocks       = true   # no fenced code blocks in arg/attr sections
+  single_line_attrs    = true   # each attribute on one line
+  uninterrupted_lists  = true   # no paragraphs between list items
+}
+```
+
+---
+
+### `section_presence`
+
+Enforces that required sections exist and forbidden sections are absent. Requirements come from the `type` block:
+
+- `require_attributes` = `"required"` / `"optional"` / `"forbidden"`
+- `require_import` = same
+- `require_timeouts` = same (overridden by schema: if schema has timeouts block, section is required regardless)
+- `require_signature` = same
+
+No check-level config — entirely driven by type definitions.
+
+---
+
+### `signature_section`
+
+Validates function signature documentation:
+- Signature code block is present
+- Contains the function name
+- Contains all schema parameter names
+
+No config options.
+
+---
+
+### `timeouts_section`
+
+Validates that documented timeout actions match the schema bidirectionally:
+- Every schema timeout action must be documented
+- Every documented timeout action must exist in the schema
+
+No config options.
+
+---
+
+### `title_section`
+
+Validates the level-1 heading (`# Resource: aws_thing`).
+
+Checks:
+- Heading exists and is at level 1
+- Begins with an allowed `<Kind>: ` prefix (from `allow_prefixes` or the type's `title_prefix`)
+- No code blocks appear above the first `##` heading
+
+```hcl
+check "title_section" {
+  allow_prefixes = ["Resource", "Data Source", "Ephemeral", "Function"]
+}
+```
 
 ## Path scoping
 
@@ -434,6 +425,20 @@ check "schema_docs" {
   ignore_prefixes     = ["aws_appstream"]
 }
 ```
+
+All four name-axis fields (`prefixes`, `targets`, `ignore_targets`, `ignore_prefixes`) support **type/name notation** for type-scoped entries:
+
+```hcl
+check "schema_docs" {
+  # Only match aws_thing when it's a data source, not a resource
+  ignore_targets = ["data_source/aws_thing"]
+
+  # Only match aws_s3_ prefixed data sources
+  prefixes = ["data_source/aws_s3_"]
+}
+```
+
+Plain entries (no `/`) match any type. Qualified entries (`type/name` or `type/prefix`) only match when the type matches.
 
 **Evaluation order:**
 
