@@ -441,7 +441,7 @@ func TestRunner_FunctionTargetGetsNilSchema(t *testing.T) {
 		&check.SchemaDocsRule{},
 		&check.SchemaDocsRule{},
 		&check.SchemaDocsRule{Preferred: doc.HeadingTemplates{"`{Block}` Block"}},
-		&check.TitleSectionRule{AllowedPrefixes: []string{"Function"}},
+		&check.TitleSectionRule{AllowPrefixes: []string{"Function"}},
 	)
 
 	// Must not panic. Result content doesn't matter — just survival.
@@ -592,15 +592,15 @@ func TestRunner_RuleScope_TargetsAppliesToExactNames(t *testing.T) {
 	}
 }
 
-// TestRunner_RuleScope_IgnoredTargetsSubtracts confirms IgnoredTargets wins
+// TestRunner_RuleScope_IgnoreTargetsSubtracts confirms IgnoreTargets wins
 // over the include-lists. The user has a broad prefix but wants one name
 // exempted during the migration window.
-func TestRunner_RuleScope_IgnoredTargetsSubtracts(t *testing.T) {
+func TestRunner_RuleScope_IgnoreTargetsSubtracts(t *testing.T) {
 	t.Parallel()
 
 	f := newRunnerFixtureWithCheck(t, "scoped_rule", config.CheckConfig{
-		Prefixes:       []string{"test_s3_"},
-		IgnoredTargets: []string{"test_s3_bucket_legacy"},
+		Prefixes:      []string{"test_s3_"},
+		IgnoreTargets: []string{"test_s3_bucket_legacy"},
 	})
 
 	f.addTarget(t, "resource", "test_s3_bucket")

@@ -18,9 +18,9 @@ import (
 // present in provider docs and don't need explicit documentation entries.
 var DefaultImplicitAttributes = []string{"id", "tags_all"}
 
-// DefaultPhantomAllowlist are attribute names that may appear in docs without
+// DefaultAllowPhantoms are attribute names that may appear in docs without
 // a corresponding schema entry (provider-injected attributes).
-var DefaultPhantomAllowlist = []string{"tags", "tags_all"}
+var DefaultAllowPhantoms = []string{"tags", "tags_all"}
 
 // DefaultSkipBlocks are block names that are always skipped.
 var DefaultSkipBlocks = []string{"timeouts"}
@@ -42,7 +42,7 @@ type SchemaDocsRule struct {
 	// Coverage options
 	IgnoreDeprecated   bool
 	ImplicitAttributes []string
-	PhantomAllowlist   []string
+	AllowPhantoms      []string
 	SkipBlocks         []string
 
 	// Sub-check toggles (nil = enabled)
@@ -52,6 +52,7 @@ type SchemaDocsRule struct {
 	Heading     *bool
 	Format      *bool
 	Labels      *bool
+	Byline      *bool
 
 	// Description options
 	BadPrefixes []string
@@ -75,10 +76,10 @@ func (r *SchemaDocsRule) implicit() []string {
 }
 
 func (r *SchemaDocsRule) phantom() []string {
-	if r.PhantomAllowlist != nil {
-		return r.PhantomAllowlist
+	if r.AllowPhantoms != nil {
+		return r.AllowPhantoms
 	}
-	return DefaultPhantomAllowlist
+	return DefaultAllowPhantoms
 }
 
 func (r *SchemaDocsRule) skipBlocks() []string {
@@ -117,6 +118,9 @@ func (r *SchemaDocsRule) Check(ctx CheckContext) []Result {
 	}
 	if enabled(r.Labels) {
 		results = append(results, r.checkLabels(ctx)...)
+	}
+	if enabled(r.Byline) {
+		results = append(results, r.checkBylines(ctx)...)
 	}
 
 	return results
@@ -719,4 +723,55 @@ func truncate(s string, max int) string {
 		return s
 	}
 	return s[:max] + "..."
+}
+
+// --- Byline ---
+
+// checkBylines validates that the first paragraph after ## Argument Reference
+// and ## Attribute Reference matches one of the expected byline texts defined
+// in the type block.
+func (r *SchemaDocsRule) checkBylines(ctx CheckContext) []Result {
+	if ctx.Type == nil || ctx.Doc == nil {
+		return nil
+	}
+
+	var results []Result
+
+	// Arguments byline.
+	if len(ctx.Type.ArgumentsBylines) > 0 && ctx.Doc.Sections.Arguments != nil {
+		results = append(results, r.checkSectionByline(ctx, ctx.Doc.Sections.Arguments, ctx.Type.ArgumentsBylines, ctx.Type.AllowMissingArgumentsByline, "Argument Reference")...)
+	}
+
+	// Attributes byline.
+	if len(ctx.Type.AttributesBylines) > 0 && ctx.Doc.Sections.Attributes != nil {
+		results = append(results, r.checkSectionByline(ctx, ctx.Doc.Sections.Attributes, ctx.Type.AttributesBylines, false, "Attribute Reference")...)
+	}
+
+	return results
+}
+
+func (r *SchemaDocsRule) checkSectionByline(ctx CheckContext, section *doc.Section, expected []string, allowMissing bool, sectionName string) []Result {
+	if len(section.Paragraphs) == 0 {
+		if !allowMissing {
+			return []Result{{
+				Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityWarning,
+				Message: fmt.Sprintf("%s section is missing a byline paragraph", sectionName),
+			}}
+		}
+		return nil
+	}
+
+	// Get the text of the first paragraph.
+	source := ctx.Doc.Source()
+	firstPara := section.Paragraphs[0]
+	paraText := strings.TrimSpace(string(firstPara.Text(source)))
+
+	if slices.Contains(expected, paraText) {
+		return nil
+	}
+
+	return []Result{{
+		Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityWarning,
+		Message: fmt.Sprintf("%s byline %q does not match expected texts", sectionName, truncate(paraText, 80)),
+	}}
 }

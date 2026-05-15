@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"slices"
 
+	"github.com/YakDriver/swissshepherd/internal/config"
 	"gopkg.in/yaml.v3"
 )
 
@@ -17,7 +18,7 @@ import (
 // coverage and error shapes are chosen to find the same problems.
 //
 // All require/forbid toggles default to false so the rule is inert until
-// configured. AllowedSubcategories, when non-empty, restricts the set of valid
+// configured. AllowSubcategories, when non-empty, restricts the set of valid
 // subcategory values; an empty slice means "any subcategory is fine".
 type FrontmatterRule struct {
 	RequireSubcategory   bool
@@ -30,7 +31,7 @@ type FrontmatterRule struct {
 	ForbidLayout         bool
 	ForbidSidebarCurrent bool
 
-	AllowedSubcategories []string
+	AllowSubcategories []string
 	// AllowEmptySubcategoryTargets lists target names for which subcategory: ""
 	// is treated as absent (skips the allowlist check). Use for doc types such
 	// as functions that legitimately carry no subcategory.
@@ -47,7 +48,7 @@ func (r *FrontmatterRule) CheckFile(ctx FileCheckContext) []Result {
 	resource := ctx.Resource
 	block, ok := extractFrontmatter(ctx.Content)
 	if !ok {
-		return r.missingFrontmatterResults(resource)
+		return r.missingFrontmatterResults(resource, ctx.Type)
 	}
 
 	var fm frontmatter
@@ -60,12 +61,12 @@ func (r *FrontmatterRule) CheckFile(ctx FileCheckContext) []Result {
 		}}
 	}
 
-	return r.checkFields(resource, &fm)
+	return r.checkFields(resource, &fm, ctx.Type)
 }
 
 // missingFrontmatterResults produces one error per RequireX toggle when the
 // file has no frontmatter block at all.
-func (r *FrontmatterRule) missingFrontmatterResults(resource string) []Result {
+func (r *FrontmatterRule) missingFrontmatterResults(resource string, t *config.Type) []Result {
 	var results []Result
 	add := func(field string) {
 		results = append(results, Result{
@@ -75,16 +76,16 @@ func (r *FrontmatterRule) missingFrontmatterResults(resource string) []Result {
 			Message:  fmt.Sprintf("YAML frontmatter missing required %s (no frontmatter block found)", field),
 		})
 	}
-	if r.RequireSubcategory {
+	if r.RequireSubcategory || r.typeRequires(t, "subcategory") {
 		add("subcategory")
 	}
-	if r.RequirePageTitle {
+	if r.RequirePageTitle || r.typeRequires(t, "page_title") {
 		add("page_title")
 	}
-	if r.RequireDescription {
+	if r.RequireDescription || r.typeRequires(t, "description") {
 		add("description")
 	}
-	if r.RequireLayout {
+	if r.RequireLayout || r.typeRequires(t, "layout") {
 		add("layout")
 	}
 	return results
@@ -93,7 +94,7 @@ func (r *FrontmatterRule) missingFrontmatterResults(resource string) []Result {
 // checkFields validates an already-parsed frontmatter struct against every
 // configured toggle. It aggregates results rather than short-circuiting so a
 // single run surfaces every problem.
-func (r *FrontmatterRule) checkFields(resource string, fm *frontmatter) []Result {
+func (r *FrontmatterRule) checkFields(resource string, fm *frontmatter, t *config.Type) []Result {
 	var results []Result
 	fail := func(msg string) {
 		results = append(results, Result{
@@ -109,10 +110,10 @@ func (r *FrontmatterRule) checkFields(resource string, fm *frontmatter) []Result
 		have  bool
 		field string
 	}{
-		{r.RequireSubcategory, fm.has("subcategory"), "subcategory"},
-		{r.RequirePageTitle, fm.has("page_title"), "page_title"},
-		{r.RequireDescription, fm.has("description"), "description"},
-		{r.RequireLayout, fm.has("layout"), "layout"},
+		{r.RequireSubcategory || r.typeRequires(t, "subcategory"), fm.has("subcategory"), "subcategory"},
+		{r.RequirePageTitle || r.typeRequires(t, "page_title"), fm.has("page_title"), "page_title"},
+		{r.RequireDescription || r.typeRequires(t, "description"), fm.has("description"), "description"},
+		{r.RequireLayout || r.typeRequires(t, "layout"), fm.has("layout"), "layout"},
 	}
 	for _, rr := range requireRules {
 		if rr.want && !rr.have {
@@ -125,11 +126,11 @@ func (r *FrontmatterRule) checkFields(resource string, fm *frontmatter) []Result
 		have  bool
 		field string
 	}{
-		{r.ForbidSubcategory, fm.has("subcategory"), "subcategory"},
-		{r.ForbidPageTitle, fm.has("page_title"), "page_title"},
-		{r.ForbidDescription, fm.has("description"), "description"},
-		{r.ForbidLayout, fm.has("layout"), "layout"},
-		{r.ForbidSidebarCurrent, fm.has("sidebar_current"), "sidebar_current"},
+		{r.ForbidSubcategory || r.typeForbids(t, "subcategory"), fm.has("subcategory"), "subcategory"},
+		{r.ForbidPageTitle || r.typeForbids(t, "page_title"), fm.has("page_title"), "page_title"},
+		{r.ForbidDescription || r.typeForbids(t, "description"), fm.has("description"), "description"},
+		{r.ForbidLayout || r.typeForbids(t, "layout"), fm.has("layout"), "layout"},
+		{r.ForbidSidebarCurrent || r.typeForbids(t, "sidebar_current"), fm.has("sidebar_current"), "sidebar_current"},
 	}
 	for _, fr := range forbidRules {
 		if fr.want && fr.have {
@@ -137,14 +138,28 @@ func (r *FrontmatterRule) checkFields(resource string, fm *frontmatter) []Result
 		}
 	}
 
-	if len(r.AllowedSubcategories) > 0 && fm.has("subcategory") {
+	if len(r.AllowSubcategories) > 0 && fm.has("subcategory") {
 		emptyOK := fm.Subcategory == "" && slices.Contains(r.AllowEmptySubcategoryTargets, resource)
-		if !emptyOK && !slices.Contains(r.AllowedSubcategories, fm.Subcategory) {
+		if !emptyOK && !slices.Contains(r.AllowSubcategories, fm.Subcategory) {
 			fail(fmt.Sprintf("YAML frontmatter subcategory %q is not in the allowed list", fm.Subcategory))
 		}
 	}
 
 	return results
+}
+
+func (r *FrontmatterRule) typeRequires(t *config.Type, field string) bool {
+	if t == nil {
+		return false
+	}
+	return slices.Contains(t.FrontmatterRequire, field)
+}
+
+func (r *FrontmatterRule) typeForbids(t *config.Type, field string) bool {
+	if t == nil {
+		return false
+	}
+	return slices.Contains(t.FrontmatterForbid, field)
 }
 
 // frontmatter models the five frontmatter fields swissshepherd cares about.

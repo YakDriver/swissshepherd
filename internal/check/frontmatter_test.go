@@ -134,7 +134,7 @@ func TestFrontmatterRule_Forbid(t *testing.T) {
 	}
 }
 
-func TestFrontmatterRule_AllowedSubcategories(t *testing.T) {
+func TestFrontmatterRule_AllowSubcategories(t *testing.T) {
 	t.Parallel()
 
 	tests := map[string]struct {
@@ -181,7 +181,7 @@ func TestFrontmatterRule_AllowedSubcategories(t *testing.T) {
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			rule := &check.FrontmatterRule{AllowedSubcategories: tt.allowed, AllowEmptySubcategoryTargets: tt.allowEmptySubcatFor}
+			rule := &check.FrontmatterRule{AllowSubcategories: tt.allowed, AllowEmptySubcategoryTargets: tt.allowEmptySubcatFor}
 			results := rule.CheckFile(check.FileCheckContext{Resource: "test_instance", Path: "test.md", Content: []byte(tt.content)})
 			assertMessage(t, results, tt.wantMsg)
 		})

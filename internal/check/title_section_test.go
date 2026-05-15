@@ -137,7 +137,7 @@ func TestTitleSectionRule_MultipleFailures(t *testing.T) {
 	}
 }
 
-func TestTitleSectionRule_CustomAllowedPrefixes(t *testing.T) {
+func TestTitleSectionRule_CustomAllowPrefixes(t *testing.T) {
 	t.Parallel()
 
 	tests := map[string]struct {
@@ -170,7 +170,7 @@ func TestTitleSectionRule_CustomAllowedPrefixes(t *testing.T) {
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			rule := &check.TitleSectionRule{AllowedPrefixes: tt.prefixes}
+			rule := &check.TitleSectionRule{AllowPrefixes: tt.prefixes}
 			results := rule.Check(check.CheckContext{Resource: "test_instance", Schema: nil, Doc: parseDoc(t, tt.source)})
 
 			if tt.wantPass && len(results) != 0 {

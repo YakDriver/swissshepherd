@@ -182,7 +182,7 @@ func runCheck(cmd *cobra.Command, args []string) error {
 		rules = append(rules, &check.SchemaDocsRule{
 			IgnoreDeprecated:   cc.IgnoreDeprecated == nil || *cc.IgnoreDeprecated,
 			ImplicitAttributes: cc.ImplicitAttributes,
-			PhantomAllowlist:   cc.PhantomAllowlist,
+			AllowPhantoms:      cc.AllowPhantoms,
 			SkipBlocks:         cc.SkipBlocks,
 			Coverage:           cc.Coverage,
 			Ordering:           cc.Ordering,
@@ -190,6 +190,7 @@ func runCheck(cmd *cobra.Command, args []string) error {
 			Heading:            cc.Heading,
 			Format:             cc.Format,
 			Labels:             cc.Labels,
+			Byline:             cc.Byline,
 			BadPrefixes:        cc.BadPrefixes,
 			Preferred:          preferredHeadingTemplates(cfg),
 			NoCodeBlocks:       cc.NoCodeBlocks,
@@ -199,7 +200,7 @@ func runCheck(cmd *cobra.Command, args []string) error {
 	}
 	if cfg.IsCheckEnabled("title_section") {
 		rules = append(rules, &check.TitleSectionRule{
-			AllowedPrefixes: cfg.GetCheck("title_section").AllowedPrefixes,
+			AllowPrefixes: cfg.GetCheck("title_section").AllowPrefixes,
 		})
 	}
 	if cfg.IsCheckEnabled("section_presence") {
@@ -215,14 +216,28 @@ func runCheck(cmd *cobra.Command, args []string) error {
 	}
 	if cfg.IsCheckEnabled("example_section") {
 		rules = append(rules, &check.ExampleSectionRule{
-			AllowedLanguages: cfg.GetCheck("example_section").AllowedLanguages,
+			AllowLanguages: cfg.GetCheck("example_section").AllowLanguages,
 		})
 	}
 	if cfg.IsCheckEnabled("signature_section") {
 		rules = append(rules, &check.SignatureSectionRule{})
 	}
+	if cfg.IsCheckEnabled("region_argument") {
+		cc := cfg.GetCheck("region_argument")
+		rules = append(rules, &check.RegionArgumentRule{
+			IgnoreResources: cc.IgnoreResources,
+		})
+	}
 	if cfg.IsCheckEnabled("frontmatter") {
 		fileRules = append(fileRules, frontmatterRule(cfg))
+	}
+	if cfg.IsCheckEnabled("file_check") {
+		cc := cfg.GetCheck("file_check")
+		fileRules = append(fileRules, &check.FileCheckRule{
+			MaxSize:                 cc.MaxFileSize,
+			AllowExtensions:         cc.AllowExtensions,
+			AllowRegistryExtensions: cc.AllowRegistryExtensions,
+		})
 	}
 
 	runner := &check.Runner{
@@ -246,16 +261,34 @@ func runCheck(cmd *cobra.Command, args []string) error {
 	// prefix; --type additionally scopes by type. Providing neither runs
 	// every rule against every enumerable target.
 	var results []check.Result
+
+	// Global checks (run once, not per-target).
+	if cfg.IsCheckEnabled("file_match") {
+		cc := cfg.GetCheck("file_match")
+		// Merge top-level ignore lists into the check's lists for backward compat.
+		ignoreMissing := append(cc.IgnoreMissing, cfg.IgnoreFileMissing...)
+		ignoreExtra := append(cc.IgnoreExtra, cfg.IgnoreFileMismatch...)
+		fmRule := &check.FileMatchRule{
+			RequireDoc:    cc.RequireDoc,
+			RequireSchema: cc.RequireSchema,
+			MixedLayout:   cc.MixedLayout,
+			IgnoreMissing: ignoreMissing,
+			IgnoreExtra:   ignoreExtra,
+		}
+		results = append(results, fmRule.Check(cfg, ps)...)
+	}
+
 	switch {
 	case target != "":
-		results, err = runner.RunOne(target, targetType)
-		if err != nil {
-			return err
+		res, runErr := runner.RunOne(target, targetType)
+		if runErr != nil {
+			return runErr
 		}
+		results = append(results, res...)
 	case prefix != "" || targetType != "":
-		results = runner.RunPrefix(prefix, targetType)
+		results = append(results, runner.RunPrefix(prefix, targetType)...)
 	default:
-		results = runner.RunAll()
+		results = append(results, runner.RunAll()...)
 	}
 
 	// Output results
@@ -314,8 +347,8 @@ func headingTemplates(cfg *config.Config) doc.HeadingTemplates {
 
 func preferredHeadingTemplates(cfg *config.Config) doc.HeadingTemplates {
 	checkCfg := cfg.GetCheck("schema_docs")
-	if len(checkCfg.PreferredBlockHeadingStyles) > 0 {
-		return doc.HeadingTemplates(checkCfg.PreferredBlockHeadingStyles)
+	if len(checkCfg.PreferBlockHeadingStyles) > 0 {
+		return doc.HeadingTemplates(checkCfg.PreferBlockHeadingStyles)
 	}
 	return nil
 }
@@ -334,7 +367,7 @@ func frontmatterRule(cfg *config.Config) *check.FrontmatterRule {
 		ForbidDescription:            cc.ForbidDescription,
 		ForbidLayout:                 cc.ForbidLayout,
 		ForbidSidebarCurrent:         cc.ForbidSidebarCurrent,
-		AllowedSubcategories:         cc.AllowedSubcategories,
+		AllowSubcategories:           cc.AllowSubcategories,
 		AllowEmptySubcategoryTargets: cc.AllowEmptySubcategoryTargets,
 	}
 }
@@ -359,8 +392,8 @@ func logEnabledChecks(logger *slog.Logger, cfg *config.Config, rules []check.Rul
 		if len(cc.Targets) > 0 {
 			attrs = append(attrs, "targets", fmt.Sprintf("%d entries", len(cc.Targets)))
 		}
-		if len(cc.IgnoredTargets) > 0 {
-			attrs = append(attrs, "ignored", fmt.Sprintf("%d entries", len(cc.IgnoredTargets)))
+		if len(cc.IgnoreTargets) > 0 {
+			attrs = append(attrs, "ignored", fmt.Sprintf("%d entries", len(cc.IgnoreTargets)))
 		}
 		logger.Info("  check", attrs...)
 	}

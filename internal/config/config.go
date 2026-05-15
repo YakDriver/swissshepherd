@@ -31,6 +31,12 @@ type Config struct {
 	IgnoreFileMissing     []string `hcl:"ignore_file_missing,optional"`
 	IgnoreFileMissingFile string   `hcl:"ignore_file_missing_file,optional"`
 
+	// IgnoreFileMismatch suppresses "doc file has no matching resource"
+	// findings for the listed target names. Useful for docs that cover
+	// removed resources or provider-internal pages.
+	IgnoreFileMismatch     []string `hcl:"ignore_file_mismatch,optional"`
+	IgnoreFileMismatchFile string   `hcl:"ignore_file_mismatch_file,optional"`
+
 	// IgnoreContentsCheck suppresses all schema+doc rule findings for the
 	// listed target names. Useful for deprecated/removed resources whose docs
 	// are intentionally minimal stubs.
@@ -62,10 +68,10 @@ type CheckConfig struct {
 	// Default: ["`{Block}` Block", "{Block} Block", "`{Block}`", "{Block}", "{Title}"]
 	BlockHeadingStyles []string `hcl:"block_heading_styles,optional"`
 
-	// PreferredBlockHeadingStyles defines the target heading format(s).
+	// PreferBlockHeadingStyles defines the target heading format(s).
 	// When a block heading matches an accepted style but not a preferred style,
 	// a warning is emitted suggesting the preferred format.
-	PreferredBlockHeadingStyles []string `hcl:"preferred_block_heading_styles,optional"`
+	PreferBlockHeadingStyles []string `hcl:"prefer_block_heading_styles,optional"`
 
 	// Path scoping — control which targets this check applies to.
 	// Empty lists mean "all". When multiple allowlists are set, a target
@@ -77,17 +83,17 @@ type CheckConfig struct {
 	//     lists are OR'd together; they're two ways of saying "include
 	//     these names".)
 	//
-	// IgnoredTargets subtracts unconditionally: a name in IgnoredTargets is
-	// never checked even when allowlists include it. IgnoredTargetsFile is
+	// IgnoreTargets subtracts unconditionally: a name in IgnoreTargets is
+	// never checked even when allowlists include it. IgnoreTargetsFile is
 	// the file form of the same list (one name per line; '#' starts a
 	// comment; relative paths resolve against CWD like every other _file
 	// option).
-	Types              []string `hcl:"types,optional"`
-	Prefixes           []string `hcl:"prefixes,optional"`
-	Targets            []string `hcl:"targets,optional"`
-	IgnoredTargets     []string `hcl:"ignored_targets,optional"`
-	IgnoredTargetsFile string   `hcl:"ignored_targets_file,optional"`
-	IgnoredPrefixes    []string `hcl:"ignored_prefixes,optional"`
+	Types             []string `hcl:"types,optional"`
+	Prefixes          []string `hcl:"prefixes,optional"`
+	Targets           []string `hcl:"targets,optional"`
+	IgnoreTargets     []string `hcl:"ignore_targets,optional"`
+	IgnoreTargetsFile string   `hcl:"ignore_targets_file,optional"`
+	IgnorePrefixes    []string `hcl:"ignore_prefixes,optional"`
 
 	// Frontmatter rule options. Set require_* to fail when a field is absent;
 	// set forbid_* to fail when it is present. A field covered by both require
@@ -106,21 +112,21 @@ type CheckConfig struct {
 	// frontmatter subcategory value outside this list is reported. The allowlist
 	// only fires when subcategory is actually present in the file — pair with
 	// require_subcategory if absence should also fail.
-	AllowedSubcategories         []string `hcl:"allowed_subcategories,optional"`
-	AllowedSubcategoriesFile     string   `hcl:"allowed_subcategories_file,optional"`
+	AllowSubcategories           []string `hcl:"allow_subcategories,optional"`
+	AllowSubcategoriesFile       string   `hcl:"allow_subcategories_file,optional"`
 	AllowEmptySubcategoryTargets []string `hcl:"allow_empty_subcategory_targets,optional"`
 
 	// TitleSection rule options.
 	//
-	// AllowedPrefixes replaces the default set of permitted level-1 heading
+	// AllowPrefixes replaces the default set of permitted level-1 heading
 	// prefixes ("Action", "Data Source", "Ephemeral", "Function",
 	// "List Resource", "Resource"). Leave empty to use the default.
-	AllowedPrefixes []string `hcl:"allowed_prefixes,optional"`
+	AllowPrefixes []string `hcl:"allow_prefixes,optional"`
 
 	// Completeness rule options.
 	IgnoreDeprecated   *bool    `hcl:"ignore_deprecated,optional"`
 	ImplicitAttributes []string `hcl:"implicit_attributes,optional"`
-	PhantomAllowlist   []string `hcl:"phantom_allowlist,optional"`
+	AllowPhantoms      []string `hcl:"allow_phantoms,optional"`
 	SkipBlocks         []string `hcl:"skip_blocks,optional"`
 
 	// DescriptionStyle rule options.
@@ -138,12 +144,34 @@ type CheckConfig struct {
 	Heading     *bool `hcl:"heading,optional"`
 	Format      *bool `hcl:"format,optional"`
 	Labels      *bool `hcl:"labels,optional"`
+	Byline      *bool `hcl:"byline,optional"`
 
 	// ImportSection rule options.
 	RequireIdentitySection *bool `hcl:"require_identity_section,optional"`
 
 	// ExampleSection rule options.
-	AllowedLanguages []string `hcl:"allowed_languages,optional"`
+	AllowLanguages []string `hcl:"allow_languages,optional"`
+
+	// FileCheck rule options.
+	MaxFileSize             int64    `hcl:"max_file_size,optional"`
+	AllowExtensions         []string `hcl:"allow_extensions,optional"`
+	AllowRegistryExtensions []string `hcl:"allow_registry_extensions,optional"`
+
+	// DirectoryLayout rule options.
+	IgnoreCdktf bool `hcl:"ignore_cdktf,optional"`
+
+	// FileMatch rule options.
+	RequireDoc        *bool    `hcl:"require_doc,optional"`
+	RequireSchema     *bool    `hcl:"require_schema,optional"`
+	MixedLayout       *bool    `hcl:"mixed_layout,optional"`
+	IgnoreMissing     []string `hcl:"ignore_missing,optional"`
+	IgnoreMissingFile string   `hcl:"ignore_missing_file,optional"`
+	IgnoreExtra       []string `hcl:"ignore_extra,optional"`
+	IgnoreExtraFile   string   `hcl:"ignore_extra_file,optional"`
+
+	// RegionArgument rule options.
+	IgnoreResources     []string `hcl:"ignore_resources,optional"`
+	IgnoreResourcesFile string   `hcl:"ignore_resources_file,optional"`
 }
 
 // AppliesTo reports whether this check's path-scoping admits the given
@@ -151,7 +179,7 @@ type CheckConfig struct {
 //
 // Semantics:
 //
-//  1. IgnoredTargets wins unconditionally — a listed name is always
+//  1. IgnoreTargets wins unconditionally — a listed name is always
 //     excluded.
 //  2. When Types is non-empty, typeName must be in it.
 //  3. When either Prefixes or Targets is non-empty, the name must satisfy
@@ -162,10 +190,10 @@ type CheckConfig struct {
 // so each check can roll out independently across a large provider (the
 // service-by-service migration the phase-3 design was built for).
 func (c CheckConfig) AppliesTo(name, typeName string) bool {
-	if slices.Contains(c.IgnoredTargets, name) {
+	if slices.Contains(c.IgnoreTargets, name) {
 		return false
 	}
-	for _, p := range c.IgnoredPrefixes {
+	for _, p := range c.IgnorePrefixes {
 		if strings.HasPrefix(name, p) {
 			return false
 		}
@@ -312,19 +340,19 @@ func (c *Config) ProviderName() string {
 func (c *Config) resolveFiles() error {
 	for i := range c.Checks {
 		ch := &c.Checks[i]
-		if ch.IgnoredTargetsFile != "" {
-			lines, err := readLines(ch.IgnoredTargetsFile)
+		if ch.IgnoreTargetsFile != "" {
+			lines, err := readLines(ch.IgnoreTargetsFile)
 			if err != nil {
 				return err
 			}
-			ch.IgnoredTargets = append(ch.IgnoredTargets, lines...)
+			ch.IgnoreTargets = append(ch.IgnoreTargets, lines...)
 		}
-		if ch.AllowedSubcategoriesFile != "" {
-			lines, err := readLines(ch.AllowedSubcategoriesFile)
+		if ch.AllowSubcategoriesFile != "" {
+			lines, err := readLines(ch.AllowSubcategoriesFile)
 			if err != nil {
 				return err
 			}
-			ch.AllowedSubcategories = append(ch.AllowedSubcategories, lines...)
+			ch.AllowSubcategories = append(ch.AllowSubcategories, lines...)
 		}
 	}
 
@@ -342,6 +370,39 @@ func (c *Config) resolveFiles() error {
 			return err
 		}
 		c.IgnoreContentsCheck = append(c.IgnoreContentsCheck, lines...)
+	}
+
+	if c.IgnoreFileMismatchFile != "" {
+		lines, err := readLines(c.IgnoreFileMismatchFile)
+		if err != nil {
+			return err
+		}
+		c.IgnoreFileMismatch = append(c.IgnoreFileMismatch, lines...)
+	}
+
+	for i := range c.Checks {
+		ch := &c.Checks[i]
+		if ch.IgnoreResourcesFile != "" {
+			lines, err := readLines(ch.IgnoreResourcesFile)
+			if err != nil {
+				return err
+			}
+			ch.IgnoreResources = append(ch.IgnoreResources, lines...)
+		}
+		if ch.IgnoreMissingFile != "" {
+			lines, err := readLines(ch.IgnoreMissingFile)
+			if err != nil {
+				return err
+			}
+			ch.IgnoreMissing = append(ch.IgnoreMissing, lines...)
+		}
+		if ch.IgnoreExtraFile != "" {
+			lines, err := readLines(ch.IgnoreExtraFile)
+			if err != nil {
+				return err
+			}
+			ch.IgnoreExtra = append(ch.IgnoreExtra, lines...)
+		}
 	}
 
 	return nil

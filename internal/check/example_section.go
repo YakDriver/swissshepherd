@@ -15,7 +15,7 @@ import (
 //   - All fenced code blocks use an allowed language (default: terraform, hcl)
 //   - All code blocks contain the resource name
 type ExampleSectionRule struct {
-	AllowedLanguages []string
+	AllowLanguages []string
 }
 
 func (r *ExampleSectionRule) Name() string { return "example_section" }
@@ -42,7 +42,7 @@ func (r *ExampleSectionRule) Check(ctx CheckContext) []Result {
 		add(SeverityError, fmt.Sprintf("example section heading %q should be: %q", section.Text, expected))
 	}
 
-	allowed := r.AllowedLanguages
+	allowed := r.AllowLanguages
 	if len(allowed) == 0 {
 		allowed = []string{"terraform", "hcl"}
 	}

@@ -4,7 +4,21 @@
 
 A documentation checker for Terraform providers. Validates that provider documentation accurately reflects the provider schema.
 
-## What it does
+## Table of contents
+
+- [What it checks](#what-it-checks)
+- [Installation](#installation)
+- [Quick start](#quick-start)
+- [CLI reference](#cli-reference)
+- [Configuration](#configuration)
+- [Rules reference](#rules-reference)
+- [Path scoping](#path-scoping)
+- [Type system](#type-system)
+- [Heading templates](#heading-templates)
+- [Schema generation](#schema-generation)
+- [Design](#design)
+
+## What it checks
 
 swissshepherd compares a Terraform provider's schema against its markdown documentation and reports:
 
@@ -12,11 +26,22 @@ swissshepherd compares a Terraform provider's schema against its markdown docume
 - **Phantom documentation** — documented attributes that don't exist in the schema
 - **Ordering violations** — arguments or attributes not in alphabetical order
 - **Description style issues** — descriptions starting with articles or fluff words
-- **Misplaced computed attributes** — computed-only attributes in the wrong section
+- **Misplaced computed attributes** — computed-only attributes in the Argument Reference section
 - **Heading style mismatches** — nested block headings not matching the preferred format
 - **Format / structure issues** — code blocks inside argument sections, multi-line attribute descriptions, interrupted attribute lists
-- **Frontmatter problems** — missing required YAML frontmatter fields, forbidden fields present, disallowed subcategories
-- **Title section problems** — missing title, wrong heading level, bad `<Kind>: ` prefix, code blocks misplaced above the first `##` heading
+- **Label violations** — arguments missing (Required)/(Optional), or attributes that have them
+- **Byline mismatches** — section introductory paragraph doesn't match expected text
+- **Frontmatter problems** — missing required YAML fields, forbidden fields present, disallowed subcategories
+- **Title section problems** — missing title, wrong heading level, bad `<Kind>: ` prefix
+- **Section presence** — required sections missing, forbidden sections present, timeouts section iff schema has timeouts
+- **Timeout mismatches** — documented timeout actions that don't exist in schema, or schema actions not documented
+- **Import section issues** — passive voice, missing code blocks, identity section validation
+- **Example section issues** — code blocks with disallowed languages, missing resource name
+- **Function signature** — missing signature code block, function name or parameters not present
+- **Region argument** — region-aware resources that don't document the `region` argument
+- **File size** — documentation files exceeding the 500KB Terraform Registry limit
+- **File extension** — wrong file extension for the layout (legacy vs registry)
+- **File alignment** — missing doc files, orphan doc files, mixed legacy/registry layouts
 
 ## Installation
 
@@ -24,7 +49,7 @@ swissshepherd compares a Terraform provider's schema against its markdown docume
 go install github.com/YakDriver/swissshepherd@latest
 ```
 
-Requires [Terraform](https://developer.hashicorp.com/terraform/install) in PATH when using `provider_dir`.
+Requires [Terraform](https://developer.hashicorp.com/terraform/install) in PATH when using `provider_dir` (for automatic schema generation).
 
 ## Quick start
 
@@ -38,9 +63,14 @@ provider_dir    = "."
 Then run:
 
 ```bash
-# Check everything
 swissshepherd
+```
 
+That's it. swissshepherd builds the provider, generates the schema, runs all checks, and reports findings.
+
+### Common invocations
+
+```bash
 # Check a single target (auto-detects type)
 swissshepherd --target aws_iam_role
 
@@ -50,392 +80,505 @@ swissshepherd --target aws_instance --type resource
 # Check all targets matching a prefix
 swissshepherd --prefix aws_dms_
 
-# Check all data sources for a service
-swissshepherd --prefix aws_s3_ --type data_source
+# Check all data sources
+swissshepherd --type data_source
+
+# Check a service's resources
+swissshepherd --prefix aws_s3_ --type resource
 ```
 
-That's it. swissshepherd builds the provider, generates the schema via Terraform, runs the checks, and cleans up.
+## CLI reference
 
-### A note on paths
-
-Relative paths in the config file (`provider_dir`, `schema_json`, and every `*_file` option) are interpreted relative to the **current working directory** at the time swissshepherd runs — the same convention as `terraform`, `docker`, `go`, and `make`. The location of the config file itself has no effect on path resolution.
-
-In practice: `cd` into the provider repo root and invoke swissshepherd from there. This works whether the config sits at the root or in a subdirectory like `.ci/`:
-
-```bash
-# Config at repo root
-cd terraform-provider-foo
-swissshepherd
-
-# Config in .ci/, paths still described relative to repo root
-cd terraform-provider-foo
-swissshepherd --config .ci/swissshepherd.hcl
+```
+swissshepherd [flags]
+swissshepherd check [flags]
 ```
 
-## Usage
-
-```bash
-# With explicit config file
-swissshepherd --config path/to/swissshepherd.hcl
-
-# With CLI flags (no config file needed)
-swissshepherd --provider-dir . --provider-source registry.terraform.io/hashicorp/aws
-
-# With pre-generated schema (skips build)
-swissshepherd --schema-json schema.json --provider-source registry.terraform.io/hashicorp/aws
-
-# Regenerate cached schema (when provider code changes)
-swissshepherd --refresh-schema
-
-# JSON output
-swissshepherd --target aws_vpc --json
-```
+| Flag | Description |
+|------|-------------|
+| `--config` | Config file path (default: `.swissshepherd.hcl`) |
+| `--schema-json` | Path to pre-generated `terraform providers schema -json` output |
+| `--provider-source` | Provider source address (e.g., `registry.terraform.io/hashicorp/aws`) |
+| `--provider-dir` | Path to provider source directory (triggers automatic build + schema generation) |
+| `--target` | Check a single named target |
+| `--type` | Restrict to a specific type (`resource`, `data_source`, `ephemeral`, `function`, `list_resource`, `action`) |
+| `--prefix` | Check all targets whose name begins with this prefix |
+| `--refresh-schema` | Regenerate cached schema even if `schema_json` file exists |
+| `--json` | Output results as JSON |
+| `--verbose` | Verbose logging (shows enabled checks, scoping, schema stats) |
+| `--version` | Print version and exit |
 
 CLI flags override config file values.
 
-### Schema caching
+### Output format
 
-For large providers (e.g. AWS), building the schema takes minutes. Set `schema_json` to a relative path in your config to cache it:
-
-```hcl
-provider_dir    = "."
-schema_json     = "terraform-providers-schema/schema.json"
+```
+ERROR  [rule_name] resource_name (path/to/file.md:42): message
+WARN   [rule_name] resource_name (path/to/file.md): message
 ```
 
-On first run, swissshepherd builds the provider and writes the schema to that path. Subsequent runs reuse the cached file instantly. Add the directory to `.gitignore`.
-
-When the provider code changes, regenerate with `--refresh-schema` or simply delete the cached file.
+Exit code 0 = all checks passed. Exit code 1 = one or more errors found.
 
 ## Configuration
+
+All configuration lives in a single HCL file. The full reference:
 
 ```hcl
 # .swissshepherd.hcl
 
+# ─── Provider identity ───────────────────────────────────────────────────────
+
 provider_source = "registry.terraform.io/hashicorp/aws"
 provider_dir    = "."
 
-# Schema caching: relative paths resolve against provider_dir.
-# If the file exists, it's used directly. If missing (or --refresh-schema),
-# the provider is built and the schema is generated and cached here.
+# ─── Schema caching ─────────────────────────────────────────────────────────
+# When set, the schema is cached at this path (relative to provider_dir).
+# First run builds the provider and writes here; subsequent runs reuse it.
+# Use --refresh-schema to regenerate after provider code changes.
+
 schema_json = "terraform-providers-schema/schema.json"
 
-# Suppress "doc file not found" warnings for schema aliases that have no doc.
-# ignore_file_missing = ["aws_alb", "aws_alb_listener"]
-# ignore_file_missing_file = "website/ignore-file-missing.txt"
+# ─── Global ignore lists ────────────────────────────────────────────────────
 
-# Suppress all schema+doc rule findings for deprecated/removed resource stubs.
-# File rules (frontmatter) still run.
-# ignore_contents_check = ["aws_kms_secret", "aws_db_security_group"]
-# ignore_contents_check_file = "website/ignore-contents-check.txt"
+# Suppress "doc file not found" warnings for schema aliases with no doc.
+ignore_file_missing      = ["aws_alb", "aws_alb_listener"]
+ignore_file_missing_file = "website/ignore-file-missing.txt"
 
-# Map schema names to doc names when they differ (doc is still checked).
-# Keys can be "name" (all types) or "type/name" (scoped to one type).
-# file_aliases = {
-#   "list_resource/aws_ebs_volume" = "aws_ec2_ebs_volume"
-# }
+# Suppress "doc file has no matching resource" (reverse mismatch).
+# These also feed into the file_match rule's ignore lists.
+ignore_file_mismatch      = ["aws_removed_thing"]
+ignore_file_mismatch_file = "website/ignore-file-mismatch.txt"
 
+# Suppress all schema+doc rule findings for deprecated/removed stubs.
+# File rules (frontmatter, file_check) still run.
+ignore_contents_check      = ["aws_kms_secret"]
+ignore_contents_check_file = "website/ignore-contents-check.txt"
+
+# Map schema names to doc file names when they differ.
+# Keys: plain "name" (all types) or "type/name" (scoped).
+file_aliases = {
+  "list_resource/aws_ebs_volume" = "aws_ec2_ebs_volume"
+  "aws_alb"                      = "aws_lb"
+}
+
+# ─── Check blocks ───────────────────────────────────────────────────────────
+# Each check block configures one rule. All rules are enabled by default.
+# Add `enabled = false` to disable. See "Rules reference" for details.
+```
+
+### Path resolution
+
+All relative paths in the config (`provider_dir`, `schema_json`, `*_file` options) resolve against the **current working directory** — the same convention as `terraform`, `go`, and `make`. The config file's location has no effect.
+
+In practice: `cd` into the provider repo root and run swissshepherd from there:
+
+```bash
+cd terraform-provider-aws
+swissshepherd --config .ci/swissshepherd.hcl
+```
+
+### List files
+
+Options ending in `_file` (`ignore_file_missing_file`, `ignore_targets_file`, `allow_subcategories_file`, etc.) read one entry per line. Empty lines and lines starting with `#` are ignored.
+
+## Rules reference
+
+### Overview
+
+| Rule | Kind | Description |
+|------|------|-------------|
+| `schema_docs` | per-target | Schema coverage, ordering, description style, heading style, format, labels, and bylines |
+| `title_section` | per-target | Level-1 heading validation |
+| `section_presence` | per-target | Required/forbidden section enforcement |
+| `timeouts_section` | per-target | Timeout actions match schema bidirectionally |
+| `import_section` | per-target | Import section style and structure |
+| `example_section` | per-target | Example code block validation |
+| `signature_section` | per-target | Function signature validation |
+| `region_argument` | per-target | Region argument presence for region-aware types |
+| `frontmatter` | per-file | YAML frontmatter field validation |
+| `file_check` | per-file | File size and extension validation |
+| `file_match` | global | File↔schema alignment: missing docs, orphan files, mixed layouts |
+
+**Per-target** rules run once per (resource, data source, etc.) and compare schema against parsed markdown. **Per-file** rules run on raw file bytes. **Global** rules run once per invocation.
+
+---
+
+### `schema_docs`
+
+The primary rule. Validates argument and attribute documentation against the provider schema.
+
+**Sub-checks** (all enabled by default; disable individually):
+
+| Sub-check | What it validates |
+|-----------|-------------------|
+| `coverage` | Every schema attr is documented; every documented attr exists in schema |
+| `ordering` | Attributes are alphabetical within required/optional groups |
+| `description` | Descriptions don't start with bad prefixes ("A ", "The ", "Specifies ", etc.) |
+| `heading` | Block headings match the preferred template style |
+| `format` | No code blocks in arg/attr sections; single-line attrs; uninterrupted lists |
+| `labels` | Arguments have (Required)/(Optional); attributes do not |
+| `byline` | First paragraph after section heading matches expected byline text (from type) |
+
+**Config:**
+
+```hcl
 check "schema_docs" {
-  enabled = true
+  # Sub-check toggles
+  coverage    = true
+  ordering    = true
+  description = true
+  heading     = true
+  format      = true
+  labels      = true
+  byline      = true
 
-  # Sub-check toggles (all default true; set false to disable individually)
-  coverage    = true   # every schema attr documented, every documented attr in schema
-  ordering    = true   # alphabetical within required/optional groups
-  description = true   # descriptions don't start with bad prefixes
-  heading     = true   # block headings match preferred style
-  format      = true   # no code blocks, single-line attrs, uninterrupted lists
-  labels      = true   # arguments have (Required)/(Optional), attributes do not
+  # Heading templates (see "Heading templates" section)
+  block_heading_styles           = ["`{Block}` Block", "{Block}", "{Title}"]
+  prefer_block_heading_styles = ["`{Block}` Block"]
 
-  # Path scoping — limit this check to specific targets (see Path scoping below)
-  types    = ["resource", "data_source"]
-  prefixes = ["aws_s3", "aws_appflow"]
-
-  block_heading_styles = [
-    "`{Block}` Block",
-    "{Block} Block",
-    "`{Block}`",
-    "{Block}",
-    "{Title}",
-  ]
-  preferred_block_heading_styles = ["`{Block}` Block"]
-
-  # Coverage options (all have sensible defaults)
-  ignore_deprecated   = true
-  implicit_attributes = ["id", "tags_all"]   # never flagged as undocumented
-  phantom_allowlist   = ["tags", "tags_all"] # never flagged as phantom
-  skip_blocks         = ["timeouts"]         # blocks skipped entirely
+  # Coverage options
+  ignore_deprecated   = true                     # skip deprecated schema attrs
+  implicit_attributes = ["id", "tags_all"]       # never flagged as undocumented
+  allow_phantoms   = ["tags", "tags_all"]     # never flagged as phantom
+  skip_blocks         = ["timeouts"]             # blocks skipped entirely
 
   # Description options
-  # bad_prefixes = ["A ", "An ", "The ", "Specifies ", "Indicates ", "Describes ", "Defines "]
+  bad_prefixes = ["A ", "An ", "The ", "Specifies "]
 
   # Format options
-  # no_code_blocks       = true
-  # single_line_attrs    = true
-  # uninterrupted_lists  = true
-}
-
-check "frontmatter" {
-  enabled = true
-
-  require_subcategory    = true
-  require_page_title     = true
-  require_description    = true
-  forbid_layout          = true
-  forbid_sidebar_current = true
-
-  allowed_subcategories_file = "website/allowed-subcategories.txt"
-
-  # Targets listed here may have subcategory: "" without failing the allowlist.
-  # Useful for function docs that carry no subcategory by convention.
-  # allow_empty_subcategory_targets = ["arn_build", "arn_parse"]
-}
-
-check "title_section" {
-  enabled = true
-  # allowed_prefixes = ["Resource", "Data Source", "Ephemeral", "Function", "List Resource", "Action"]
-}
-
-check "section_presence" {
-  enabled = true
-  # No config — reads require_import/require_timeouts/require_signature/require_attributes from the type block.
-  # Timeouts are schema-driven: section required iff schema has a timeouts block.
-}
-
-check "timeouts_section" {
-  enabled = true
-  # No config — validates documented timeout actions match schema bidirectionally.
-}
-
-check "import_section" {
-  enabled = true
-  require_identity_section = true  # validate identity import block + ### Identity Schema subsection (default: true)
-}
-
-check "example_section" {
-  enabled = true
-  allowed_languages = ["terraform", "hcl"]         # code block languages allowed (default: terraform, hcl)
-}
-
-check "signature_section" {
-  enabled = true
-  # No config — validates function signature code block contains function name and parameters.
+  no_code_blocks       = true   # no fenced code blocks in arg/attr sections
+  single_line_attrs    = true   # each attribute on one line
+  uninterrupted_lists  = true   # no paragraphs between list items
 }
 ```
 
-All rules are enabled by default. Add a `check` block with `enabled = false` to disable one.
+---
+
+### `title_section`
+
+Validates the level-1 heading (`# Resource: aws_thing`).
+
+Checks:
+- Heading exists and is at level 1
+- Begins with an allowed `<Kind>: ` prefix (from `allow_prefixes` or the type's `title_prefix`)
+- No code blocks appear above the first `##` heading
+
+```hcl
+check "title_section" {
+  allow_prefixes = ["Resource", "Data Source", "Ephemeral", "Function"]
+}
+```
+
+---
+
+### `section_presence`
+
+Enforces that required sections exist and forbidden sections are absent. Requirements come from the `type` block:
+
+- `require_attributes` = `"required"` / `"optional"` / `"forbidden"`
+- `require_import` = same
+- `require_timeouts` = same (overridden by schema: if schema has timeouts block, section is required regardless)
+- `require_signature` = same
+
+No check-level config — entirely driven by type definitions.
+
+---
+
+### `timeouts_section`
+
+Validates that documented timeout actions match the schema bidirectionally:
+- Every schema timeout action must be documented
+- Every documented timeout action must exist in the schema
+
+No config options.
+
+---
+
+### `import_section`
+
+Validates import section content and structure:
+- No passive voice ("can be imported" → use imperative)
+- No "e.g." (use "For example" or just show the example)
+- Code blocks present with correct types (`terraform` and `console`)
+- Correct ordering (terraform block before console block)
+- Identity-aware: when resource has identity schema, validates `### Identity Schema` subsection
+
+```hcl
+check "import_section" {
+  require_identity_section = true  # default: true
+}
+```
+
+---
+
+### `example_section`
+
+Validates example code blocks:
+- Code block languages are in the allowed list
+- Code blocks contain the resource/data source name
+
+```hcl
+check "example_section" {
+  allow_languages = ["terraform", "hcl"]  # default
+}
+```
+
+---
+
+### `signature_section`
+
+Validates function signature documentation:
+- Signature code block is present
+- Contains the function name
+- Contains all schema parameter names
+
+No config options.
+
+---
+
+### `region_argument`
+
+Validates that region-aware resources document the `region` argument. Only fires for types with `region_aware = true` in their type block (resources, data sources, ephemerals by default).
+
+```hcl
+check "region_argument" {
+  ignore_resources      = ["aws_global_accelerator"]
+  ignore_resources_file = "website/ignore-region.txt"
+}
+```
+
+---
+
+### `frontmatter`
+
+Validates YAML frontmatter at the top of each doc file. Requirements can come from both the check block (global) and the type block (per-type via `frontmatter_require` / `frontmatter_forbid`). Both sources are merged — a field required by either is enforced.
+
+```hcl
+check "frontmatter" {
+  # Require fields to be present
+  require_subcategory = true
+  require_page_title  = true
+  require_description = true
+  require_layout      = false  # legacy layout only
+
+  # Forbid fields from being present
+  forbid_subcategory    = false
+  forbid_page_title     = false
+  forbid_description    = false
+  forbid_layout         = true   # registry layout
+  forbid_sidebar_current = true  # always forbidden in modern docs
+
+  # Subcategory allowlist (empty = anything goes)
+  allow_subcategories      = ["S3", "VPC", "IAM"]
+  allow_subcategories_file = "website/allowed-subcategories.txt"
+
+  # Targets where subcategory: "" is acceptable
+  allow_empty_subcategory_targets = ["arn_build", "arn_parse"]
+}
+```
+
+---
+
+### `file_check`
+
+Validates file-level properties.
+
+```hcl
+check "file_check" {
+  max_file_size       = 500000                                # bytes (default: 500KB registry limit)
+  allow_extensions    = [".md", ".html.markdown", ".html.md"] # accepted extensions
+  allow_registry_extensions = [".md"]                               # stricter set for docs/ layout
+}
+```
+
+---
+
+### `file_match`
+
+Validates file↔schema alignment (runs once per invocation):
+- **require_doc**: every schema resource must have a documentation file
+- **require_schema**: every documentation file must have a matching schema resource
+- **mixed_layout**: can't mix legacy (`website/docs/`) and registry (`docs/`) layouts
+
+```hcl
+check "file_match" {
+  require_doc    = true   # default: true
+  require_schema = true   # default: true
+  mixed_layout   = true   # default: true
+
+  ignore_missing      = ["aws_alb", "aws_alb_listener"]       # no doc required
+  ignore_missing_file = "website/ignore-file-missing.txt"
+  ignore_extra        = ["aws_removed_thing"]                  # orphan doc OK
+  ignore_extra_file   = "website/ignore-file-mismatch.txt"
+}
+```
+
+The top-level `ignore_file_missing` and `ignore_file_mismatch` options are also supported for backward compatibility and are merged into `ignore_missing` / `ignore_extra` respectively.
 
 ## Path scoping
 
-Every `check` block accepts path-scoping fields that limit which targets the rule runs against. This is the primary mechanism for rolling out checks incrementally across a large provider — one service or one type at a time.
+Every `check` block accepts path-scoping fields that control which targets the rule runs against. This is the primary mechanism for incremental rollout across a large provider.
 
 ```hcl
 check "schema_docs" {
-  enabled = true
-
-  # Type axis: only run against these type names (empty = all types)
+  # Type axis: only these type names (empty = all)
   types = ["resource", "data_source"]
 
-  # Name axis: run against targets whose name has one of these prefixes
-  # OR whose name is listed exactly in targets. Both lists are OR'd.
+  # Name axis (OR'd together): prefix match OR exact match
   prefixes = ["aws_s3", "aws_appflow"]
-  targets  = ["aws_instance", "aws_accessanalyzer_archive_rule"]
+  targets  = ["aws_instance"]
 
-  # Deny list: always excluded, even when allowlists include them.
-  ignored_targets      = ["aws_legacy_resource"]
-  ignored_targets_file = "website/ignore-ordering.txt"
-  ignored_prefixes     = ["aws_appstream"]
+  # Deny list: always excluded, even when allowlists match
+  ignore_targets      = ["aws_legacy_resource"]
+  ignore_targets_file = "website/ignore-ordering.txt"
+  ignore_prefixes     = ["aws_appstream"]
 }
 ```
 
-**Semantics:**
+**Evaluation order:**
 
-1. `ignored_targets` and `ignored_prefixes` win unconditionally — a matching name is never checked.
-2. When `types` is non-empty, the target's type must be in the list.
-3. When either `prefixes` or `targets` is non-empty, the target's name must satisfy at least one (prefix match OR exact match). Both empty means "any name".
+1. `ignore_targets` / `ignore_prefixes` — if matched, target is excluded unconditionally
+2. `types` — if non-empty, target's type must be in the list
+3. `prefixes` / `targets` — if either is non-empty, target must match at least one; both empty = all names pass
 
-**Use cases:**
+## Type system
 
-```bash
-# PR gate: check one specific resource
-swissshepherd --target aws_s3_bucket --type resource
+swissshepherd ships with built-in type definitions for all standard Terraform documentation categories. Override any default or add new types in your config:
 
-# Service gate: check all S3 resources
-swissshepherd --prefix aws_s3_ --type resource
+### Built-in types
 
-# Full CI: check everything
-swissshepherd
-```
+| Type | Schema kind | Default doc path | Region-aware |
+|------|-------------|------------------|--------------|
+| `resource` | `resource` | `website/docs/r/{name}.html.markdown` | yes |
+| `data_source` | `data_source` | `website/docs/d/{name}.html.markdown` | yes |
+| `ephemeral` | `ephemeral` | `website/docs/ephemeral-resources/{name}.html.markdown` | yes |
+| `function` | `function` | `website/docs/functions/{name}.html.markdown` | no |
+| `list_resource` | `list_resource` | `website/docs/list-resources/{name}.html.markdown` | yes |
+| `action` | `action` | `website/docs/actions/{name}.html.markdown` | no |
+| `guide` | `none` | `website/docs/guides/{name}.html.markdown` | no |
+| `index` | `none` | `website/docs/index.html.markdown` | no |
 
-## Type blocks
-
-swissshepherd ships with built-in definitions for every Terraform documentation category. You can override a default or add a new one:
+### Overriding a type
 
 ```hcl
-# Override the resource type to use a custom doc layout
 type "resource" {
   schema_kind   = "resource"
   website_paths = [
     "docs/resources/{name}.md",
     "website/docs/r/{name}.html.markdown",
   ]
-  title_prefix = "Resource"
-  # ... other fields
-}
+  title_prefix       = "Resource"
+  require_attributes = "required"
+  require_import     = "optional"
+  require_timeouts   = "optional"
+  require_signature  = "forbidden"
+  region_aware       = true
 
-# Add a provider-specific category
-type "widget" {
-  schema_kind   = "none"   # no schema backing; content-only
-  website_paths = ["docs/widgets/{name}.md"]
-  title_prefix  = "Widget"
+  frontmatter_require = ["description", "page_title"]
+  frontmatter_forbid  = ["sidebar_current"]
+
+  arguments_bylines = [
+    "This resource supports the following arguments:",
+    "The following arguments are required:",
+    "The following arguments are optional:",
+  ]
+  attributes_bylines = [
+    "This resource exports the following attributes in addition to the arguments above:",
+  ]
 }
 ```
 
-The `{name}` placeholder in `website_paths` is replaced with the provider-prefix-stripped target name (e.g., `aws_instance` → `instance`). Templates are tried in order; the first existing file wins.
+### Type fields
 
-Built-in types: `resource`, `data_source`, `ephemeral`, `function`, `list_resource`, `action`, `guide`, `index`.
+| Field | Description |
+|-------|-------------|
+| `schema_kind` | Schema accessor: `resource`, `data_source`, `ephemeral`, `function`, `list_resource`, `action`, `none` |
+| `website_paths` | Ordered list of path templates. `{name}` = provider-prefix-stripped target name |
+| `title_prefix` | Expected `# <Prefix>: ` in the level-1 heading |
+| `arguments_heading` | Override the expected heading text (default: `"Argument Reference"`) |
+| `arguments_bylines` | Allowed paragraph texts under `## Argument Reference` |
+| `attributes_bylines` | Allowed paragraph texts under `## Attribute Reference` |
+| `allow_missing_arguments_byline` | Don't require a byline paragraph |
+| `require_attributes` | `"required"` / `"optional"` / `"forbidden"` |
+| `require_import` | Same |
+| `require_timeouts` | Same (overridden by schema when timeouts block exists) |
+| `require_signature` | Same |
+| `frontmatter_require` | Fields that must be present in YAML frontmatter |
+| `frontmatter_forbid` | Fields that must be absent |
+| `region_aware` | Whether `region_argument` rule applies to this type |
 
-## Heading styles
+## Heading templates
 
-The `block_heading_styles` list in the `schema_docs` check controls which `###` heading formats are recognized as block documentation. Each entry is a template with placeholders:
+The `block_heading_styles` list controls which `###` heading formats are recognized as block documentation within argument/attribute sections.
 
-| Placeholder | Matches | Example heading | Extracted name |
-|-------------|---------|-----------------|----------------|
-| `{Block}` | A snake_case identifier (lowercase, underscores) | `network_interface` | `network_interface` |
-| `{Title}` | Title Case words (converted to snake_case) | `Network Interface` | `network_interface` |
+### Placeholders
 
-Templates are tried in order — first match wins. Literal text around the placeholder must match exactly.
+| Placeholder | Matches | Example | Extracted name |
+|-------------|---------|---------|----------------|
+| `{Block}` | snake_case identifier | `network_interface` | `network_interface` |
+| `{Title}` | Title Case words (→ snake_case) | `Network Interface` | `network_interface` |
 
 ### Examples
 
-| Template | Matches heading | Result |
-|----------|-----------------|--------|
-| `` `{Block}` Block `` | `network Block` | `network` |
-| `{Block} Block` | `network Block` | `network` |
+| Template | Matches heading | Extracted |
+|----------|-----------------|-----------|
+| `` `{Block}` Block `` | `` `network` Block `` | `network` |
 | `{Block} Configuration Block` | `vpc_config Configuration Block` | `vpc_config` |
 | `{Block} Argument Reference` | `filter Argument Reference` | `filter` |
-| `` `{Block}` `` | `statement` | `statement` |
-| `{Block}` | `redis_settings` | `redis_settings` |
 | `{Title}` | `Credit Specification` | `credit_specification` |
-| `{Title}` | `CPU Options` | `cpu_options` |
 
-Note: goldmark (the markdown parser) strips backticks from inline code in headings. So `### \`network\` Block` in markdown becomes `network Block` in the parsed text. The templates match against this parsed text.
+Note: goldmark strips backticks from inline code in headings, so `` ### `network` Block `` becomes `network Block` in parsed text.
 
-### Strict vs permissive
+### Preferred style
 
-To enforce a single heading format across your docs:
-
-```hcl
-block_heading_styles = ["`{Block}` Block"]
-```
-
-To accept everything during a migration:
+Set `prefer_block_heading_styles` to emit warnings when a heading matches an accepted style but not the preferred one:
 
 ```hcl
-block_heading_styles = [
-  "`{Block}` Block",
-  "{Block} Block",
-  "{Block} block",
-  "{Block} Configuration Block",
-  "{Block} Argument Reference",
-  "{Block} Attribute Reference",
-  "`{Block}`",
-  "{Block}",
-  "{Title}",
-]
-```
-
-If `block_heading_styles` is omitted, a sensible default is used.
-
-## Rules
-
-| Rule | Kind | Description |
-|------|------|-------------|
-| `schema_docs` | schema + doc | Schema coverage, ordering, description style, heading style, format, and labels for argument/attribute sections |
-| `title_section` | schema + doc | Level-1 heading is present, at level 1, begins with one of the allowed `<Kind>: ` prefixes, and contains no code blocks |
-| `section_presence` | schema + doc | Required sections are present; forbidden sections are absent. Schema-driven for timeouts (if-and-only-if), type-level fallback otherwise |
-| `timeouts_section` | schema + doc | Documented timeout actions match the schema (bidirectional) |
-| `import_section` | schema + doc | Import section style (no passive voice, no "e.g."), structure (code blocks present, correct types, ordering), and identity-aware validation |
-| `example_section` | schema + doc | Example code blocks use allowed languages and contain the resource name |
-| `signature_section` | schema + doc | Function signature code block present, contains function name and schema parameter names |
-| `frontmatter` | raw file | YAML frontmatter field presence/absence and subcategory allowlist |
-
-Rules fall into two categories: `schema + doc` rules compare the parsed markdown AST against the schema (including type-level requirements); `raw file` rules operate on the file bytes so they can catch whitespace, line-structure, and frontmatter issues the AST normalizes away.
-
-### Section headings
-
-Section headings are currently hardcoded. The parser recognizes these level-2 headings:
-
-| Section | Expected heading | Used by |
-|---------|-----------------|---------|
-| Example | `Example Usage` | `section_presence`, `example_section` |
-| Arguments | `Argument Reference` | `section_presence`, `schema_docs` |
-| Attributes | `Attribute Reference` | `section_presence`, `schema_docs` |
-| Timeouts | `Timeouts` | `section_presence`, `timeouts_section` |
-| Import | `Import` | `section_presence`, `import_section` |
-| Signature | `Signature` | `section_presence` |
-
-These may become configurable in a future release if providers need custom heading text.
-
-### Output format
-
-Each finding includes the rule name, target, file path (with line number when available), and message:
-
-```
-ERROR  [section_presence] aws_vpn_gateway (website/docs/d/vpn_gateway.html.markdown): section ## Timeouts is not allowed for type "data_source"
-WARN   [schema_docs] aws_instance (website/docs/r/instance.html.markdown:42): attribute "mode" in block "spec.tls" is documented but missing the " - " separator
-```
-
-## Frontmatter options
-
-Every frontmatter toggle is off by default — the rule does nothing until at least one is set. Mix and match to match your provider's layout:
-
-| Option | Effect |
-|--------|--------|
-| `require_subcategory` | Fail if `subcategory` is absent |
-| `require_page_title` | Fail if `page_title` is absent |
-| `require_description` | Fail if `description` is absent |
-| `require_layout` | Fail if `layout` is absent (legacy layout) |
-| `forbid_subcategory` | Fail if `subcategory` is present |
-| `forbid_page_title` | Fail if `page_title` is present |
-| `forbid_description` | Fail if `description` is present |
-| `forbid_layout` | Fail if `layout` is present (registry layout) |
-| `forbid_sidebar_current` | Fail if `sidebar_current` is present (always, in modern docs) |
-
-The subcategory allowlist is set inside the `check "frontmatter"` block via `allowed_subcategories` (inline list) or `allowed_subcategories_file` (newline-separated file). When the allowlist is non-empty, a frontmatter `subcategory` value not on the list fails. An empty allowlist is equivalent to "anything goes". The allowlist only fires when `subcategory` is present in the file — use `require_subcategory` alongside it if absence should also fail.
-
-Some doc types (e.g. Terraform provider functions) use `subcategory: ""` to signal "no category" rather than omitting the key. By default that empty string is validated against the allowlist and fails. Use `allow_empty_subcategory_targets` to name the specific targets where an empty subcategory is permitted:
-
-```hcl
-check "frontmatter" {
-  allow_empty_subcategory_targets = ["arn_build", "arn_parse", "trim_iam_role_path", "user_agent"]
+check "schema_docs" {
+  block_heading_styles           = ["`{Block}` Block", "{Block} Block", "{Block}", "{Title}"]
+  prefer_block_heading_styles = ["`{Block}` Block"]
 }
 ```
 
-All other targets with `subcategory: ""` continue to fail.
+## Schema generation
 
-An unterminated or missing frontmatter block is treated the same as an absent block: each `require_*` toggle produces a result, `forbid_*` toggles stay silent.
+When `provider_dir` is set, swissshepherd automatically:
 
-## How schema generation works
+1. Builds the provider with `go build`
+2. Creates a temporary Terraform plugin directory
+3. Runs `terraform init` + `terraform providers schema -json`
+4. Uses the generated schema for all checks
+5. Cleans up temporary files
 
-When `provider_dir` is set, swissshepherd:
+### Caching
 
-1. Runs `go build` in the provider directory
-2. Sets up a temporary Terraform plugin directory
-3. Runs `terraform init` and `terraform providers schema -json`
-4. Uses the generated schema for checks
-5. Cleans up all temporary files
+For large providers where the build takes minutes, set `schema_json` to cache:
 
-If `schema_json` is set instead, the build step is skipped entirely.
+```hcl
+provider_dir = "."
+schema_json  = "terraform-providers-schema/schema.json"
+```
+
+First run builds and caches. Subsequent runs reuse the file instantly. Regenerate with `--refresh-schema` or delete the cached file.
+
+### Pre-generated schema
+
+Skip the build entirely by providing a pre-generated schema:
+
+```bash
+swissshepherd --schema-json path/to/schema.json --provider-source registry.terraform.io/hashicorp/aws
+```
 
 ## Design
 
-- Schema from `terraform providers schema -json` is the source of truth — no Go source parsing
-- Markdown parsed with [goldmark](https://github.com/yuin/goldmark) AST
-- Two rule interfaces: `Rule.Check(resource, schema, doc) []Result` for schema + AST checks, `FileRule.CheckFile(resource, path, content) []Result` for raw-bytes checks (frontmatter, line-level scans). The runner reads each doc file once and feeds the bytes to both kinds
-- Documentation categories (resource, data source, ephemeral, function, list resource, action, guide, index) are defined in `type` blocks — either the embedded defaults or user overrides. Adding a new Terraform category is a config change, not a code change
-- Doc file paths resolve from `type.website_paths` templates; `provider_dir` anchors relative paths when set, otherwise CWD
-- Per-check path scoping (`types`, `prefixes`, `targets`, `ignored_targets`, `ignored_prefixes`) lets each rule roll out independently across a large provider
-- HCL configuration via [hcl/v2](https://github.com/hashicorp/hcl)
-- YAML frontmatter parsed with [yaml.v3](https://gopkg.in/yaml.v3)
+- **Schema is the source of truth** — derived from `terraform providers schema -json`, not Go source parsing
+- **Markdown parsed with goldmark** — full AST, not regex
+- **Two rule interfaces**: `Rule` (schema + AST) and `FileRule` (raw bytes). The runner reads each file once and feeds it to both
+- **Type-driven architecture** — documentation categories are config, not code. Adding a new Terraform category is a config change
+- **Per-check path scoping** — each rule rolls out independently via `types`, `prefixes`, `targets`, `ignore_targets`, `ignore_prefixes`
+- **Config-driven** — HCL configuration via [hcl/v2](https://github.com/hashicorp/hcl); no magic values
+- **Global checks** run once per invocation (directory layout, file mismatch)
+- **YAML frontmatter** parsed with [yaml.v3](https://gopkg.in/yaml.v3)
 
 ## License
 
