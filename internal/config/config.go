@@ -87,6 +87,7 @@ type CheckConfig struct {
 	Targets            []string `hcl:"targets,optional"`
 	IgnoredTargets     []string `hcl:"ignored_targets,optional"`
 	IgnoredTargetsFile string   `hcl:"ignored_targets_file,optional"`
+	IgnoredPrefixes    []string `hcl:"ignored_prefixes,optional"`
 
 	// Frontmatter rule options. Set require_* to fail when a field is absent;
 	// set forbid_* to fail when it is present. A field covered by both require
@@ -163,6 +164,11 @@ type CheckConfig struct {
 func (c CheckConfig) AppliesTo(name, typeName string) bool {
 	if slices.Contains(c.IgnoredTargets, name) {
 		return false
+	}
+	for _, p := range c.IgnoredPrefixes {
+		if strings.HasPrefix(name, p) {
+			return false
+		}
 	}
 	if len(c.Types) > 0 && !slices.Contains(c.Types, typeName) {
 		return false
