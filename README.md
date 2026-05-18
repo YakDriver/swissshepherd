@@ -41,6 +41,7 @@ swissshepherd compares a Terraform provider's schema against its markdown docume
 - **Region argument** — region-aware resources that don't document the `region` argument
 - **File size** — documentation files exceeding the 500KB Terraform Registry limit
 - **File extension** — wrong file extension for the layout (legacy vs registry)
+- **Link style** — reference-style link definitions that should be inline
 - **File alignment** — missing doc files, orphan doc files, mixed legacy/registry layouts
 
 ## Installation
@@ -179,7 +180,7 @@ Options ending in `_file` (`ignore_targets_file`, `allow_subcategories_file`, `i
 | Rule | Kind | Description |
 |------|------|-------------|
 | `example_section` | per-target | Example code block validation |
-| `file_check` | per-file | File size and extension validation |
+| `file_check` | per-file | File size, extension, and link style validation |
 | `file_match` | global | File↔schema alignment: missing docs, orphan files, mixed layouts |
 | `frontmatter` | per-file | YAML frontmatter field validation |
 | `import_section` | per-target | Import section style and structure |
@@ -214,11 +215,14 @@ Validates file-level properties.
 
 ```hcl
 check "file_check" {
-  max_file_size       = 500000                                # bytes (default: 500KB registry limit)
-  allow_extensions    = [".md", ".html.markdown", ".html.md"] # accepted extensions
+  max_file_size             = 500000                                # bytes (default: 500KB registry limit)
+  allow_extensions          = [".md", ".html.markdown", ".html.md"] # accepted extensions
   allow_registry_extensions = [".md"]                               # stricter set for docs/ layout
+  inline_links              = true                                  # flag reference-style [ref]: url links
 }
 ```
+
+When `inline_links` is enabled, reference-style link definitions (`[label]: url`) are flagged with a suggestion to use inline `[text](url)` style instead.
 
 ---
 
