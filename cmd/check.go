@@ -237,6 +237,7 @@ func runCheck(cmd *cobra.Command, args []string) error {
 			MaxSize:                 cc.MaxFileSize,
 			AllowExtensions:         cc.AllowExtensions,
 			AllowRegistryExtensions: cc.AllowRegistryExtensions,
+			InlineLinks:             cc.InlineLinks,
 		})
 	}
 

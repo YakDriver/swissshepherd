@@ -144,6 +144,7 @@ type CheckConfig struct {
 	MaxFileSize             int64    `hcl:"max_file_size,optional"`
 	AllowExtensions         []string `hcl:"allow_extensions,optional"`
 	AllowRegistryExtensions []string `hcl:"allow_registry_extensions,optional"`
+	InlineLinks             *bool    `hcl:"inline_links,optional"`
 
 	// DirectoryLayout rule options.
 	IgnoreCdktf bool `hcl:"ignore_cdktf,optional"`
