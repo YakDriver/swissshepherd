@@ -29,7 +29,7 @@ func GenerateSchema(providerDir, providerSource string) (string, error) {
 	binaryName := "terraform-provider"
 	binaryPath := filepath.Join(workDir, binaryName)
 
-	fmt.Fprintf(os.Stderr, "Building provider in %s...\n", providerDir)
+	fmt.Fprintf(os.Stderr, "Generating schema: building provider (%s)...\n", providerDir)
 	buildCmd := exec.Command("go", "build", "-o", binaryPath, ".")
 	buildCmd.Dir = providerDir
 	buildCmd.Stderr = os.Stderr
@@ -79,7 +79,7 @@ func GenerateSchema(providerDir, providerSource string) (string, error) {
 	}
 
 	// terraform init
-	fmt.Fprintf(os.Stderr, "Running terraform init...\n")
+	fmt.Fprintf(os.Stderr, "Generating schema: running terraform init...\n")
 	initCmd := exec.Command("terraform", "init", "-plugin-dir", filepath.Join(workDir, "plugin-dir"))
 	initCmd.Dir = workDir
 	initCmd.Stderr = os.Stderr
@@ -89,7 +89,7 @@ func GenerateSchema(providerDir, providerSource string) (string, error) {
 	}
 
 	// terraform providers schema -json
-	fmt.Fprintf(os.Stderr, "Generating provider schema...\n")
+	fmt.Fprintf(os.Stderr, "Generating schema: running terraform providers schema...\n")
 	schemaPath := filepath.Join(workDir, "schema.json")
 	schemaFile, err := os.Create(schemaPath)
 	if err != nil {
@@ -108,7 +108,7 @@ func GenerateSchema(providerDir, providerSource string) (string, error) {
 	}
 	schemaFile.Close()
 
-	fmt.Fprintf(os.Stderr, "Schema generated at %s\n", schemaPath)
+	fmt.Fprintf(os.Stderr, "Schema generated: %s\n", schemaPath)
 	return schemaPath, nil
 }
 
