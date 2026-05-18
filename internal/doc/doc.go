@@ -6,7 +6,6 @@ package doc
 import (
 	"bytes"
 	"fmt"
-	"maps"
 	"os"
 	"strings"
 
@@ -268,9 +267,14 @@ type Document struct {
 func (d *Document) Source() []byte { return d.source }
 
 // Blocks returns a merged view of argument + attribute blocks.
+// The returned map is independent — it does not mutate the original blocks.
 func (d *Document) Blocks() map[string]*DocBlock {
 	merged := make(map[string]*DocBlock, len(d.ArgumentBlocks)+len(d.AttributeBlocks))
-	maps.Copy(merged, d.ArgumentBlocks)
+	for k, v := range d.ArgumentBlocks {
+		clone := *v
+		clone.Attributes = append([]DocAttribute(nil), v.Attributes...)
+		merged[k] = &clone
+	}
 	for k, v := range d.AttributeBlocks {
 		if existing, ok := merged[k]; ok {
 			existing.Attributes = append(existing.Attributes, v.Attributes...)
