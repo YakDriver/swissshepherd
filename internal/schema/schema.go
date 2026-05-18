@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	tfjson "github.com/hashicorp/terraform-json"
+	"github.com/zclconf/go-cty/cty"
 )
 
 // Schema-kind identifiers used to select the right target map on
@@ -331,27 +332,27 @@ func extractNestedAttributes(attr *tfjson.SchemaAttribute) []Attribute {
 		ty = ty.ElementType()
 	}
 	if ty.IsObjectType() {
-		children := make([]Attribute, 0, len(ty.AttributeTypes()))
-		for name, childTy := range ty.AttributeTypes() {
-			child := Attribute{Name: name, Computed: true}
-			// Recurse for nested objects.
-			elemTy := childTy
-			if elemTy.IsCollectionType() {
-				elemTy = elemTy.ElementType()
-			}
-			if elemTy.IsObjectType() {
-				grandchildren := make([]Attribute, 0, len(elemTy.AttributeTypes()))
-				for gName := range elemTy.AttributeTypes() {
-					grandchildren = append(grandchildren, Attribute{Name: gName, Computed: true})
-				}
-				child.Children = grandchildren
-			}
-			children = append(children, child)
-		}
-		return children
+		return attributesFromCtyObject(ty)
 	}
 
 	return nil
+}
+
+// attributesFromCtyObject recursively extracts attributes from a cty object type.
+func attributesFromCtyObject(ty cty.Type) []Attribute {
+	children := make([]Attribute, 0, len(ty.AttributeTypes()))
+	for name, childTy := range ty.AttributeTypes() {
+		child := Attribute{Name: name, Computed: true}
+		elemTy := childTy
+		if elemTy.IsCollectionType() {
+			elemTy = elemTy.ElementType()
+		}
+		if elemTy.IsObjectType() {
+			child.Children = attributesFromCtyObject(elemTy)
+		}
+		children = append(children, child)
+	}
+	return children
 }
 
 func nestedFromSchemaAttrs(attrs map[string]*tfjson.SchemaAttribute) []Attribute {
