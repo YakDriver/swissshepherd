@@ -61,9 +61,10 @@ type SchemaDocsRule struct {
 	Preferred doc.HeadingTemplates
 
 	// Format sub-options (nil = enabled)
-	NoCodeBlocks       *bool
-	SingleLineAttrs    *bool
-	UninterruptedLists *bool
+	NoCodeBlocks              *bool
+	SingleLineAttrs           *bool
+	UninterruptedLists        *bool
+	AllowAttributeIndentation *bool // nil/true = allow indented sub-attrs in Attribute Reference
 }
 
 func (r *SchemaDocsRule) Name() string { return "schema_docs" }
@@ -447,6 +448,7 @@ func (r *SchemaDocsRule) checkFormat(ctx CheckContext) []Result {
 
 	var results []Result
 	var inSection bool
+	var inAttributes bool
 	var inCodeBlock bool
 	var inList bool
 	var prevWasAttr bool
@@ -459,6 +461,7 @@ func (r *SchemaDocsRule) checkFormat(ctx CheckContext) []Result {
 
 		if strings.HasPrefix(line, "## Argument Reference") || strings.HasPrefix(line, "## Attribute Reference") {
 			inSection = true
+			inAttributes = strings.HasPrefix(line, "## Attribute")
 			inList = false
 			prevWasAttr = false
 			continue
@@ -491,10 +494,25 @@ func (r *SchemaDocsRule) checkFormat(ctx CheckContext) []Result {
 		isBlank := line == ""
 
 		if singleLine && prevWasAttr && !isAttrLine && !isHeading && !isBlank && strings.HasPrefix(line, "  ") {
-			results = append(results, Result{
-				Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityWarning,
-				Message: fmt.Sprintf("multi-line attribute description (line %d); each attribute should be on one line", lineNum),
-			})
+			isIndentedAttr := strings.HasPrefix(line, "    * `")
+			if isIndentedAttr {
+				if inAttributes && enabled(r.AllowAttributeIndentation) {
+					continue
+				}
+				section := "Argument Reference"
+				if inAttributes {
+					section = "Attribute Reference"
+				}
+				results = append(results, Result{
+					Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityWarning,
+					Message: fmt.Sprintf("indented sub-attribute in %s (line %d); use a subsection heading instead", section, lineNum),
+				})
+			} else {
+				results = append(results, Result{
+					Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityWarning,
+					Message: fmt.Sprintf("multi-line attribute description (line %d); each attribute should be on one line", lineNum),
+				})
+			}
 		}
 
 		if uninterrupted && inList && !isAttrLine && !isHeading && !isBlank && !strings.HasPrefix(line, "  ") && !isListProse(line) {
