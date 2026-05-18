@@ -7,7 +7,7 @@ require (
 	github.com/hashicorp/terraform-json v0.27.2
 	github.com/spf13/cobra v1.10.2
 	github.com/yuin/goldmark v1.8.2
-	github.com/zclconf/go-cty v1.16.4
+	github.com/zclconf/go-cty v1.18.1
 	gopkg.in/yaml.v3 v3.0.1
 )
 
