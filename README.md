@@ -353,9 +353,10 @@ check "schema_docs" {
   bad_prefixes = ["A ", "An ", "The ", "Specifies "]
 
   # Format options
-  no_code_blocks       = true   # no fenced code blocks in arg/attr sections
-  single_line_attrs    = true   # each attribute on one line
-  uninterrupted_lists  = true   # no paragraphs between list items
+  no_code_blocks              = true   # no fenced code blocks in arg/attr sections
+  single_line_attrs           = true   # each attribute on one line
+  uninterrupted_lists         = true   # no paragraphs between list items
+  allow_attribute_indentation = true   # allow indented sub-attributes in Attribute Reference (default: true)
 }
 ```
 
