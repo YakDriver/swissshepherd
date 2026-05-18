@@ -45,6 +45,7 @@ type Attribute struct {
 	Computed   bool
 	Deprecated bool
 	Sensitive  bool
+	Children   []Attribute // nested object attributes (from cty type or nested_type)
 }
 
 // Block represents a flattened schema block with its attributes and child block names.
@@ -294,6 +295,7 @@ func flattenBlock(rs *ResourceSchema, path string, block *tfjson.SchemaBlock) {
 			Computed:   attr.Computed,
 			Deprecated: attr.Deprecated,
 			Sensitive:  attr.Sensitive,
+			Children:   extractNestedAttributes(attr),
 		})
 	}
 
@@ -312,6 +314,60 @@ func flattenBlock(rs *ResourceSchema, path string, block *tfjson.SchemaBlock) {
 			flattenBlock(rs, childPath, childBlock.Block)
 		}
 	}
+}
+
+// extractNestedAttributes extracts child attributes from a schema attribute's
+// type definition. Handles both framework-style nested attributes and SDK-style
+// cty object types (including list/set/map of objects).
+func extractNestedAttributes(attr *tfjson.SchemaAttribute) []Attribute {
+	// Framework-style: AttributeNestedType with explicit attributes map.
+	if attr.AttributeNestedType != nil && len(attr.AttributeNestedType.Attributes) > 0 {
+		return nestedFromSchemaAttrs(attr.AttributeNestedType.Attributes)
+	}
+
+	// SDK-style: cty type encoding (list(object({...})), set(object({...})), object({...})).
+	ty := attr.AttributeType
+	if ty.IsCollectionType() {
+		ty = ty.ElementType()
+	}
+	if ty.IsObjectType() {
+		children := make([]Attribute, 0, len(ty.AttributeTypes()))
+		for name, childTy := range ty.AttributeTypes() {
+			child := Attribute{Name: name, Computed: true}
+			// Recurse for nested objects.
+			elemTy := childTy
+			if elemTy.IsCollectionType() {
+				elemTy = elemTy.ElementType()
+			}
+			if elemTy.IsObjectType() {
+				grandchildren := make([]Attribute, 0, len(elemTy.AttributeTypes()))
+				for gName := range elemTy.AttributeTypes() {
+					grandchildren = append(grandchildren, Attribute{Name: gName, Computed: true})
+				}
+				child.Children = grandchildren
+			}
+			children = append(children, child)
+		}
+		return children
+	}
+
+	return nil
+}
+
+func nestedFromSchemaAttrs(attrs map[string]*tfjson.SchemaAttribute) []Attribute {
+	result := make([]Attribute, 0, len(attrs))
+	for name, a := range attrs {
+		result = append(result, Attribute{
+			Name:       name,
+			Required:   a.Required,
+			Optional:   a.Optional,
+			Computed:   a.Computed,
+			Deprecated: a.Deprecated,
+			Sensitive:  a.Sensitive,
+			Children:   extractNestedAttributes(a),
+		})
+	}
+	return result
 }
 
 func sortedKeys(m map[string]*ResourceSchema) []string {

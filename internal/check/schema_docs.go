@@ -452,6 +452,9 @@ func (r *SchemaDocsRule) checkFormat(ctx CheckContext) []Result {
 	var inCodeBlock bool
 	var inList bool
 	var prevWasAttr bool
+	// attrStack tracks attribute names at each indentation level for nesting validation.
+	// Index 0 = top-level (0 spaces), 1 = first indent (4 spaces), etc.
+	var attrStack []string
 	scanner := bufio.NewScanner(bytes.NewReader(source))
 	lineNum := 0
 
@@ -494,9 +497,22 @@ func (r *SchemaDocsRule) checkFormat(ctx CheckContext) []Result {
 		isBlank := line == ""
 
 		if singleLine && prevWasAttr && !isAttrLine && !isHeading && !isBlank && strings.HasPrefix(line, "  ") {
-			isIndentedAttr := strings.HasPrefix(line, "    * `")
+			trimmed := strings.TrimLeft(line, " ")
+			isIndentedAttr := strings.HasPrefix(trimmed, "* `")
 			if isIndentedAttr {
 				if inAttributes && enabled(r.AllowAttributeIndentation) {
+					indent := len(line) - len(trimmed)
+					level := indent / 4 // 4 spaces per level
+					name := extractAttrName(trimmed)
+					// Update stack for this level.
+					if level < len(attrStack) {
+						attrStack = attrStack[:level]
+					}
+					attrStack = append(attrStack, name)
+					// Validate against schema if available.
+					if ctx.Schema != nil && level >= 1 {
+						results = append(results, r.validateIndentedAttr(ctx, attrStack, lineNum)...)
+					}
 					continue
 				}
 				section := "Argument Reference"
@@ -525,14 +541,91 @@ func (r *SchemaDocsRule) checkFormat(ctx CheckContext) []Result {
 
 		if isAttrLine {
 			inList = true
+			name := extractAttrName(line)
+			attrStack = []string{name}
 		}
 		if isHeading {
 			inList = false
+			attrStack = nil
 		}
-		prevWasAttr = isAttrLine
+		prevWasAttr = isAttrLine || (prevWasAttr && strings.HasPrefix(line, "  ") && strings.HasPrefix(strings.TrimLeft(line, " "), "* `"))
 	}
 
 	return results
+}
+
+// extractAttrName pulls the backticked name from a list item like "* `name` - ...".
+func extractAttrName(line string) string {
+	after, ok := strings.CutPrefix(line, "* `")
+	if !ok {
+		return ""
+	}
+	if i := strings.IndexByte(after, '`'); i > 0 {
+		return after[:i]
+	}
+	return ""
+}
+
+// validateIndentedAttr checks that an indented sub-attribute exists in the schema
+// at the correct nesting level. attrStack contains the attribute name chain from
+// root to the current indented item.
+func (r *SchemaDocsRule) validateIndentedAttr(ctx CheckContext, attrStack []string, lineNum int) []Result {
+	if len(attrStack) < 2 {
+		return nil
+	}
+
+	// Walk the schema attribute tree following the stack.
+	// attrStack[0] is the root attribute, attrStack[1] is its child, etc.
+	rootBlock := ctx.Schema.Blocks[""]
+	if rootBlock == nil {
+		return nil
+	}
+
+	// Find the root attribute.
+	var children []schema.Attribute
+	for _, a := range rootBlock.Attributes {
+		if a.Name == attrStack[0] {
+			children = a.Children
+			break
+		}
+	}
+
+	// Walk intermediate levels.
+	for i := 1; i < len(attrStack)-1; i++ {
+		found := false
+		for _, a := range children {
+			if a.Name == attrStack[i] {
+				children = a.Children
+				found = true
+				break
+			}
+		}
+		if !found {
+			return nil // can't validate deeper if intermediate is unknown
+		}
+	}
+
+	// Check the leaf (last element in stack).
+	leaf := attrStack[len(attrStack)-1]
+
+	if len(children) == 0 {
+		// Parent has no known children in schema — the indentation is invalid.
+		return []Result{{
+			Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityWarning,
+			Message: fmt.Sprintf("indented attribute %q (line %d) under %q but schema has no nested attributes there", leaf, lineNum, attrStack[len(attrStack)-2]),
+		}}
+	}
+
+	for _, a := range children {
+		if a.Name == leaf {
+			return nil // valid
+		}
+	}
+
+	return []Result{{
+		Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityWarning,
+		Message: fmt.Sprintf("indented attribute %q (line %d) not found in schema under %q", leaf, lineNum, attrStack[len(attrStack)-2]),
+	}}
 }
 
 // --- Labels ---
