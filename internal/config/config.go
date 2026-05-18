@@ -121,9 +121,10 @@ type CheckConfig struct {
 	BadPrefixes []string `hcl:"bad_prefixes,optional"`
 
 	// FormatStyle rule options. nil means enabled (default true).
-	NoCodeBlocks       *bool `hcl:"no_code_blocks,optional"`
-	SingleLineAttrs    *bool `hcl:"single_line_attrs,optional"`
-	UninterruptedLists *bool `hcl:"uninterrupted_lists,optional"`
+	NoCodeBlocks              *bool `hcl:"no_code_blocks,optional"`
+	SingleLineAttrs           *bool `hcl:"single_line_attrs,optional"`
+	UninterruptedLists        *bool `hcl:"uninterrupted_lists,optional"`
+	AllowAttributeIndentation *bool `hcl:"allow_attribute_indentation,optional"`
 
 	// SchemaDocsRule sub-check toggles. nil means enabled (default true).
 	Coverage    *bool `hcl:"coverage,optional"`
