@@ -37,7 +37,8 @@ func version() string {
 		v := info.Main.Version
 		for _, s := range info.Settings {
 			if s.Key == "vcs.revision" && len(s.Value) >= 7 {
-				v += " (" + s.Value[:7] + ")"
+				v = v + " (" + s.Value[:7] + ")"
+				break
 			}
 		}
 		if v != "" {
