@@ -219,6 +219,7 @@ func (r *SchemaDocsRule) checkCoverage(ctx CheckContext) []Result {
 					Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityWarning,
 					Message: fmt.Sprintf("documented attribute %q in block %q does not exist in schema", docAttr.Name, displayPath(blockPath)),
 					Block:   blockPath,
+					Line:    docAttr.Line,
 				})
 			}
 		}
@@ -271,8 +272,10 @@ func (r *SchemaDocsRule) checkAttributeCoverage(ctx CheckContext, rootBlock *sch
 func (r *SchemaDocsRule) checkComputedMisplacement(ctx CheckContext, schemaBlock *schema.Block, argBlock *doc.DocBlock, attrBlock *doc.DocBlock) []Result {
 	var results []Result
 	documented := make(map[string]bool, len(argBlock.Attributes))
+	docLines := make(map[string]int, len(argBlock.Attributes))
 	for _, attr := range argBlock.Attributes {
 		documented[attr.Name] = true
+		docLines[attr.Name] = attr.Line
 	}
 
 	// Build set of attrs in the attribute section to avoid false positives
@@ -294,6 +297,7 @@ func (r *SchemaDocsRule) checkComputedMisplacement(ctx CheckContext, schemaBlock
 				results = append(results, Result{
 					Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityWarning,
 					Message: fmt.Sprintf("computed-only attribute %q should not appear in Argument Reference section", attr.Name),
+					Line:    docLines[attr.Name],
 				})
 			}
 		}
@@ -355,6 +359,7 @@ func checkDescriptionBlocks(resource, ruleName string, prefixes []string, blocks
 						Rule: ruleName, Resource: resource, Severity: SeverityError,
 						Message: fmt.Sprintf("attribute %q description should not start with %q (block %q)", attr.Name, strings.TrimSpace(prefix), displayPath(blockName)),
 						Block:   blockName,
+						Line:    attr.Line,
 					})
 					break
 				}
@@ -657,6 +662,7 @@ func (r *SchemaDocsRule) checkLabels(ctx CheckContext) []Result {
 					Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityWarning,
 					Message: fmt.Sprintf("argument %q in block %q is missing (Required) or (Optional) label", attr.Name, displayPath(blockName)),
 					Block:   blockName,
+					Line:    attr.Line,
 				})
 			}
 		}
@@ -674,6 +680,7 @@ func (r *SchemaDocsRule) checkLabels(ctx CheckContext) []Result {
 					Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityWarning,
 					Message: fmt.Sprintf("attribute %q in block %q should not have %s label", attr.Name, displayPath(blockName), label),
 					Block:   blockName,
+					Line:    attr.Line,
 				})
 			}
 		}
