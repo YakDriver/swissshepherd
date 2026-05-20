@@ -185,7 +185,7 @@ Options ending in `_file` (`ignore_targets_file`, `allow_subcategories_file`, `i
 | `frontmatter` | per-file | YAML frontmatter field validation |
 | `import_section` | per-target | Import section style and structure |
 | `region_argument` | per-target | Region argument presence for region-aware types |
-| `schema_docs` | per-target | Schema coverage, ordering, description style, heading style, format, labels, and bylines |
+| `schema_docs` | per-target | Schema coverage, ordering, description style, heading style, format, labels, deprecation, and bylines |
 | `section_presence` | per-target | Required/forbidden section enforcement |
 | `signature_section` | per-target | Function signature validation |
 | `timeouts_section` | per-target | Timeout actions match schema bidirectionally |
@@ -320,6 +320,7 @@ The primary rule. Validates argument and attribute documentation against the pro
 |-----------|-------------------|
 | `byline` | First paragraph after section heading matches expected byline text (from type) |
 | `coverage` | Every schema attr is documented; every documented attr exists in schema |
+| `deprecated` | Deprecation status matches between schema and docs (both directions) |
 | `description` | Descriptions don't start with bad prefixes ("A ", "The ", "Specifies ", etc.) |
 | `format` | No code blocks in arg/attr sections; single-line attrs; uninterrupted lists |
 | `heading` | Block headings match the preferred template style |
@@ -333,6 +334,7 @@ check "schema_docs" {
   # Sub-check toggles
   byline      = true
   coverage    = true
+  deprecated  = true
   description = true
   format      = true
   heading     = true
