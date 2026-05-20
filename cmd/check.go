@@ -192,6 +192,7 @@ func runCheck(cmd *cobra.Command, args []string) error {
 			Format:                    cc.Format,
 			Labels:                    cc.Labels,
 			Byline:                    cc.Byline,
+			Deprecated:                cc.Deprecated,
 			BadPrefixes:               cc.BadPrefixes,
 			Preferred:                 preferredHeadingTemplates(cfg),
 			NoCodeBlocks:              cc.NoCodeBlocks,

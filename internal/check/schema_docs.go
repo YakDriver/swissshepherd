@@ -53,6 +53,7 @@ type SchemaDocsRule struct {
 	Format      *bool
 	Labels      *bool
 	Byline      *bool
+	Deprecated  *bool
 
 	// Description options
 	BadPrefixes []string
@@ -122,6 +123,9 @@ func (r *SchemaDocsRule) Check(ctx CheckContext) []Result {
 	}
 	if enabled(r.Byline) {
 		results = append(results, r.checkBylines(ctx)...)
+	}
+	if enabled(r.Deprecated) {
+		results = append(results, r.checkDeprecated(ctx)...)
 	}
 
 	return results
@@ -892,4 +896,71 @@ func (r *SchemaDocsRule) checkSectionByline(ctx CheckContext, section *doc.Secti
 		Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityWarning,
 		Message: fmt.Sprintf("%s byline %q does not match expected texts", sectionName, truncate(paraText, 80)),
 	}}
+}
+
+// --- Deprecated ---
+
+// checkDeprecated verifies that attributes marked deprecated in the schema
+// are also marked as deprecated in the documentation.
+func (r *SchemaDocsRule) checkDeprecated(ctx CheckContext) []Result {
+	if ctx.Schema == nil {
+		return nil
+	}
+
+	var results []Result
+	for blockPath, schemaBlock := range ctx.Schema.Blocks {
+		docBlock := findDocBlock(ctx.Doc, leafName(blockPath), blockPath)
+		if docBlock == nil {
+			continue
+		}
+
+		schemaAttrs := make(map[string]schema.Attribute, len(schemaBlock.Attributes))
+		for _, a := range schemaBlock.Attributes {
+			schemaAttrs[a.Name] = a
+		}
+
+		docAttrs := make(map[string]*doc.DocAttribute, len(docBlock.Attributes))
+		for i := range docBlock.Attributes {
+			docAttrs[docBlock.Attributes[i].Name] = &docBlock.Attributes[i]
+		}
+
+		// Schema deprecated but doc not marked.
+		for _, attr := range schemaBlock.Attributes {
+			if !attr.Deprecated {
+				continue
+			}
+			da, ok := docAttrs[attr.Name]
+			if !ok {
+				continue // not documented — coverage check handles this
+			}
+			if !da.Deprecated {
+				results = append(results, Result{
+					Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityWarning,
+					Message: fmt.Sprintf("attribute %q in block %q is deprecated in schema but not marked as deprecated in docs", attr.Name, displayPath(blockPath)),
+					Block:   blockPath,
+					Line:    da.Line,
+				})
+			}
+		}
+
+		// Doc marked deprecated but schema is not.
+		for _, da := range docBlock.Attributes {
+			if !da.Deprecated {
+				continue
+			}
+			sa, ok := schemaAttrs[da.Name]
+			if !ok {
+				continue // phantom — coverage check handles this
+			}
+			if !sa.Deprecated {
+				results = append(results, Result{
+					Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityWarning,
+					Message: fmt.Sprintf("attribute %q in block %q is marked deprecated in docs but not in schema; either mark as deprecated in schema or remove the deprecation notice", da.Name, displayPath(blockPath)),
+					Block:   blockPath,
+					Line:    da.Line,
+				})
+			}
+		}
+	}
+	return results
 }

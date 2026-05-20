@@ -134,6 +134,7 @@ type CheckConfig struct {
 	Format      *bool `hcl:"format,optional"`
 	Labels      *bool `hcl:"labels,optional"`
 	Byline      *bool `hcl:"byline,optional"`
+	Deprecated  *bool `hcl:"deprecated,optional"`
 
 	// ImportSection rule options.
 	RequireIdentitySection *bool `hcl:"require_identity_section,optional"`
