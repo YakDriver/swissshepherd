@@ -124,7 +124,8 @@ This resource exports no additional attributes.
 		t.Fatalf("parse error: %v", err)
 	}
 
-	rule := &check.SchemaDocsRule{IgnoreDeprecated: true}
+	disabled := false
+	rule := &check.SchemaDocsRule{IgnoreDeprecated: true, Ordering: &disabled}
 	results := rule.Check(check.CheckContext{Resource: "aws_test_resource", Schema: rs, Doc: d})
 
 	// Filter to errors and warnings
@@ -211,7 +212,8 @@ This resource exports no additional attributes.
 		t.Fatalf("parse error: %v", err)
 	}
 
-	rule := &check.SchemaDocsRule{IgnoreDeprecated: true}
+	disabled := false
+	rule := &check.SchemaDocsRule{IgnoreDeprecated: true, Ordering: &disabled}
 	results := rule.Check(check.CheckContext{Resource: "aws_test_resource", Schema: rs, Doc: d})
 
 	// max_connections and timeout should NOT be phantom (they exist in siblings).
@@ -306,7 +308,8 @@ This resource exports no additional attributes.
 		t.Fatalf("parse error: %v", err)
 	}
 
-	rule := &check.SchemaDocsRule{IgnoreDeprecated: true}
+	disabled := false
+	rule := &check.SchemaDocsRule{IgnoreDeprecated: true, Ordering: &disabled}
 	results := rule.Check(check.CheckContext{Resource: "aws_test_resource", Schema: rs, Doc: d})
 
 	// per_request should NOT be phantom — it's a child block of slow.grpc.
@@ -388,7 +391,8 @@ This resource exports no additional attributes.
 		t.Fatalf("parse error: %v", err)
 	}
 
-	rule := &check.SchemaDocsRule{IgnoreDeprecated: true}
+	disabled := false
+	rule := &check.SchemaDocsRule{IgnoreDeprecated: true, Ordering: &disabled}
 	results := rule.Check(check.CheckContext{Resource: "aws_test_resource", Schema: rs, Doc: d})
 
 	// max_pending should be reported as undocumented.

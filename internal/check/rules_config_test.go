@@ -158,8 +158,8 @@ func TestSchemaDocsRule_CustomBadPrefixes(t *testing.T) {
 
 	d, _ := doc.Parse([]byte(`## Argument Reference
 
-* `+"`name`"+` - (Required) The name of the thing.
 * `+"`mode`"+` - (Optional) FORBIDDEN start.
+* `+"`name`"+` - (Required) The name of the thing.
 `), "test")
 
 	// Replace the default list with a custom one that only flags "FORBIDDEN".
