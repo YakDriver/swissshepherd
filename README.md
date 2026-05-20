@@ -325,7 +325,7 @@ The primary rule. Validates argument and attribute documentation against the pro
 | `format` | No code blocks in arg/attr sections; single-line attrs; uninterrupted lists |
 | `heading` | Block headings match the preferred template style |
 | `labels` | Arguments have (Required)/(Optional); attributes do not |
-| `ordering` | Attributes are alphabetical within required/optional groups |
+| `ordering` | Attributes alphabetical (single-byline lists as one group; split required/optional bylines as separate groups) |
 
 **Config:**
 
@@ -361,6 +361,15 @@ check "schema_docs" {
   allow_attribute_indentation = true   # allow indented sub-attributes in Attribute Reference (default: true)
 }
 ```
+
+#### Ordering: single vs. split lists
+
+The `ordering` sub-check adapts to how arguments are presented in the doc:
+
+- **Single combined list** — when the byline is `This resource supports the following arguments:`, `Each \`block\` supports:`, or any single byline preceding one list, all attributes (Required and Optional) are checked as one alphabetical sequence.
+- **Split lists** — when the doc uses two bylines: `The following arguments are required:` followed (after the required list) by `The following arguments are optional:`, each group is checked independently. Required attributes alphabetical among themselves; Optional attributes alphabetical among themselves.
+
+The signal comes directly from the byline text, not the order of attributes. Mixing labels in a single-list block (e.g., a `(Required)` after several `(Optional)` items) is allowed as long as the names are alphabetical overall.
 
 ---
 
