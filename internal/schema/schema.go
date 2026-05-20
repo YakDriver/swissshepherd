@@ -10,8 +10,8 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/hashicorp/go-cty/cty"
 	tfjson "github.com/hashicorp/terraform-json"
+	"github.com/zclconf/go-cty/cty"
 )
 
 // Schema-kind identifiers used to select the right target map on
