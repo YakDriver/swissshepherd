@@ -19,6 +19,7 @@ type DocAttribute struct {
 	Name        string
 	Required    bool
 	Optional    bool
+	Deprecated  bool
 	Description string
 	Line        int // 1-based line number in the source file
 }
@@ -648,6 +649,12 @@ func parseListItem(li *ast.ListItem, source []byte) DocAttribute {
 						attr.Required = true
 					case "Optional":
 						attr.Optional = true
+					case "Deprecated", "**Deprecated**":
+						attr.Deprecated = true
+					default:
+						if strings.Contains(trait, "Deprecated") {
+							attr.Deprecated = true
+						}
 					}
 				}
 				attr.Description = strings.TrimSpace(desc[end+1:])
