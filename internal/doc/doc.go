@@ -36,6 +36,7 @@ type DocBlock struct {
 	Heading             string
 	Attributes          []DocAttribute
 	MalformedAttributes []MalformedAttr // attributes found but with formatting issues
+	SplitByLabel        bool            // true if the doc explicitly separates required/optional with distinct bylines
 }
 
 // HeadingTemplates defines patterns for recognizing block headings.
@@ -328,6 +329,7 @@ func extractBlocks(tree ast.Node, source []byte, doc *Document, templates Headin
 	var currentBlockAliases []string
 	var currentSection *Section
 	var inArguments, inAttributes bool
+	var sawRequiredByline bool // true between a "required:" byline and the next list
 
 	// closeSection finalizes the current section's EndOffset.
 	closeSection := func(endOffset int) {
@@ -371,12 +373,14 @@ func extractBlocks(tree ast.Node, source []byte, doc *Document, templates Headin
 				assignSection(&doc.Sections.Title, n, headingText)
 				inArguments = false
 				inAttributes = false
+				sawRequiredByline = false
 				return ast.WalkSkipChildren, nil
 			}
 
 			if n.Level == 2 {
 				inArguments = strings.HasPrefix(headingText, "Argument")
 				inAttributes = strings.HasPrefix(headingText, "Attribute")
+				sawRequiredByline = false
 
 				switch {
 				case inArguments:
@@ -409,6 +413,7 @@ func extractBlocks(tree ast.Node, source []byte, doc *Document, templates Headin
 				blockNames := templates.MatchAll(headingText)
 				if len(blockNames) > 0 {
 					currentBlockName = blockNames[0]
+					sawRequiredByline = false
 					for _, bn := range blockNames {
 						if inArguments {
 							ensureBlock(doc.ArgumentBlocks, bn, headingText)
@@ -443,6 +448,15 @@ func extractBlocks(tree ast.Node, source []byte, doc *Document, templates Headin
 			if currentSection != nil {
 				currentSection.Paragraphs = append(currentSection.Paragraphs, n)
 			}
+			// Detect "required:" / "optional:" bylines preceding lists.
+			// "required:" sets sawRequiredByline; the next list-bearing block
+			// will be marked split.
+			if inArguments {
+				paraText := strings.ToLower(strings.TrimSpace(string(n.Text(source))))
+				if strings.Contains(paraText, "arguments are required:") {
+					sawRequiredByline = true
+				}
+			}
 			return ast.WalkSkipChildren, nil
 
 		case *ast.List:
@@ -469,6 +483,12 @@ func extractBlocks(tree ast.Node, source []byte, doc *Document, templates Headin
 			block := target[currentBlockName]
 			if block == nil {
 				return ast.WalkSkipChildren, nil
+			}
+
+			// If we saw a "required:" byline before this list, mark the block as split.
+			if inArguments && sawRequiredByline {
+				block.SplitByLabel = true
+				sawRequiredByline = false
 			}
 
 			for child := n.FirstChild(); child != nil; child = child.NextSibling() {

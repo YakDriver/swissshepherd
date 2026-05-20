@@ -802,8 +802,23 @@ func checkBlockOrdering(resource, ruleName, section, blockPath string, block *do
 			unmarked = append(unmarked, attr.Name)
 		}
 	}
-	for _, group := range [][]string{required, optional, unmarked} {
-		if r := checkSliceOrdering(group, resource, ruleName, section, blockPath); r != nil {
+
+	// If the doc explicitly split required/optional with separate bylines
+	// ("The following arguments are required:" / "The following arguments
+	// are optional:"), check each group independently. Otherwise check
+	// all labeled attributes as a single alphabetical list.
+	if block.SplitByLabel {
+		for _, group := range [][]string{required, optional, unmarked} {
+			if r := checkSliceOrdering(group, resource, ruleName, section, blockPath); r != nil {
+				results = append(results, *r)
+			}
+		}
+	} else {
+		all := make([]string, 0, len(block.Attributes))
+		for _, attr := range block.Attributes {
+			all = append(all, attr.Name)
+		}
+		if r := checkSliceOrdering(all, resource, ruleName, section, blockPath); r != nil {
 			results = append(results, *r)
 		}
 	}
