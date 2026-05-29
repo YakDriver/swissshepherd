@@ -83,20 +83,22 @@ func TestHeadingTemplates_Match(t *testing.T) {
 			heading:   "condition",
 			want:      "condition",
 		},
-		// Non-matches
+		// Title-case headings match {Title} template (the parser only invokes
+		// MatchAll inside Argument/Attribute Reference, where Example Usage
+		// subheadings cannot appear).
 		{
-			name:      "example heading rejected",
+			name:      "title template snake_cases multi-word headings",
 			templates: doc.DefaultHeadingTemplates(),
 			heading:   "Basic Usage",
-			want:      "",
+			want:      "basic_usage",
 		},
 		{
-			name:      "example heading rejected 2",
+			name:      "title template snake_cases mixed case",
 			templates: doc.DefaultHeadingTemplates(),
 			heading:   "Network example",
-			want:      "",
+			want:      "network_example",
 		},
-		// Strict mode — only backtick_block accepted
+		// Non-matches
 		{
 			name:      "strict rejects bare name",
 			templates: doc.HeadingTemplates{"`{Block}` Block"},

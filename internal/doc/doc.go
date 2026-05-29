@@ -86,15 +86,12 @@ func (t HeadingTemplates) Match(heading string) string {
 
 // MatchAll returns all block names from a heading. Combined headings like
 // "`publish_auth_mode` and `subscribe_auth_mode`" return both names.
+//
+// MatchAll is only meaningful for headings that the doc structure permits
+// in the Argument Reference or Attribute Reference sections. The parser
+// guards the call site so it never sees Example Usage subheadings.
 func (t HeadingTemplates) MatchAll(heading string) []string {
 	h := strings.TrimSpace(heading)
-
-	// Skip example/usage headings (but not snake_case block names that happen
-	// to contain "usage", e.g. "usage_based_pricing_term Block").
-	lower := strings.ToLower(h)
-	if (strings.Contains(lower, "example") || strings.Contains(lower, "usage")) && !strings.Contains(h, "_") {
-		return nil
-	}
 
 	// Try combined "X and Y" pattern first.
 	if parts := splitCombinedHeading(h); len(parts) > 1 {
