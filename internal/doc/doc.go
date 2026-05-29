@@ -89,9 +89,10 @@ func (t HeadingTemplates) Match(heading string) string {
 func (t HeadingTemplates) MatchAll(heading string) []string {
 	h := strings.TrimSpace(heading)
 
-	// Skip example/usage headings
+	// Skip example/usage headings (but not snake_case block names that happen
+	// to contain "usage", e.g. "usage_based_pricing_term Block").
 	lower := strings.ToLower(h)
-	if strings.Contains(lower, "example") || strings.Contains(lower, "usage") {
+	if (strings.Contains(lower, "example") || strings.Contains(lower, "usage")) && !strings.Contains(h, "_") {
 		return nil
 	}
 
