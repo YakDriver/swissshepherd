@@ -66,8 +66,33 @@ func TestLoad_DefaultResourceShape(t *testing.T) {
 	if !slices.Equal(r.WebsitePaths, wantPaths) {
 		t.Errorf("WebsitePaths = %v, want %v", r.WebsitePaths, wantPaths)
 	}
-	if r.RequireAttributes != config.SectionRequired {
-		t.Errorf("RequireAttributes = %q, want %q", r.RequireAttributes, config.SectionRequired)
+	// Resource must declare its sections in the canonical order.
+	wantSectionNames := []config.SectionName{
+		config.SectionTitle,
+		config.SectionExample,
+		config.SectionArguments,
+		config.SectionAttributes,
+		config.SectionTimeouts,
+		config.SectionImport,
+		config.SectionSignature,
+	}
+	gotNames := make([]config.SectionName, len(r.Sections))
+	for i, s := range r.Sections {
+		gotNames[i] = s.SectionName()
+	}
+	if !slices.Equal(gotNames, wantSectionNames) {
+		t.Errorf("Sections order = %v, want %v", gotNames, wantSectionNames)
+	}
+	// Spot-check key required and forbidden flags.
+	specByName := make(map[config.SectionName]config.SectionSpec, len(r.Sections))
+	for _, s := range r.Sections {
+		specByName[s.SectionName()] = s
+	}
+	if !specByName[config.SectionAttributes].Required {
+		t.Errorf("Attributes should be required for resource type")
+	}
+	if !specByName[config.SectionSignature].Forbidden {
+		t.Errorf("Signature should be forbidden for resource type")
 	}
 	if !r.RegionAware {
 		t.Error("RegionAware should be true for resource type")
@@ -211,25 +236,75 @@ type "broken" {
 	}
 }
 
-func TestLoad_InvalidType_InvalidSectionRequirement(t *testing.T) {
+func TestLoad_InvalidType_InvalidSectionName(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
 	cfgPath := filepath.Join(root, "swissshepherd.hcl")
 	writeFile(t, cfgPath, `
 type "broken" {
-  schema_kind       = "none"
-  website_paths     = ["docs/{name}.md"]
-  require_attributes = "mandatory"
+  schema_kind   = "none"
+  website_paths = ["docs/{name}.md"]
+  section "not_a_real_section" {
+    required = true
+  }
 }
 `)
 
 	_, err := config.Load(cfgPath)
 	if err == nil {
-		t.Fatal("expected error for invalid section requirement")
+		t.Fatal("expected error for invalid section name")
 	}
-	if !strings.Contains(err.Error(), "require_attributes") {
-		t.Errorf("error should name the offending field; got: %v", err)
+	if !strings.Contains(err.Error(), "not_a_real_section") {
+		t.Errorf("error should name the offending section; got: %v", err)
+	}
+}
+
+func TestLoad_InvalidType_DuplicateSection(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	cfgPath := filepath.Join(root, "swissshepherd.hcl")
+	writeFile(t, cfgPath, `
+type "broken" {
+  schema_kind   = "none"
+  website_paths = ["docs/{name}.md"]
+  section "arguments" { required = true }
+  section "arguments" {}
+}
+`)
+
+	_, err := config.Load(cfgPath)
+	if err == nil {
+		t.Fatal("expected error for duplicate section")
+	}
+	if !strings.Contains(err.Error(), "more than once") {
+		t.Errorf("error should explain duplicate sections; got: %v", err)
+	}
+}
+
+func TestLoad_InvalidType_RequiredAndForbiddenSection(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	cfgPath := filepath.Join(root, "swissshepherd.hcl")
+	writeFile(t, cfgPath, `
+type "broken" {
+  schema_kind   = "none"
+  website_paths = ["docs/{name}.md"]
+  section "arguments" {
+    required  = true
+    forbidden = true
+  }
+}
+`)
+
+	_, err := config.Load(cfgPath)
+	if err == nil {
+		t.Fatal("expected error for both required and forbidden")
+	}
+	if !strings.Contains(err.Error(), "both required and forbidden") {
+		t.Errorf("error should explain the conflict; got: %v", err)
 	}
 }
 
@@ -303,21 +378,25 @@ func TestType_ResolveDocPath(t *testing.T) {
 	}
 }
 
-func TestSectionRequirement_IsValid(t *testing.T) {
+func TestSectionName_IsValid(t *testing.T) {
 	t.Parallel()
 
-	cases := map[config.SectionRequirement]bool{
-		"":          true,
-		"required":  true,
-		"optional":  true,
-		"forbidden": true,
-		"REQUIRED":  false,
-		"must":      false,
-		"foo":       false,
+	cases := map[config.SectionName]bool{
+		config.SectionTitle:      true,
+		config.SectionSignature:  true,
+		config.SectionExample:    true,
+		config.SectionArguments:  true,
+		config.SectionAttributes: true,
+		config.SectionTimeouts:   true,
+		config.SectionImport:     true,
+		"":                       false,
+		"frontmatter":            false,
+		"description":            false,
+		"TITLE":                  false,
 	}
 	for in, want := range cases {
 		if got := in.IsValid(); got != want {
-			t.Errorf("SectionRequirement(%q).IsValid() = %v, want %v", in, got, want)
+			t.Errorf("SectionName(%q).IsValid() = %v, want %v", in, got, want)
 		}
 	}
 }

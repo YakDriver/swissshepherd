@@ -136,3 +136,45 @@ func docAttrNames(attrs []doc.DocAttribute) []string {
 	}
 	return names
 }
+
+// TestParse_FrontmatterDoesNotProduceSetextHeadings is a regression test for
+// the case where Goldmark, lacking a meta extension, treats the closing "---"
+// of YAML frontmatter as a setext H2 underline for the preceding paragraph.
+// Stripping the frontmatter region before parsing keeps this from happening.
+func TestParse_FrontmatterDoesNotProduceSetextHeadings(t *testing.T) {
+	t.Parallel()
+
+	source := []byte(`---
+subcategory: "Transcribe"
+layout: "aws"
+page_title: "AWS: aws_transcribe_start_transcription_job"
+description: |-
+  Starts an Amazon Transcribe transcription job.
+---
+
+# Action: aws_transcribe_start_transcription_job
+
+## Argument Reference
+
+* ` + "`name`" + ` - (Required) Job name.
+`)
+
+	d, err := doc.Parse(source, "test")
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+
+	if d.Sections.Title == nil {
+		t.Fatal("Title section should be discovered")
+	}
+	if d.Sections.Arguments == nil {
+		t.Fatal("Argument Reference section should be discovered")
+	}
+	if got := len(d.Sections.UnknownHeadings); got != 0 {
+		var texts []string
+		for _, h := range d.Sections.UnknownHeadings {
+			texts = append(texts, h.Text)
+		}
+		t.Errorf("expected 0 unknown headings (frontmatter must not produce setext H2s), got %d: %v", got, texts)
+	}
+}

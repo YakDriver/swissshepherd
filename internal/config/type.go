@@ -9,26 +9,80 @@ import (
 	"strings"
 )
 
-// SectionRequirement captures the tri-state required/optional/forbidden
-// requirement for a documentation section. Stored as a string so it decodes
-// cleanly from HCL; validated at config load.
-type SectionRequirement string
+// SectionName names a recognized doc section. Each value maps to a field on
+// doc.Sections.
+type SectionName string
 
-// Known SectionRequirement values. Any other value is a config error.
+// Recognized section names. The order of these constants matches the
+// canonical AWS provider doc structure but is not load-bearing — the Type's
+// section blocks determine order.
 const (
-	SectionOptional  SectionRequirement = "optional"
-	SectionRequired  SectionRequirement = "required"
-	SectionForbidden SectionRequirement = "forbidden"
+	SectionTitle      SectionName = "title"
+	SectionSignature  SectionName = "signature"
+	SectionExample    SectionName = "example"
+	SectionArguments  SectionName = "arguments"
+	SectionAttributes SectionName = "attributes"
+	SectionTimeouts   SectionName = "timeouts"
+	SectionImport     SectionName = "import"
 )
 
-// IsValid reports whether the value is one of the three accepted requirement
-// strings.
-func (s SectionRequirement) IsValid() bool {
-	switch s {
-	case "", SectionOptional, SectionRequired, SectionForbidden:
-		return true
+// AllSectionNames lists every recognized section. Used for config validation
+// and for the section_presence rule's "unknown sections" check.
+var AllSectionNames = []SectionName{
+	SectionTitle,
+	SectionSignature,
+	SectionExample,
+	SectionArguments,
+	SectionAttributes,
+	SectionTimeouts,
+	SectionImport,
+}
+
+// IsValid reports whether n is one of the recognized section names.
+func (n SectionName) IsValid() bool {
+	return slices.Contains(AllSectionNames, n)
+}
+
+// HeadingText returns the canonical "## <text>" heading for the section.
+// Used in error messages.
+func (n SectionName) HeadingText() string {
+	switch n {
+	case SectionTitle:
+		return "<title>"
+	case SectionSignature:
+		return "Signature"
+	case SectionExample:
+		return "Example Usage"
+	case SectionArguments:
+		return "Argument Reference"
+	case SectionAttributes:
+		return "Attribute Reference"
+	case SectionTimeouts:
+		return "Timeouts"
+	case SectionImport:
+		return "Import"
 	}
-	return false
+	return string(n)
+}
+
+// SectionSpec declares one section's place in a Type's canonical doc
+// structure. The order of SectionSpec entries on a Type IS the expected
+// section order; section_presence enforces that order when its
+// enforce_order option is set.
+//
+// Required = true means the section must be present.
+// Forbidden = true means the section must be absent.
+// Both true is a config error; both false means "optional" (allowed but
+// not required).
+type SectionSpec struct {
+	Name      string `hcl:"name,label"`
+	Required  bool   `hcl:"required,optional"`
+	Forbidden bool   `hcl:"forbidden,optional"`
+}
+
+// SectionName returns Name typed as a SectionName for use in checks.
+func (s SectionSpec) SectionName() SectionName {
+	return SectionName(s.Name)
 }
 
 // Type describes one category of provider documentation — resource, data
@@ -78,12 +132,17 @@ type Type struct {
 	// for categories where the section header alone is enough.
 	AllowMissingArgumentsByline bool `hcl:"allow_missing_arguments_byline,optional"`
 
-	// Section requirements: "required", "optional", or "forbidden". Empty
-	// string means "optional" (the safe default).
-	RequireAttributes SectionRequirement `hcl:"require_attributes,optional"`
-	RequireImport     SectionRequirement `hcl:"require_import,optional"`
-	RequireTimeouts   SectionRequirement `hcl:"require_timeouts,optional"`
-	RequireSignature  SectionRequirement `hcl:"require_signature,optional"`
+	// Sections declares the canonical doc structure for this type. The order
+	// of section blocks here IS the expected order in the doc file. Each
+	// section block accepts:
+	//   - required = true   → section must be present
+	//   - forbidden = true  → section must be absent
+	//   - both unset        → section is optional (allowed, not required)
+	//   - both set          → config error
+	//
+	// section_presence reads this to enforce presence and (when its
+	// enforce_order option is true) order.
+	Sections []SectionSpec `hcl:"section,block"`
 
 	// Frontmatter field requirements. FrontmatterRequire fields must be
 	// present; FrontmatterForbid fields must be absent. The overlap is a
@@ -98,9 +157,10 @@ type Type struct {
 }
 
 // Validate enforces the non-HCL constraints on a single Type: schema_kind
-// must be non-empty, at least one website_path must be set, section
-// requirements must use one of the allowed strings, and FrontmatterRequire
-// and FrontmatterForbid must not list the same field.
+// must be non-empty, at least one website_path must be set, sections must
+// reference known names with no duplicates and no required+forbidden
+// conflict, and FrontmatterRequire and FrontmatterForbid must not list the
+// same field.
 func (t *Type) Validate() error {
 	if t.Name == "" {
 		return fmt.Errorf("type block has no name label")
@@ -114,15 +174,18 @@ func (t *Type) Validate() error {
 	// {name} is not required: types like "index" resolve to a single fixed
 	// file ("docs/index.md") rather than one file per schema entry.
 
-	for name, req := range map[string]SectionRequirement{
-		"require_attributes": t.RequireAttributes,
-		"require_import":     t.RequireImport,
-		"require_timeouts":   t.RequireTimeouts,
-		"require_signature":  t.RequireSignature,
-	} {
-		if !req.IsValid() {
-			return fmt.Errorf("type %q: %s = %q; expected one of: required, optional, forbidden",
-				t.Name, name, req)
+	seenSection := make(map[string]bool, len(t.Sections))
+	for _, s := range t.Sections {
+		if !s.SectionName().IsValid() {
+			return fmt.Errorf("type %q: section %q is not a recognized section name; expected one of %v",
+				t.Name, s.Name, AllSectionNames)
+		}
+		if seenSection[s.Name] {
+			return fmt.Errorf("type %q: section %q declared more than once", t.Name, s.Name)
+		}
+		seenSection[s.Name] = true
+		if s.Required && s.Forbidden {
+			return fmt.Errorf("type %q: section %q has both required and forbidden set", t.Name, s.Name)
 		}
 	}
 

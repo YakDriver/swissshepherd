@@ -186,7 +186,7 @@ Options ending in `_file` (`ignore_targets_file`, `allow_subcategories_file`, `i
 | `import_section` | per-target | Import section style and structure |
 | `region_argument` | per-target | Region argument presence for region-aware types |
 | `schema_docs` | per-target | Schema coverage, ordering, description style, heading style, format, labels, deprecation, and bylines |
-| `section_presence` | per-target | Required/forbidden section enforcement |
+| `section_presence` | per-target | Section presence, order, and recognition of unknown level-2 headings |
 | `signature_section` | per-target | Function signature validation |
 | `timeouts_section` | per-target | Timeout actions match schema bidirectionally |
 | `title_section` | per-target | Level-1 heading validation |
@@ -375,14 +375,50 @@ The signal comes directly from the byline text, not the order of attributes. Mix
 
 ### `section_presence`
 
-Enforces that required sections exist and forbidden sections are absent. Requirements come from the `type` block:
+Owns the structural integrity of a doc file: presence, order, and recognition of level-2 sections. Configuration comes from two places — the `type` block declares which sections may appear and in what order, and the `check "section_presence"` block toggles enforcement.
 
-- `require_attributes` = `"required"` / `"optional"` / `"forbidden"`
-- `require_import` = same
-- `require_timeouts` = same (overridden by schema: if schema has timeouts block, section is required regardless)
-- `require_signature` = same
+**On the `type` block** — list the canonical sections in the order they must appear:
 
-No check-level config — entirely driven by type definitions.
+```hcl
+type "resource" {
+  schema_kind   = "resource"
+  website_paths = ["website/docs/r/{name}.html.markdown"]
+  title_prefix  = "Resource"
+
+  section "title"      { required = true }
+  section "example"    { required = true }
+  section "arguments"  { required = true }
+  section "attributes" { required = true }
+  section "timeouts"   {}
+  section "import"     {}
+  section "signature"  { forbidden = true }
+
+  region_aware = true
+}
+```
+
+Recognized section names: `title`, `signature`, `example`, `arguments`, `attributes`, `timeouts`, `import`. Each section block accepts:
+
+- `required = true` — section must be present
+- `forbidden = true` — section must be absent
+- both unset — section is optional (allowed but not required)
+- both set — config error
+
+The order of `section` blocks IS the canonical doc order. A type with no `section` blocks (e.g. `guide`, `index`) skips this rule entirely.
+
+**On the `check "section_presence"` block**:
+
+```hcl
+check "section_presence" {
+  enforce_order          = true   # default: true
+  allow_unknown_sections = false  # default: false
+}
+```
+
+- `enforce_order` — when true, sections that appear out of the order declared on the type are reported as errors.
+- `allow_unknown_sections` — when false, level-2 headings that are not in the type's section spec are reported as errors.
+
+**Schema-driven Timeouts** — when a schema is loaded, the schema's timeouts block decides whether the section is required, overriding the type's `required`/`forbidden` flag for `timeouts`. A schema-configured timeouts block missing from the doc is an error; a documented timeouts section with no schema configuration is also an error.
 
 ---
 

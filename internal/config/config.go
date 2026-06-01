@@ -136,6 +136,14 @@ type CheckConfig struct {
 	Byline      *bool `hcl:"byline,optional"`
 	Deprecated  *bool `hcl:"deprecated,optional"`
 
+	// SectionPresence rule options. nil means enabled (default true).
+	// EnforceOrder = require sections to appear in the order declared on
+	// the Type's section blocks.
+	// AllowUnknownSections = permit level-2 headings that are not in the
+	// Type's section spec; otherwise each is reported as an error.
+	EnforceOrder         *bool `hcl:"enforce_order,optional"`
+	AllowUnknownSections *bool `hcl:"allow_unknown_sections,optional"`
+
 	// ImportSection rule options.
 	RequireIdentitySection *bool `hcl:"require_identity_section,optional"`
 

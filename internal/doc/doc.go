@@ -306,8 +306,15 @@ func Parse(source []byte, name string) (*Document, error) {
 
 // ParseWithTemplates parses markdown source with specific heading templates.
 func ParseWithTemplates(source []byte, name string, templates HeadingTemplates) (*Document, error) {
+	// Strip YAML frontmatter before handing the source to Goldmark.
+	// Goldmark without the meta extension treats the closing "---" as a
+	// setext H2 underline for the preceding paragraph, which produces
+	// spurious section headings. Blank out the frontmatter region in place
+	// so byte offsets and line numbers remain accurate for the rest of
+	// the file.
+	parseSource := stripFrontmatter(source)
 	md := goldmark.New()
-	reader := text.NewReader(source)
+	reader := text.NewReader(parseSource)
 	tree := md.Parser().Parse(reader)
 
 	doc := &Document{
@@ -320,6 +327,56 @@ func ParseWithTemplates(source []byte, name string, templates HeadingTemplates) 
 
 	extractBlocks(tree, source, doc, templates)
 	return doc, nil
+}
+
+// stripFrontmatter returns a copy of source where any leading YAML
+// frontmatter block (delimited by "---" on its own line at the start, and a
+// matching "---" line that follows) is replaced byte-for-byte with spaces,
+// preserving newlines. Goldmark therefore sees blank lines where the
+// frontmatter was, while every byte offset and line number in the
+// remaining content stays identical to the original.
+func stripFrontmatter(source []byte) []byte {
+	// Detect opener: "---\n" or "---\r\n" at the very start.
+	openerLen := 0
+	switch {
+	case bytes.HasPrefix(source, []byte("---\n")):
+		openerLen = 4
+	case bytes.HasPrefix(source, []byte("---\r\n")):
+		openerLen = 5
+	default:
+		return source
+	}
+
+	// Find the closing "---" at the start of a line. The closer ends at the
+	// next newline (or EOF). We blank out everything from byte 0 up to and
+	// including the closer's newline; lines outside this region are
+	// untouched.
+	rest := source[openerLen:]
+	for _, sep := range [][]byte{
+		[]byte("\n---\n"),
+		[]byte("\n---\r\n"),
+		[]byte("\n---"),
+	} {
+		idx := bytes.Index(rest, sep)
+		if idx < 0 {
+			continue
+		}
+		// End of the closer's line, in absolute coordinates.
+		end := openerLen + idx + len(sep)
+		out := make([]byte, len(source))
+		copy(out, source)
+		for i := range end {
+			if out[i] != '\n' && out[i] != '\r' {
+				out[i] = ' '
+			}
+		}
+		return out
+	}
+
+	// Opener found but no closer — leave source untouched. The frontmatter
+	// rule will surface the problem with a clearer message than a Goldmark
+	// artifact would.
+	return source
 }
 
 func extractBlocks(tree ast.Node, source []byte, doc *Document, templates HeadingTemplates) {
@@ -400,8 +457,13 @@ func extractBlocks(tree ast.Node, source []byte, doc *Document, templates Headin
 				case strings.HasPrefix(headingText, "Signature"):
 					assignSection(&doc.Sections.Signature, n, headingText)
 				default:
-					// Unknown level-2 section — stop accumulating into any
-					// recognized section until the next known heading.
+					// Unknown level-2 section — record it for the structural
+					// rule and stop accumulating into any recognized section.
+					doc.Sections.UnknownHeadings = append(doc.Sections.UnknownHeadings, ChildHeading{
+						Level: 2,
+						Text:  headingText,
+						Line:  nodeLineNumber(n, source),
+					})
 					currentSection = nil
 				}
 				return ast.WalkSkipChildren, nil
@@ -422,7 +484,7 @@ func extractBlocks(tree ast.Node, source []byte, doc *Document, templates Headin
 					currentBlockAliases = blockNames[1:]
 				}
 				if currentSection != nil {
-					currentSection.ChildHeadings = append(currentSection.ChildHeadings, ChildHeading{Level: n.Level, Text: headingText})
+					currentSection.ChildHeadings = append(currentSection.ChildHeadings, ChildHeading{Level: n.Level, Text: headingText, Line: nodeLineNumber(n, source)})
 				}
 				return ast.WalkSkipChildren, nil
 			}
@@ -431,7 +493,7 @@ func extractBlocks(tree ast.Node, source []byte, doc *Document, templates Headin
 			// as a child heading of the current section (e.g. ### Basic Usage
 			// inside ## Example Usage).
 			if n.Level >= 3 && currentSection != nil {
-				currentSection.ChildHeadings = append(currentSection.ChildHeadings, ChildHeading{Level: n.Level, Text: headingText})
+				currentSection.ChildHeadings = append(currentSection.ChildHeadings, ChildHeading{Level: n.Level, Text: headingText, Line: nodeLineNumber(n, source)})
 			}
 
 			return ast.WalkSkipChildren, nil
