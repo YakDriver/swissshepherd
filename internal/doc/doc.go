@@ -12,6 +12,7 @@ import (
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/ast"
 	"github.com/yuin/goldmark/text"
+	"gopkg.in/yaml.v3"
 )
 
 // DocAttribute represents a single documented attribute.
@@ -335,6 +336,20 @@ func ParseWithTemplates(source []byte, name string, templates HeadingTemplates) 
 // preserving newlines. Goldmark therefore sees blank lines where the
 // frontmatter was, while every byte offset and line number in the
 // remaining content stays identical to the original.
+//
+// The candidate region between opener and closer is validated as YAML
+// before stripping. This prevents two failure modes:
+//
+//  1. A body thematic break ("\n---\n" further down in real content) being
+//     mistaken for the frontmatter closer when the file's frontmatter is
+//     malformed (no proper closer).
+//  2. A "\n---" without a trailing newline being matched anywhere in the
+//     body and silently truncating real content.
+//
+// When uncertain, the source is returned unchanged. Goldmark will then
+// produce a setext H2 heading for the malformed closer, which the
+// section_presence rule reports as a stray unknown section — annoying but
+// non-destructive.
 func stripFrontmatter(source []byte) []byte {
 	// Detect opener: "---\n" or "---\r\n" at the very start.
 	openerLen := 0
@@ -347,36 +362,72 @@ func stripFrontmatter(source []byte) []byte {
 		return source
 	}
 
-	// Find the closing "---" at the start of a line. The closer ends at the
-	// next newline (or EOF). We blank out everything from byte 0 up to and
-	// including the closer's newline; lines outside this region are
-	// untouched.
 	rest := source[openerLen:]
+
+	// Try each closer pattern in turn. The first three are anchored to a
+	// trailing newline (LF or CRLF); the last two are EOF-only and require
+	// the match to land at the end of the source.
+	type candidate struct {
+		// blockEnd is the absolute offset (relative to source) where the
+		// frontmatter region ends — i.e., the byte after the closing
+		// "---" line.
+		blockEnd int
+		// blockStart and blockStop bound the YAML body to validate.
+		blockStart int
+		blockStop  int
+	}
+
+	var candidates []candidate
+
 	for _, sep := range [][]byte{
 		[]byte("\n---\n"),
 		[]byte("\n---\r\n"),
+	} {
+		if idx := bytes.Index(rest, sep); idx >= 0 {
+			candidates = append(candidates, candidate{
+				blockStart: openerLen,
+				blockStop:  openerLen + idx, // up to the "\n" before "---"
+				blockEnd:   openerLen + idx + len(sep),
+			})
+		}
+	}
+	for _, suffix := range [][]byte{
+		[]byte("\n---\r"),
 		[]byte("\n---"),
 	} {
-		idx := bytes.Index(rest, sep)
-		if idx < 0 {
-			continue
+		if bytes.HasSuffix(rest, suffix) {
+			candidates = append(candidates, candidate{
+				blockStart: openerLen,
+				blockStop:  len(source) - len(suffix),
+				blockEnd:   len(source),
+			})
 		}
-		// End of the closer's line, in absolute coordinates.
-		end := openerLen + idx + len(sep)
-		out := make([]byte, len(source))
-		copy(out, source)
-		for i := range end {
-			if out[i] != '\n' && out[i] != '\r' {
-				out[i] = ' '
-			}
-		}
-		return out
 	}
 
-	// Opener found but no closer — leave source untouched. The frontmatter
-	// rule will surface the problem with a clearer message than a Goldmark
-	// artifact would.
+	// Try each candidate in order. The first whose YAML region parses
+	// cleanly wins. If none parse, leave source untouched.
+	for _, c := range candidates {
+		body := source[c.blockStart:c.blockStop]
+		var stub map[string]any
+		if err := yaml.Unmarshal(body, &stub); err == nil {
+			return blankFrontmatter(source, c.blockEnd)
+		}
+	}
 	return source
+}
+
+// blankFrontmatter returns a copy of source with bytes [0, end) replaced
+// by spaces, preserving '\n' and '\r' so byte offsets and line numbers
+// stay aligned with the original.
+func blankFrontmatter(source []byte, end int) []byte {
+	out := make([]byte, len(source))
+	copy(out, source)
+	for i := range end {
+		if out[i] != '\n' && out[i] != '\r' {
+			out[i] = ' '
+		}
+	}
+	return out
 }
 
 func extractBlocks(tree ast.Node, source []byte, doc *Document, templates HeadingTemplates) {

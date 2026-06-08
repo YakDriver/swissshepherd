@@ -178,3 +178,42 @@ description: |-
 		t.Errorf("expected 0 unknown headings (frontmatter must not produce setext H2s), got %d: %v", got, texts)
 	}
 }
+
+// TestParse_MalformedFrontmatter_DoesNotCorruptBody is a regression test for
+// the case where YAML frontmatter is opened but never properly closed, and
+// the body contains a "\n---" sequence (e.g. as a thematic break or in a
+// quoted code block). The frontmatter stripper must not match a body
+// "\n---" as the closer and silently blank out real content.
+func TestParse_MalformedFrontmatter_DoesNotCorruptBody(t *testing.T) {
+	t.Parallel()
+
+	// Opening "---" with no matching closing line. The body contains a
+	// "---" thematic break in the middle of real content. A buggy stripper
+	// would match "\n---" anywhere in the file and blank out the title and
+	// the first H2.
+	source := []byte("---\n" +
+		"subcategory: \"Foo\"\n" +
+		// no closing "---" line
+		"\n" +
+		"# Resource: aws_test\n\n" +
+		"## Example Usage\n\n" +
+		"Some lead-in text.\n\n" +
+		"---\n" + // body thematic break
+		"\n" +
+		"## Argument Reference\n\n" +
+		"* `id` - (Optional) The ID.\n")
+
+	d, err := doc.Parse(source, "test")
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if d.Sections.Title == nil {
+		t.Error("Title section should be discovered (body must not be corrupted)")
+	}
+	if d.Sections.Example == nil {
+		t.Error("Example Usage section should be discovered")
+	}
+	if d.Sections.Arguments == nil {
+		t.Error("Argument Reference section should be discovered")
+	}
+}
