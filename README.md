@@ -4,6 +4,8 @@
 
 A documentation checker for Terraform providers. Validates that provider documentation accurately reflects the provider schema.
 
+📖 Detailed docs are also available at <https://yakdriver.github.io/swissshepherd/>.
+
 ## Table of contents
 
 - [What it checks](#what-it-checks)
