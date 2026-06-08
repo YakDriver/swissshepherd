@@ -243,6 +243,65 @@ func (r *SchemaDocsRule) checkCoverage(ctx CheckContext) []Result {
 		results = append(results, r.checkAttributeCoverage(ctx, rootBlock)...)
 	}
 
+	results = append(results, r.checkPhantomBlocks(ctx)...)
+
+	return results
+}
+
+// checkPhantomBlocks reports doc blocks in the Argument Reference section
+// whose name has no counterpart in the schema. This catches stray
+// subheadings that get parsed as block names — e.g. a `### \`rules\“
+// heading followed by a `#### Arguments` subheading creates a phantom
+// "arguments" block in the doc model. The schema has no such block; the
+// H4 should not be there.
+//
+// Limited to ArgumentBlocks because block headings in the Attribute
+// Reference section commonly document the nested structure of computed
+// attributes (e.g. `### Endpoint`, `### master_user_secret`) that have
+// no Block representation in the schema. Flagging those would produce
+// false positives on standard provider doc patterns.
+//
+// A doc block name matches the schema if any schema block path has the
+// same leaf name. (Matching by leaf alone is consistent with how the
+// rest of the rule resolves doc blocks against the schema, including
+// findDocBlock and existsInSiblingBlock.)
+func (r *SchemaDocsRule) checkPhantomBlocks(ctx CheckContext) []Result {
+	if ctx.Schema == nil {
+		return nil
+	}
+
+	schemaLeaves := make(map[string]bool, len(ctx.Schema.Blocks))
+	for path := range ctx.Schema.Blocks {
+		if path == "" {
+			continue
+		}
+		schemaLeaves[leafName(path)] = true
+	}
+
+	reported := make(map[string]bool)
+	var results []Result
+	for blockName, block := range ctx.Doc.ArgumentBlocks {
+		if blockName == "" || block.Heading == "" {
+			continue
+		}
+		leaf := leafName(blockName)
+		if schemaLeaves[leaf] {
+			continue
+		}
+		// Dedupe by heading text — combined headings ("X and Y") create
+		// multiple doc blocks but should produce one finding per heading.
+		if reported[block.Heading] {
+			continue
+		}
+		reported[block.Heading] = true
+		results = append(results, Result{
+			Rule:     r.Name(),
+			Resource: ctx.Resource,
+			Severity: SeverityError,
+			Message:  fmt.Sprintf("block heading %q in Argument Reference has no matching block in schema", block.Heading),
+			Block:    blockName,
+		})
+	}
 	return results
 }
 

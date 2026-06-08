@@ -319,7 +319,7 @@ The primary rule. Validates argument and attribute documentation against the pro
 | Sub-check | What it validates |
 |-----------|-------------------|
 | `byline` | First paragraph after section heading matches expected byline text (from type) |
-| `coverage` | Every schema attr is documented; every documented attr exists in schema |
+| `coverage` | Every schema attr is documented; every documented attr exists in schema; every block heading in Argument Reference matches a schema block |
 | `deprecated` | Deprecation status matches between schema and docs (both directions) |
 | `description` | Descriptions don't start with bad prefixes ("A ", "The ", "Specifies ", etc.) |
 | `format` | No code blocks in arg/attr sections; single-line attrs; uninterrupted lists |
@@ -361,6 +361,16 @@ check "schema_docs" {
   allow_attribute_indentation = true   # allow indented sub-attributes in Attribute Reference (default: true)
 }
 ```
+
+#### Coverage: phantom block headings
+
+The `coverage` sub-check also flags H3+ headings inside `## Argument Reference` whose name doesn't match any schema block. Common patterns this catches:
+
+- Stray subsection headings like `#### Arguments` or `#### Nested Blocks` under a real block heading. The H3 already declares the block; nested "Arguments" / "Nested Blocks" subheadings are noise that the parser interprets as phantom blocks.
+- Title-Case descriptive headings (`### Tool Specification`, `### Restore Configuration`) for nested blocks where the schema name is different. Use `` ### `tool_specification` Block `` or another canonical heading style.
+- Combined headings (`### egress and ingress`) when the schema doesn't actually have those blocks (e.g. when the underlying type is attribute-as-blocks).
+
+The check is restricted to `## Argument Reference`. Block-style headings under `## Attribute Reference` (e.g. `### Endpoint`, `### master_user_secret`) commonly document the structure of computed attributes that have no Block representation in the schema, and are not flagged.
 
 #### Ordering: single vs. split lists
 
