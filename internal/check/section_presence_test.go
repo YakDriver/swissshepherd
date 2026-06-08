@@ -379,6 +379,116 @@ func TestSectionPresenceRule_AllowUnknownSections(t *testing.T) {
 	}
 }
 
+func TestSectionPresenceRule_CustomSectionInSpec(t *testing.T) {
+	t.Parallel()
+
+	// Type spec includes a custom "usage_notes" section after attributes.
+	tp := &config.Type{
+		Name: "ephemeral",
+		Sections: []config.SectionSpec{
+			{Name: "title", Required: true},
+			{Name: "example", Required: true},
+			{Name: "arguments", Required: true},
+			{Name: "attributes", Required: true},
+			{Name: "usage_notes"},
+		},
+	}
+
+	tests := map[string]struct {
+		source             string
+		wantUnknownErrors  []string
+		wantPresenceErrors []string
+		wantOrderErrors    []string
+	}{
+		"custom section present and in order — no errors": {
+			source: "# Ephemeral: test\n\n" +
+				"## Example Usage\n\n" +
+				"## Argument Reference\n\n" +
+				"## Attribute Reference\n\n" +
+				"## Usage Notes\n",
+		},
+		"custom section absent and optional — no errors": {
+			source: "# Ephemeral: test\n\n" +
+				"## Example Usage\n\n" +
+				"## Argument Reference\n\n" +
+				"## Attribute Reference\n",
+		},
+		"unrelated unknown heading still flagged": {
+			source: "# Ephemeral: test\n\n" +
+				"## Example Usage\n\n" +
+				"## Argument Reference\n\n" +
+				"## Attribute Reference\n\n" +
+				"## Usage Notes\n\n" +
+				"## My wild heading\n",
+			wantUnknownErrors: []string{"unknown level-2 section: ## My wild heading"},
+		},
+		"custom section out of order is flagged": {
+			source: "# Ephemeral: test\n\n" +
+				"## Example Usage\n\n" +
+				"## Usage Notes\n\n" +
+				"## Argument Reference\n\n" +
+				"## Attribute Reference\n",
+			wantOrderErrors: []string{"section ## Usage Notes appears before ## Argument Reference; expected the reverse order"},
+		},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			d, err := doc.Parse([]byte(tt.source), "test")
+			if err != nil {
+				t.Fatalf("parse error: %v", err)
+			}
+			rule := &check.SectionPresenceRule{}
+			results := rule.Check(check.CheckContext{
+				Resource: "test",
+				Type:     tp,
+				Doc:      d,
+			})
+
+			var unknownMsgs, orderMsgs, presenceMsgs []string
+			for _, r := range results {
+				switch {
+				case strings.Contains(r.Message, "unknown level-2 section"):
+					unknownMsgs = append(unknownMsgs, r.Message)
+				case strings.Contains(r.Message, "appears before"):
+					orderMsgs = append(orderMsgs, r.Message)
+				default:
+					presenceMsgs = append(presenceMsgs, r.Message)
+				}
+			}
+
+			checkContains(t, "unknown", tt.wantUnknownErrors, unknownMsgs)
+			checkContains(t, "order", tt.wantOrderErrors, orderMsgs)
+			checkContains(t, "presence", tt.wantPresenceErrors, presenceMsgs)
+		})
+	}
+}
+
+func checkContains(t *testing.T, kind string, want, got []string) {
+	t.Helper()
+	if len(want) == 0 {
+		if len(got) != 0 {
+			t.Errorf("expected no %s errors, got:\n  %s", kind, strings.Join(got, "\n  "))
+		}
+		return
+	}
+	for _, w := range want {
+		found := false
+		for _, g := range got {
+			if strings.Contains(g, w) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("expected %s message containing %q; got:\n  %s",
+				kind, w, strings.Join(got, "\n  "))
+		}
+	}
+}
+
 func TestSectionPresenceRule_SchemaTimeouts(t *testing.T) {
 	t.Parallel()
 

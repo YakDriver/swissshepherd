@@ -393,21 +393,27 @@ func extractBlocks(tree ast.Node, source []byte, doc *Document, templates Headin
 		}
 	}
 
+	// headingStartOffset returns the byte offset of a heading's first byte
+	// (the '#' character), found by walking back from Goldmark's content
+	// start to the previous newline.
+	headingStartOffset := func(heading *ast.Heading) int {
+		startOff := 0
+		if lines := heading.Lines(); lines.Len() > 0 {
+			startOff = lines.At(0).Start
+			for startOff > 0 && source[startOff-1] != '\n' {
+				startOff--
+			}
+		}
+		return startOff
+	}
+
 	// assignSection records a freshly discovered top-level section and makes it
 	// the current accumulator target for paragraphs and code blocks that follow.
 	// Only the first occurrence of each section is captured — duplicate headings
 	// keep pointing at the first one so rules can still reason about "the"
 	// section without the walker silently replacing it.
 	assignSection := func(field **Section, heading *ast.Heading, text string) {
-		startOff := 0
-		if lines := heading.Lines(); lines.Len() > 0 {
-			// Lines().At(0).Start is the content start (after "## ").
-			// Walk backwards to find the actual line start (the # character).
-			startOff = lines.At(0).Start
-			for startOff > 0 && source[startOff-1] != '\n' {
-				startOff--
-			}
-		}
+		startOff := headingStartOffset(heading)
 		closeSection(startOff)
 		if *field == nil {
 			*field = &Section{Heading: heading, Text: text, StartOffset: startOff}
@@ -460,9 +466,10 @@ func extractBlocks(tree ast.Node, source []byte, doc *Document, templates Headin
 					// Unknown level-2 section — record it for the structural
 					// rule and stop accumulating into any recognized section.
 					doc.Sections.UnknownHeadings = append(doc.Sections.UnknownHeadings, ChildHeading{
-						Level: 2,
-						Text:  headingText,
-						Line:  nodeLineNumber(n, source),
+						Level:       2,
+						Text:        headingText,
+						Line:        nodeLineNumber(n, source),
+						StartOffset: headingStartOffset(n),
 					})
 					currentSection = nil
 				}
@@ -484,7 +491,7 @@ func extractBlocks(tree ast.Node, source []byte, doc *Document, templates Headin
 					currentBlockAliases = blockNames[1:]
 				}
 				if currentSection != nil {
-					currentSection.ChildHeadings = append(currentSection.ChildHeadings, ChildHeading{Level: n.Level, Text: headingText, Line: nodeLineNumber(n, source)})
+					currentSection.ChildHeadings = append(currentSection.ChildHeadings, ChildHeading{Level: n.Level, Text: headingText, Line: nodeLineNumber(n, source), StartOffset: headingStartOffset(n)})
 				}
 				return ast.WalkSkipChildren, nil
 			}
@@ -493,7 +500,7 @@ func extractBlocks(tree ast.Node, source []byte, doc *Document, templates Headin
 			// as a child heading of the current section (e.g. ### Basic Usage
 			// inside ## Example Usage).
 			if n.Level >= 3 && currentSection != nil {
-				currentSection.ChildHeadings = append(currentSection.ChildHeadings, ChildHeading{Level: n.Level, Text: headingText, Line: nodeLineNumber(n, source)})
+				currentSection.ChildHeadings = append(currentSection.ChildHeadings, ChildHeading{Level: n.Level, Text: headingText, Line: nodeLineNumber(n, source), StartOffset: headingStartOffset(n)})
 			}
 
 			return ast.WalkSkipChildren, nil

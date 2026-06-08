@@ -38,13 +38,39 @@ var AllSectionNames = []SectionName{
 	SectionImport,
 }
 
-// IsValid reports whether n is one of the recognized section names.
+// IsValid reports whether n is a syntactically valid section name. Any
+// non-empty lowercase snake_case identifier is accepted; the canonical
+// seven (title, signature, example, arguments, attributes, timeouts,
+// import) get special parser support and content rules, while any other
+// name is a custom section the user has opted into via Type.Sections.
 func (n SectionName) IsValid() bool {
+	if n == "" {
+		return false
+	}
+	for _, r := range n {
+		switch {
+		case r >= 'a' && r <= 'z':
+		case r >= '0' && r <= '9':
+		case r == '_':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// IsCanonical reports whether n is one of the seven sections with parser
+// support and dedicated content rules. Use this to distinguish custom
+// sections (declared by the user) from sections the parser tracks as
+// fields on doc.Sections.
+func (n SectionName) IsCanonical() bool {
 	return slices.Contains(AllSectionNames, n)
 }
 
 // HeadingText returns the canonical "## <text>" heading for the section.
-// Used in error messages.
+// For canonical names, the heading text is fixed by Terraform provider
+// docs convention. For custom names, the snake_case identifier is
+// converted to Title Case ("usage_notes" → "Usage Notes").
 func (n SectionName) HeadingText() string {
 	switch n {
 	case SectionTitle:
@@ -62,7 +88,15 @@ func (n SectionName) HeadingText() string {
 	case SectionImport:
 		return "Import"
 	}
-	return string(n)
+	// Custom section — title-case the snake_case name.
+	parts := strings.Split(string(n), "_")
+	for i, p := range parts {
+		if p == "" {
+			continue
+		}
+		parts[i] = strings.ToUpper(p[:1]) + p[1:]
+	}
+	return strings.Join(parts, " ")
 }
 
 // SectionSpec declares one section's place in a Type's canonical doc
@@ -177,8 +211,8 @@ func (t *Type) Validate() error {
 	seenSection := make(map[string]bool, len(t.Sections))
 	for _, s := range t.Sections {
 		if !s.SectionName().IsValid() {
-			return fmt.Errorf("type %q: section %q is not a recognized section name; expected one of %v",
-				t.Name, s.Name, AllSectionNames)
+			return fmt.Errorf("type %q: section %q is not a valid section name; expected lowercase snake_case (e.g. \"arguments\", \"usage_notes\")",
+				t.Name, s.Name)
 		}
 		if seenSection[s.Name] {
 			return fmt.Errorf("type %q: section %q declared more than once", t.Name, s.Name)

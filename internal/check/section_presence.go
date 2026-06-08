@@ -22,7 +22,10 @@ import (
 //   - Type.Sections — declares which sections this type may contain, in
 //     what order, with required and forbidden flags. The order of section
 //     blocks IS the canonical order. A Type with no Sections is treated as
-//     "no structural rules" and skipped.
+//     "no structural rules" and skipped. Section names may be canonical
+//     (title, signature, example, arguments, attributes, timeouts, import)
+//     or custom (any lowercase snake_case identifier the type opts into,
+//     e.g. "usage_notes", "dependency_management").
 //   - CheckConfig.EnforceOrder — when nil or true, out-of-order sections
 //     are reported. Set to false to skip order enforcement.
 //   - CheckConfig.AllowUnknownSections — when nil or false, level-2
@@ -71,24 +74,24 @@ func (r *SectionPresenceRule) checkPresence(ctx CheckContext) []Result {
 	var results []Result
 	for _, spec := range ctx.Type.Sections {
 		name := spec.SectionName()
-		section := lookupSection(ctx.Doc.Sections, name)
 		// Schema-driven Timeouts: if a schema is loaded, the schema decides
 		// whether timeouts are configured. The Type's required/forbidden
 		// flag still matters when there's no schema (e.g. content-only
 		// types).
 		if name == config.SectionTimeouts && ctx.Schema != nil {
-			results = append(results, checkTimeoutsAgainstSchema(ctx, section)...)
+			results = append(results, checkTimeoutsAgainstSchema(ctx, ctx.Doc.Sections.Timeouts)...)
 			continue
 		}
+		present := sectionPresent(ctx.Doc.Sections, name)
 		switch {
-		case spec.Required && section == nil:
+		case spec.Required && !present:
 			results = append(results, Result{
 				Rule:     r.Name(),
 				Resource: ctx.Resource,
 				Severity: SeverityError,
 				Message:  fmt.Sprintf("missing required section: %s", sectionLabel(name)),
 			})
-		case spec.Forbidden && section != nil:
+		case spec.Forbidden && present:
 			results = append(results, Result{
 				Rule:     r.Name(),
 				Resource: ctx.Resource,
@@ -123,15 +126,12 @@ func (r *SectionPresenceRule) checkOrder(ctx CheckContext) []Result {
 	// Collect every section that is actually present in the doc and is in
 	// the spec, ordered by document offset.
 	var present []seen
-	for _, name := range config.AllSectionNames {
-		if _, ok := pos[name]; !ok {
+	for name := range pos {
+		offset, ok := sectionOffset(ctx.Doc.Sections, name)
+		if !ok {
 			continue
 		}
-		section := lookupSection(ctx.Doc.Sections, name)
-		if section == nil {
-			continue
-		}
-		present = append(present, seen{name: name, offset: section.StartOffset})
+		present = append(present, seen{name: name, offset: offset})
 	}
 	slices.SortFunc(present, func(a, b seen) int {
 		return a.offset - b.offset
@@ -155,10 +155,24 @@ func (r *SectionPresenceRule) checkOrder(ctx CheckContext) []Result {
 }
 
 // checkUnknown reports every level-2 heading that did not match a recognized
-// section. The parser captured these in Sections.UnknownHeadings.
+// section. Custom sections opted into via the Type's spec are filtered out
+// — they look like "unknown" to the parser but are explicitly allowed.
 func (r *SectionPresenceRule) checkUnknown(ctx CheckContext) []Result {
+	// Build a set of allowed heading texts for custom sections.
+	allowedCustomHeadings := make(map[string]bool, len(ctx.Type.Sections))
+	for _, spec := range ctx.Type.Sections {
+		name := spec.SectionName()
+		if name.IsCanonical() {
+			continue
+		}
+		allowedCustomHeadings[name.HeadingText()] = true
+	}
+
 	var results []Result
 	for _, h := range ctx.Doc.Sections.UnknownHeadings {
+		if allowedCustomHeadings[h.Text] {
+			continue
+		}
 		results = append(results, Result{
 			Rule:     r.Name(),
 			Resource: ctx.Resource,
@@ -200,9 +214,44 @@ func checkTimeoutsAgainstSchema(ctx CheckContext, section *doc.Section) []Result
 	return nil
 }
 
-// lookupSection returns the doc.Section pointer for a given section name,
-// or nil when the section is absent from the doc.
-func lookupSection(s *doc.Sections, name config.SectionName) *doc.Section {
+// sectionPresent reports whether the named section exists in the doc.
+// Canonical sections are looked up via the typed fields on doc.Sections;
+// custom sections are matched by heading text against UnknownHeadings.
+func sectionPresent(s *doc.Sections, name config.SectionName) bool {
+	if name.IsCanonical() {
+		return canonicalSection(s, name) != nil
+	}
+	wantText := name.HeadingText()
+	for _, h := range s.UnknownHeadings {
+		if h.Text == wantText {
+			return true
+		}
+	}
+	return false
+}
+
+// sectionOffset returns the byte offset of the named section in the doc,
+// or (0, false) when the section is absent. Used by the order check.
+func sectionOffset(s *doc.Sections, name config.SectionName) (int, bool) {
+	if name.IsCanonical() {
+		section := canonicalSection(s, name)
+		if section == nil {
+			return 0, false
+		}
+		return section.StartOffset, true
+	}
+	wantText := name.HeadingText()
+	for _, h := range s.UnknownHeadings {
+		if h.Text == wantText {
+			return h.StartOffset, true
+		}
+	}
+	return 0, false
+}
+
+// canonicalSection returns the doc.Section pointer for a canonical section
+// name, or nil when the section is absent or the name is custom.
+func canonicalSection(s *doc.Sections, name config.SectionName) *doc.Section {
 	switch name {
 	case config.SectionTitle:
 		return s.Title

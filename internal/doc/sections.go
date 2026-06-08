@@ -37,9 +37,10 @@ type Section struct {
 
 // ChildHeading records a heading nested inside a section.
 type ChildHeading struct {
-	Level int
-	Text  string
-	Line  int // 1-based line number of the heading in source
+	Level       int
+	Text        string
+	Line        int // 1-based line number of the heading in source
+	StartOffset int // byte offset of the heading's first byte in source
 }
 
 // SectionListItem records a single top-level list item in a section.

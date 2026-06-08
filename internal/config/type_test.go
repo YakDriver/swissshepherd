@@ -245,7 +245,7 @@ func TestLoad_InvalidType_InvalidSectionName(t *testing.T) {
 type "broken" {
   schema_kind   = "none"
   website_paths = ["docs/{name}.md"]
-  section "not_a_real_section" {
+  section "Not-Snake-Case" {
     required = true
   }
 }
@@ -255,8 +255,50 @@ type "broken" {
 	if err == nil {
 		t.Fatal("expected error for invalid section name")
 	}
-	if !strings.Contains(err.Error(), "not_a_real_section") {
+	if !strings.Contains(err.Error(), "Not-Snake-Case") {
 		t.Errorf("error should name the offending section; got: %v", err)
+	}
+}
+
+// TestLoad_CustomSectionNameAccepted documents that any lowercase
+// snake_case identifier is valid as a section name; canonical names get
+// special parser support, custom names are matched by heading text.
+func TestLoad_CustomSectionNameAccepted(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	cfgPath := filepath.Join(root, "swissshepherd.hcl")
+	writeFile(t, cfgPath, `
+type "ephemeral_with_notes" {
+  schema_kind   = "ephemeral"
+  website_paths = ["website/docs/ephemeral-resources/{name}.html.markdown"]
+  title_prefix  = "Ephemeral"
+
+  section "title"       { required = true }
+  section "example"     { required = true }
+  section "arguments"   { required = true }
+  section "attributes"  { required = true }
+  section "usage_notes" {}
+}
+`)
+
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	tp := cfg.GetType("ephemeral_with_notes")
+	if tp == nil {
+		t.Fatal("custom type not loaded")
+	}
+	if len(tp.Sections) != 5 {
+		t.Fatalf("expected 5 sections, got %d", len(tp.Sections))
+	}
+	last := tp.Sections[4]
+	if last.Name != "usage_notes" {
+		t.Errorf("last section name = %q, want %q", last.Name, "usage_notes")
+	}
+	if got := last.SectionName().HeadingText(); got != "Usage Notes" {
+		t.Errorf("HeadingText(usage_notes) = %q, want %q", got, "Usage Notes")
 	}
 }
 
@@ -382,6 +424,7 @@ func TestSectionName_IsValid(t *testing.T) {
 	t.Parallel()
 
 	cases := map[config.SectionName]bool{
+		// Canonical names.
 		config.SectionTitle:      true,
 		config.SectionSignature:  true,
 		config.SectionExample:    true,
@@ -389,14 +432,67 @@ func TestSectionName_IsValid(t *testing.T) {
 		config.SectionAttributes: true,
 		config.SectionTimeouts:   true,
 		config.SectionImport:     true,
-		"":                       false,
-		"frontmatter":            false,
-		"description":            false,
-		"TITLE":                  false,
+		// Custom snake_case names.
+		"usage_notes":           true,
+		"dependency_management": true,
+		"foo123":                true,
+		// Invalid: empty, uppercase, hyphens, spaces, special chars.
+		"":            false,
+		"TITLE":       false,
+		"Title":       false,
+		"foo-bar":     false,
+		"foo bar":     false,
+		"foo.bar":     false,
+		"_underscore": true, // underscore start is fine — still snake_case
 	}
 	for in, want := range cases {
 		if got := in.IsValid(); got != want {
 			t.Errorf("SectionName(%q).IsValid() = %v, want %v", in, got, want)
+		}
+	}
+}
+
+func TestSectionName_IsCanonical(t *testing.T) {
+	t.Parallel()
+
+	cases := map[config.SectionName]bool{
+		config.SectionTitle:      true,
+		config.SectionSignature:  true,
+		config.SectionExample:    true,
+		config.SectionArguments:  true,
+		config.SectionAttributes: true,
+		config.SectionTimeouts:   true,
+		config.SectionImport:     true,
+		"usage_notes":            false,
+		"dependency_management":  false,
+		"":                       false,
+	}
+	for in, want := range cases {
+		if got := in.IsCanonical(); got != want {
+			t.Errorf("SectionName(%q).IsCanonical() = %v, want %v", in, got, want)
+		}
+	}
+}
+
+func TestSectionName_HeadingText(t *testing.T) {
+	t.Parallel()
+
+	cases := map[config.SectionName]string{
+		config.SectionTitle:      "<title>",
+		config.SectionSignature:  "Signature",
+		config.SectionExample:    "Example Usage",
+		config.SectionArguments:  "Argument Reference",
+		config.SectionAttributes: "Attribute Reference",
+		config.SectionTimeouts:   "Timeouts",
+		config.SectionImport:     "Import",
+		// Custom snake_case → Title Case.
+		"usage_notes":           "Usage Notes",
+		"dependency_management": "Dependency Management",
+		"single":                "Single",
+	}
+	for in, want := range cases {
+		if got := in.HeadingText(); got != want {
+			t.Errorf("SectionName(%q).HeadingText() = %q, want %q", in, got, want)
 		}
 	}
 }
