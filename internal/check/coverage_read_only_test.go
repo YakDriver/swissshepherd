@@ -348,6 +348,58 @@ func TestSchemaDocsRule_TopLevelReadOnly_MissingFromAttrs_Errors(t *testing.T) {
 	}
 }
 
+// TestSchemaDocsRule_DeeplyNestedReadOnly_DotNotation_Passes confirms that a
+// multi-level dot-notation reference at the root Attribute Reference
+// (e.g. `analyzer_configuration.unused_access_configuration.computed_summary`)
+// satisfies coverage for an attribute on a deeply-nested schema block.
+// Mirrors the path style produced by tfplugindocs's anchor IDs.
+func TestSchemaDocsRule_DeeplyNestedReadOnly_DotNotation_Passes(t *testing.T) {
+	t.Parallel()
+
+	rs := &schema.ResourceSchema{
+		Name: "aws_test",
+		Blocks: map[string]*schema.Block{
+			"": {
+				Attributes:  []schema.Attribute{{Name: "name", Required: true}},
+				ChildBlocks: []string{"analyzer_configuration"},
+			},
+			"analyzer_configuration": {
+				ChildBlocks: []string{"analyzer_configuration.unused_access_configuration"},
+			},
+			"analyzer_configuration.unused_access_configuration": {
+				Attributes: []schema.Attribute{
+					{Name: "unused_access_age", Optional: true},
+					{Name: "computed_summary", Computed: true},
+				},
+			},
+		},
+	}
+
+	markdown := "## Argument Reference\n\n" +
+		"* `name` - (Required) Name.\n" +
+		"* `analyzer_configuration` - (Optional) Analyzer configuration.\n\n" +
+		"### `analyzer_configuration` Block\n\n" +
+		"### `unused_access_configuration` Block\n\n" +
+		"* `unused_access_age` - (Optional) Days for unused access.\n\n" +
+		"## Attribute Reference\n\n" +
+		"* `arn` - ARN of the resource.\n" +
+		"* `analyzer_configuration.unused_access_configuration.computed_summary` - Computed summary of unused access.\n"
+
+	d, err := doc.Parse([]byte(markdown), "aws_test")
+	if err != nil {
+		t.Fatalf("parse error: %v", err)
+	}
+
+	rule := &check.SchemaDocsRule{}
+	results := rule.Check(check.CheckContext{Resource: "aws_test", Schema: rs, Doc: d})
+
+	for _, r := range results {
+		if strings.Contains(r.Message, "computed_summary") {
+			t.Errorf("unexpected message about computed_summary: %s", r.Message)
+		}
+	}
+}
+
 func joinMessages(results []check.Result) string {
 	var msgs []string
 	for _, r := range results {

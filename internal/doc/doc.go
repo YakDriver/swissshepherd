@@ -824,13 +824,15 @@ func parseListItem(li *ast.ListItem, source []byte) DocAttribute {
 }
 
 // NestedRef represents a dot-notation reference to a nested attribute,
-// e.g. `network[*].private_ip` or `tags[0].key`. These appear in the root
-// Argument Reference / Attribute Reference sections as a convenience
-// shorthand when the author doesn't want to introduce a separate nested
-// block heading.
+// e.g. `network[*].private_ip`, `tags[0].key`, or
+// `analyzer_configuration.unused_access_configuration.unused_access_age`.
+// These appear in the root Argument Reference / Attribute Reference
+// sections as a convenience shorthand when the author doesn't want to
+// introduce separate nested block headings, and in tfplugindocs-style
+// schemas where deeply-nested attribute paths are documented inline.
 type NestedRef struct {
-	Parent      string
-	Attribute   string
+	Parent      string // dot-separated path with array indexers stripped
+	Attribute   string // leaf attribute name
 	Description string
 	Required    bool
 	Optional    bool
@@ -838,9 +840,15 @@ type NestedRef struct {
 }
 
 // parseNestedRef detects list items whose name is a dot-notation reference
-// like `network[*].private_ip`, `tags[0].key`, or `network.private_ip` and
-// returns the parsed parent/attribute/description triple. Returns a zero
-// NestedRef if the item is not a dot-notation reference.
+// and returns the parsed parent/attribute/description triple. Supports:
+//
+//   - Single-level: `network[*].private_ip`, `tags[0].key`, `network.private_ip`
+//   - Multi-level: `a.b.c.attr`, `parent.child[*].grandchild.attr`
+//
+// The leaf segment becomes Attribute; everything before the last dot
+// becomes Parent (with array indexers like [*] or [0] stripped from each
+// segment). Returns a zero NestedRef if the item is not a dot-notation
+// reference.
 func parseNestedRef(li *ast.ListItem, source []byte) NestedRef {
 	var rawText string
 	for child := li.FirstChild(); child != nil; child = child.NextSibling() {
@@ -864,21 +872,35 @@ func parseNestedRef(li *ast.ListItem, source []byte) NestedRef {
 		return NestedRef{}
 	}
 
-	// Split into parent + attribute. Strip [*], [0], etc. from the parent
-	// so `network[*].private_ip` and `network.private_ip` both produce
-	// parent="network".
-	dotIdx := strings.Index(name, ".")
-	parent := name[:dotIdx]
-	attribute := name[dotIdx+1:]
-	if i := strings.IndexAny(parent, "[*"); i >= 0 {
-		parent = parent[:i]
-	}
-	if parent == "" || attribute == "" {
+	// Split on the LAST dot so multi-level paths like
+	// "analyzer_configuration.unused_access_configuration.unused_access_age"
+	// produce parent="analyzer_configuration.unused_access_configuration"
+	// and attribute="unused_access_age".
+	lastDot := strings.LastIndex(name, ".")
+	parentRaw := name[:lastDot]
+	attribute := name[lastDot+1:]
+	if parentRaw == "" || attribute == "" {
 		return NestedRef{}
 	}
-	if strings.ContainsAny(parent, " ") || strings.ContainsAny(attribute, " .") {
+	if strings.ContainsAny(attribute, " .[]*") {
 		return NestedRef{}
 	}
+
+	// Strip array indexers ([*], [0], [N]) from each parent segment so
+	// `network[*].private_ip` and `network.private_ip` both produce
+	// parent="network", and `parent[*].child.attr` produces
+	// parent="parent.child".
+	segments := strings.Split(parentRaw, ".")
+	for i, seg := range segments {
+		if j := strings.IndexAny(seg, "[*"); j >= 0 {
+			seg = seg[:j]
+		}
+		if seg == "" || strings.ContainsAny(seg, " ") {
+			return NestedRef{}
+		}
+		segments[i] = seg
+	}
+	parent := strings.Join(segments, ".")
 
 	ref := NestedRef{Parent: parent, Attribute: attribute}
 	if len(parts) == 2 {
