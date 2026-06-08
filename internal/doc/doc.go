@@ -20,6 +20,7 @@ type DocAttribute struct {
 	Name        string
 	Required    bool
 	Optional    bool
+	ReadOnly    bool
 	Deprecated  bool
 	Description string
 	Line        int // 1-based line number in the source file
@@ -787,6 +788,8 @@ func parseListItem(li *ast.ListItem, source []byte) DocAttribute {
 						attr.Required = true
 					case "Optional":
 						attr.Optional = true
+					case "Read-Only":
+						attr.ReadOnly = true
 					case "Deprecated", "**Deprecated**":
 						attr.Deprecated = true
 					default:
@@ -829,7 +832,7 @@ func malformedAttrName(li *ast.ListItem, source []byte) string {
 		return ""
 	}
 
-	// Look for pattern: name (Required|Optional) or name – (with em-dash)
+	// Look for pattern: name (Required|Optional|Read-Only) or name – (with em-dash)
 	// Extract potential name (first word, no spaces, looks like snake_case)
 	parts := strings.Fields(rawText)
 	if len(parts) < 2 {

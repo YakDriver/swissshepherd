@@ -18,6 +18,7 @@ func TestParseListItem_Formats(t *testing.T) {
 		wantName      string
 		wantRequired  bool
 		wantOptional  bool
+		wantReadOnly  bool
 		wantMalformed bool // should appear in MalformedAttributes instead
 	}{
 		// Valid formats
@@ -46,6 +47,18 @@ func TestParseListItem_Formats(t *testing.T) {
 			wantRequired: true,
 		},
 		{
+			name:         "standard read-only",
+			input:        "* `arn` - (Read-Only) ARN of the resource.",
+			wantName:     "arn",
+			wantReadOnly: true,
+		},
+		{
+			name:         "read-only with deprecated",
+			input:        "* `legacy_id` - (Read-Only, Deprecated) Old identifier.",
+			wantName:     "legacy_id",
+			wantReadOnly: true,
+		},
+		{
 			name:     "attribute without required/optional (attribute reference style)",
 			input:    "* `arn` - ARN of the resource.",
 			wantName: "arn",
@@ -70,6 +83,11 @@ func TestParseListItem_Formats(t *testing.T) {
 		{
 			name:          "em-dash long instead of dash",
 			input:         "* `name` \u2014 (Optional) The name.",
+			wantMalformed: true,
+		},
+		{
+			name:          "missing dash before read-only",
+			input:         "* `arn` (Read-Only) ARN.",
 			wantMalformed: true,
 		},
 		// Malformed - (Optional) in attribute reference (should not have it)
@@ -158,6 +176,9 @@ func TestParseListItem_Formats(t *testing.T) {
 			}
 			if attr.Optional != tt.wantOptional {
 				t.Errorf("optional = %v, want %v", attr.Optional, tt.wantOptional)
+			}
+			if attr.ReadOnly != tt.wantReadOnly {
+				t.Errorf("read-only = %v, want %v", attr.ReadOnly, tt.wantReadOnly)
 			}
 		})
 	}

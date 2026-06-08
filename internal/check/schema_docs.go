@@ -45,6 +45,13 @@ type SchemaDocsRule struct {
 	AllowPhantoms      []string
 	SkipBlocks         []string
 
+	// AllowInlineReadOnly permits Read-Only (computed-only) attributes to
+	// be documented inline in Argument Reference with a "(Read-Only)" label,
+	// alongside Required and Optional siblings, instead of requiring them
+	// in Attribute Reference. Default false: strict separation — Argument
+	// Reference is for configurable attributes only.
+	AllowInlineReadOnly *bool
+
 	// Sub-check toggles (nil = enabled)
 	Coverage    *bool
 	Ordering    *bool
@@ -96,6 +103,13 @@ func (r *SchemaDocsRule) prefixes() []string {
 		return r.BadPrefixes
 	}
 	return DefaultBadDescriptionPrefixes
+}
+
+// allowInlineReadOnly reports whether (Read-Only) labels are permitted in
+// Argument Reference. Default false: strict separation between Argument
+// Reference (configurable) and Attribute Reference (Read-Only).
+func (r *SchemaDocsRule) allowInlineReadOnly() bool {
+	return r.AllowInlineReadOnly != nil && *r.AllowInlineReadOnly
 }
 
 func enabled(b *bool) bool { return b == nil || *b }

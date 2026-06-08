@@ -112,10 +112,11 @@ type CheckConfig struct {
 	AllowPrefixes []string `hcl:"allow_prefixes,optional"`
 
 	// Completeness rule options.
-	IgnoreDeprecated   *bool    `hcl:"ignore_deprecated,optional"`
-	ImplicitAttributes []string `hcl:"implicit_attributes,optional"`
-	AllowPhantoms      []string `hcl:"allow_phantoms,optional"`
-	SkipBlocks         []string `hcl:"skip_blocks,optional"`
+	IgnoreDeprecated    *bool    `hcl:"ignore_deprecated,optional"`
+	ImplicitAttributes  []string `hcl:"implicit_attributes,optional"`
+	AllowPhantoms       []string `hcl:"allow_phantoms,optional"`
+	SkipBlocks          []string `hcl:"skip_blocks,optional"`
+	AllowInlineReadOnly *bool    `hcl:"allow_inline_read_only,optional"`
 
 	// DescriptionStyle rule options.
 	BadPrefixes []string `hcl:"bad_prefixes,optional"`
