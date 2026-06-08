@@ -33,7 +33,7 @@ swissshepherd compares a Terraform provider's schema against its markdown docume
 - **Byline mismatches** — section introductory paragraph doesn't match expected text
 - **Frontmatter problems** — missing required YAML fields, forbidden fields present, disallowed subcategories
 - **Title section problems** — missing title, wrong heading level, bad `<Kind>: ` prefix
-- **Section presence** — required sections missing, forbidden sections present, timeouts section iff schema has timeouts
+- **Section presence and order** — required sections missing, forbidden sections present, sections out of canonical order, stray level-2 headings outside the type's spec, timeouts section iff schema has timeouts
 - **Timeout mismatches** — documented timeout actions that don't exist in schema, or schema actions not documented
 - **Import section issues** — passive voice, missing code blocks, identity section validation
 - **Example section issues** — code blocks with disallowed languages, missing resource name
@@ -377,7 +377,7 @@ The signal comes directly from the byline text, not the order of attributes. Mix
 
 Owns the structural integrity of a doc file: presence, order, and recognition of level-2 sections. Configuration comes from two places — the `type` block declares which sections may appear and in what order, and the `check "section_presence"` block toggles enforcement.
 
-**On the `type` block** — list the canonical sections in the order they must appear:
+**On the `type` block** — list the sections this type may contain, in the order they must appear:
 
 ```hcl
 type "resource" {
@@ -397,7 +397,9 @@ type "resource" {
 }
 ```
 
-Recognized section names: `title`, `signature`, `example`, `arguments`, `attributes`, `timeouts`, `import`. Each section block accepts:
+The list is **exhaustive**: any level-2 heading in the doc that does not match a declared section is reported as unknown. This applies to canonical names too — leaving `import` off the list and then writing `## Import` in the doc is an error, even though `import` is a canonical name.
+
+Each section block accepts:
 
 - `required = true` — section must be present
 - `forbidden = true` — section must be absent
@@ -406,17 +408,46 @@ Recognized section names: `title`, `signature`, `example`, `arguments`, `attribu
 
 The order of `section` blocks IS the canonical doc order. A type with no `section` blocks (e.g. `guide`, `index`) skips this rule entirely.
 
+**Canonical section names** — `title`, `signature`, `example`, `arguments`, `attributes`, `timeouts`, `import` — are recognized by the parser and have fixed heading text by convention (e.g. `arguments` → `## Argument Reference`, `example` → `## Example Usage`).
+
+**Custom section names** — any other lowercase snake_case identifier opts the type into a non-canonical H2 section. The heading text is derived by title-casing the snake_case name. For example:
+
+```hcl
+type "ephemeral" {
+  schema_kind   = "ephemeral"
+  website_paths = ["website/docs/ephemeral-resources/{name}.html.markdown"]
+  title_prefix  = "Ephemeral"
+
+  section "title"       { required = true }
+  section "example"     { required = true }
+  section "arguments"   { required = true }
+  section "attributes"  { required = true }
+  section "usage_notes" {}    # → ## Usage Notes
+}
+
+type "action" {
+  schema_kind   = "action"
+  website_paths = ["website/docs/actions/{name}.html.markdown"]
+  title_prefix  = "Action"
+
+  section "title"                 { required = true }
+  section "example"               { required = true }
+  section "dependency_management" {}    # → ## Dependency Management
+  section "arguments"             { required = true }
+}
+```
+
 **On the `check "section_presence"` block**:
 
 ```hcl
 check "section_presence" {
-  enforce_order          = true   # default: true
-  allow_unknown_sections = false  # default: false
+  enforce_order          = true   # default
+  allow_unknown_sections = false  # default
 }
 ```
 
-- `enforce_order` — when true, sections that appear out of the order declared on the type are reported as errors.
-- `allow_unknown_sections` — when false, level-2 headings that are not in the type's section spec are reported as errors.
+- `enforce_order` — when true (default), sections that appear out of the order declared on the type are reported as errors.
+- `allow_unknown_sections` — when true, level-2 headings outside the type's section spec are permitted silently (e.g. for free-form provider docs). Default false.
 
 **Schema-driven Timeouts** — when a schema is loaded, the schema's timeouts block decides whether the section is required, overriding the type's `required`/`forbidden` flag for `timeouts`. A schema-configured timeouts block missing from the doc is an error; a documented timeouts section with no schema configuration is also an error.
 
@@ -524,12 +555,16 @@ type "resource" {
     "docs/resources/{name}.md",
     "website/docs/r/{name}.html.markdown",
   ]
-  title_prefix       = "Resource"
-  require_attributes = "required"
-  require_import     = "optional"
-  require_timeouts   = "optional"
-  require_signature  = "forbidden"
-  region_aware       = true
+  title_prefix = "Resource"
+  region_aware = true
+
+  section "title"      { required = true }
+  section "example"    { required = true }
+  section "arguments"  { required = true }
+  section "attributes" { required = true }
+  section "timeouts"   {}
+  section "import"     {}
+  section "signature"  { forbidden = true }
 
   frontmatter_require = ["description", "page_title"]
   frontmatter_forbid  = ["sidebar_current"]
@@ -556,10 +591,7 @@ type "resource" {
 | `arguments_bylines` | Allowed paragraph texts under `## Argument Reference` |
 | `attributes_bylines` | Allowed paragraph texts under `## Attribute Reference` |
 | `allow_missing_arguments_byline` | Don't require a byline paragraph |
-| `require_attributes` | `"required"` / `"optional"` / `"forbidden"` |
-| `require_import` | Same |
-| `require_timeouts` | Same (overridden by schema when timeouts block exists) |
-| `require_signature` | Same |
+| `section "<name>" { ... }` | Declares a section in the doc structure. Order is the canonical doc order. Block fields: `required`, `forbidden`. See [`section_presence`](#section_presence) for details. |
 | `frontmatter_require` | Fields that must be present in YAML frontmatter |
 | `frontmatter_forbid` | Fields that must be absent |
 | `region_aware` | Whether `region_argument` rule applies to this type |
