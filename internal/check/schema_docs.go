@@ -242,20 +242,19 @@ func (r *SchemaDocsRule) checkCoverage(ctx CheckContext) []Result {
 			}
 		}
 
-		// Computed-only misplacement in arguments (use ArgumentBlocks directly,
-		// not the merged view, to avoid false positives from attribute section).
-		if blockPath == "" {
+		// Computed-only misplacement in arguments. Suppressed when
+		// AllowInlineReadOnly is true: under the permissive convention,
+		// inline (Read-Only) labels in Argument Reference are
+		// intentional, not misplaced.
+		if blockPath == "" && !r.allowInlineReadOnly() {
 			if argBlock := ctx.Doc.ArgumentBlocks[""]; argBlock != nil {
 				results = append(results, r.checkComputedMisplacement(ctx, schemaBlock, argBlock, ctx.Doc.AttributeBlocks[""])...)
 			}
 		}
 	}
 
-	// Attributes: computed-only coverage
-	rootBlock := rs.Blocks[""]
-	if rootBlock != nil {
-		results = append(results, r.checkAttributeCoverage(ctx, rootBlock)...)
-	}
+	// Attributes: Read-Only (computed-only) coverage across all schema blocks.
+	results = append(results, r.checkAttributeCoverage(ctx)...)
 
 	results = append(results, r.checkPhantomBlocks(ctx)...)
 
@@ -319,31 +318,96 @@ func (r *SchemaDocsRule) checkPhantomBlocks(ctx CheckContext) []Result {
 	return results
 }
 
-func (r *SchemaDocsRule) checkAttributeCoverage(ctx CheckContext, rootBlock *schema.Block) []Result {
-	var results []Result
-
-	attrBlock := ctx.Doc.AttributeBlocks[""]
-	documentedInAttrs := make(map[string]bool)
-	if attrBlock != nil {
-		for _, a := range attrBlock.Attributes {
-			documentedInAttrs[a.Name] = true
-		}
+// checkAttributeCoverage ensures every Read-Only (computed-only) schema
+// attribute, at every depth of nesting, is documented somewhere reachable.
+//
+// The default expectation is that Read-Only attributes appear in
+// ## Attribute Reference (under the appropriate block heading for nested
+// ones). When AllowInlineReadOnly is true, the rule additionally accepts
+// Read-Only attributes documented inline in ## Argument Reference with a
+// (Read-Only) label, alongside Required and Optional siblings — the
+// taxonomy used by tfplugindocs.
+//
+// This is the per-attribute presence rule. Misplacement (Read-Only in
+// Argument Reference when the toggle is off) is handled separately by
+// checkComputedMisplacement.
+func (r *SchemaDocsRule) checkAttributeCoverage(ctx CheckContext) []Result {
+	if ctx.Schema == nil {
+		return nil
 	}
 
-	for _, attr := range rootBlock.Attributes {
-		if attr.Computed && !attr.Optional && !attr.Required {
+	allowInline := r.allowInlineReadOnly()
+	var results []Result
+	reported := make(map[string]bool)
+
+	for blockPath, schemaBlock := range ctx.Schema.Blocks {
+		if slices.Contains(r.skipBlocks(), blockPath) {
+			continue
+		}
+		if schemaBlock == nil {
+			continue
+		}
+
+		argDoc := findDocBlockIn(ctx.Doc.ArgumentBlocks, leafName(blockPath), blockPath)
+		attrDoc := findDocBlockIn(ctx.Doc.AttributeBlocks, leafName(blockPath), blockPath)
+
+		for _, attr := range schemaBlock.Attributes {
+			// Only Read-Only (computed-only) attributes are covered here.
+			// Required / Optional coverage is handled in checkCoverage.
+			if !(attr.Computed && !attr.Optional && !attr.Required) {
+				continue
+			}
 			if slices.Contains(r.implicit(), attr.Name) {
 				continue
 			}
-			if !documentedInAttrs[attr.Name] {
-				results = append(results, Result{
-					Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityError,
-					Message: fmt.Sprintf("computed attribute %q should be documented in Attribute Reference section", attr.Name),
-				})
+			if r.IgnoreDeprecated && attr.Deprecated {
+				continue
 			}
+
+			inAttrs := docBlockHasAttr(attrDoc, attr.Name)
+			inArgs := docBlockHasAttr(argDoc, attr.Name)
+
+			// Documented in Attribute Reference always satisfies the rule.
+			// Documented inline in Argument Reference satisfies the rule
+			// only when AllowInlineReadOnly is true.
+			if inAttrs || (allowInline && inArgs) {
+				continue
+			}
+
+			key := blockPath + "." + attr.Name
+			if reported[key] {
+				continue
+			}
+			reported[key] = true
+
+			var msg string
+			if blockPath == "" {
+				msg = fmt.Sprintf("Read-Only attribute %q should be documented in Attribute Reference section", attr.Name)
+			} else {
+				msg = fmt.Sprintf("Read-Only attribute %q in block %q should be documented in Attribute Reference section", attr.Name, displayPath(blockPath))
+			}
+			results = append(results, Result{
+				Rule:     r.Name(),
+				Resource: ctx.Resource,
+				Severity: SeverityError,
+				Message:  msg,
+				Block:    blockPath,
+			})
 		}
 	}
 	return results
+}
+
+func docBlockHasAttr(b *doc.DocBlock, name string) bool {
+	if b == nil {
+		return false
+	}
+	for _, a := range b.Attributes {
+		if a.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *SchemaDocsRule) checkComputedMisplacement(ctx CheckContext, schemaBlock *schema.Block, argBlock *doc.DocBlock, attrBlock *doc.DocBlock) []Result {
@@ -727,21 +791,32 @@ func (r *SchemaDocsRule) checkLabels(ctx CheckContext) []Result {
 		attrSectionNames[blockName] = names
 	}
 
-	// Arguments must have (Required) or (Optional)
+	// Arguments must have (Required), (Optional), or (Read-Only)
+	allowReadOnly := r.allowInlineReadOnly()
 	for blockName, block := range ctx.Doc.ArgumentBlocks {
 		for _, attr := range block.Attributes {
-			if !attr.Required && !attr.Optional {
-				// Skip if this attr is also in the attribute section (template bleed)
-				if ns, ok := attrSectionNames[blockName]; ok && ns[attr.Name] {
-					continue
-				}
-				results = append(results, Result{
-					Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityWarning,
-					Message: fmt.Sprintf("argument %q in block %q is missing (Required) or (Optional) label", attr.Name, displayPath(blockName)),
-					Block:   blockName,
-					Line:    attr.Line,
-				})
+			if attr.Required || attr.Optional {
+				continue
 			}
+			if attr.ReadOnly && allowReadOnly {
+				// Inline Read-Only is permitted by config; the
+				// label is present, so no labels-rule complaint.
+				continue
+			}
+			// Skip if this attr is also in the attribute section (template bleed)
+			if ns, ok := attrSectionNames[blockName]; ok && ns[attr.Name] {
+				continue
+			}
+			label := "(Required) or (Optional)"
+			if allowReadOnly {
+				label = "(Required), (Optional), or (Read-Only)"
+			}
+			results = append(results, Result{
+				Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityWarning,
+				Message: fmt.Sprintf("argument %q in block %q is missing %s label", attr.Name, displayPath(blockName), label),
+				Block:   blockName,
+				Line:    attr.Line,
+			})
 		}
 	}
 
@@ -785,7 +860,14 @@ func severity(attr schema.Attribute) Severity {
 }
 
 func findDocBlock(d *doc.Document, leaf string, fullPath string) *doc.DocBlock {
-	blocks := d.Blocks()
+	return findDocBlockIn(d.Blocks(), leaf, fullPath)
+}
+
+// findDocBlockIn applies the same composite-path resolution as findDocBlock
+// but against a caller-supplied map. Used to resolve a path within the
+// AttributeBlocks-only or ArgumentBlocks-only view when a check needs to
+// distinguish where a documented attribute lives.
+func findDocBlockIn(blocks map[string]*doc.DocBlock, leaf string, fullPath string) *doc.DocBlock {
 	if fullPath == "" {
 		return blocks[""]
 	}

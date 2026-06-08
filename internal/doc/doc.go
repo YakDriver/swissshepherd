@@ -627,6 +627,21 @@ func extractBlocks(tree ast.Node, source []byte, doc *Document, templates Headin
 								ab.Attributes = append(ab.Attributes, attr)
 							}
 						}
+					} else if ref := parseNestedRef(li, source); ref.Parent != "" {
+						// A dot-notation reference (e.g. `network[*].private_ip`)
+						// in the current section. Route it to the parent block's
+						// implicit DocBlock in the same section type so coverage
+						// checks find it under the nested path.
+						refAttr := DocAttribute{
+							Name:        ref.Attribute,
+							Description: ref.Description,
+							ReadOnly:    ref.ReadOnly,
+							Required:    ref.Required,
+							Optional:    ref.Optional,
+							Line:        line,
+						}
+						ensureBlock(target, ref.Parent, "")
+						target[ref.Parent].Attributes = append(target[ref.Parent].Attributes, refAttr)
 					} else if name := malformedAttrName(li, source); name != "" {
 						block.MalformedAttributes = append(block.MalformedAttributes, MalformedAttr{Name: name, Line: line})
 					}
@@ -806,6 +821,88 @@ func parseListItem(li *ast.ListItem, source []byte) DocAttribute {
 	}
 
 	return attr
+}
+
+// NestedRef represents a dot-notation reference to a nested attribute,
+// e.g. `network[*].private_ip` or `tags[0].key`. These appear in the root
+// Argument Reference / Attribute Reference sections as a convenience
+// shorthand when the author doesn't want to introduce a separate nested
+// block heading.
+type NestedRef struct {
+	Parent      string
+	Attribute   string
+	Description string
+	Required    bool
+	Optional    bool
+	ReadOnly    bool
+}
+
+// parseNestedRef detects list items whose name is a dot-notation reference
+// like `network[*].private_ip`, `tags[0].key`, or `network.private_ip` and
+// returns the parsed parent/attribute/description triple. Returns a zero
+// NestedRef if the item is not a dot-notation reference.
+func parseNestedRef(li *ast.ListItem, source []byte) NestedRef {
+	var rawText string
+	for child := li.FirstChild(); child != nil; child = child.NextSibling() {
+		switch c := child.(type) {
+		case *ast.TextBlock:
+			rawText = string(c.Text(source))
+		case *ast.Paragraph:
+			rawText = string(c.Text(source))
+		}
+		if rawText != "" {
+			break
+		}
+	}
+	if rawText == "" {
+		return NestedRef{}
+	}
+
+	parts := strings.SplitN(rawText, " - ", 2)
+	name := strings.Trim(strings.TrimSpace(parts[0]), "`")
+	if !strings.Contains(name, ".") {
+		return NestedRef{}
+	}
+
+	// Split into parent + attribute. Strip [*], [0], etc. from the parent
+	// so `network[*].private_ip` and `network.private_ip` both produce
+	// parent="network".
+	dotIdx := strings.Index(name, ".")
+	parent := name[:dotIdx]
+	attribute := name[dotIdx+1:]
+	if i := strings.IndexAny(parent, "[*"); i >= 0 {
+		parent = parent[:i]
+	}
+	if parent == "" || attribute == "" {
+		return NestedRef{}
+	}
+	if strings.ContainsAny(parent, " ") || strings.ContainsAny(attribute, " .") {
+		return NestedRef{}
+	}
+
+	ref := NestedRef{Parent: parent, Attribute: attribute}
+	if len(parts) == 2 {
+		desc := parts[1]
+		if strings.HasPrefix(desc, "(") {
+			if end := strings.IndexByte(desc, ')'); end > 0 {
+				traits := desc[1:end]
+				for trait := range strings.SplitSeq(traits, ", ") {
+					switch strings.TrimSpace(trait) {
+					case "Required":
+						ref.Required = true
+					case "Optional":
+						ref.Optional = true
+					case "Read-Only":
+						ref.ReadOnly = true
+					}
+				}
+				ref.Description = strings.TrimSpace(desc[end+1:])
+			}
+		} else {
+			ref.Description = strings.TrimSpace(desc)
+		}
+	}
+	return ref
 }
 
 // malformedAttrName detects list items that look like attributes but are missing
