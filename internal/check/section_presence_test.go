@@ -348,6 +348,58 @@ func TestSectionPresenceRule_Unknown(t *testing.T) {
 		}
 	}
 }
+func TestSectionPresenceRule_CanonicalSectionOmittedFromSpec(t *testing.T) {
+	t.Parallel()
+
+	// Type spec deliberately omits the canonical "import" section. A doc
+	// with ## Import should be flagged: the type's list IS the complete
+	// set of allowed sections.
+	tp := &config.Type{
+		Name: "data_source",
+		Sections: []config.SectionSpec{
+			{Name: "title", Required: true},
+			{Name: "example", Required: true},
+			{Name: "arguments", Required: true},
+			{Name: "attributes", Required: true},
+			// import deliberately omitted
+		},
+	}
+
+	source := "# Data Source: test\n\n" +
+		"## Example Usage\n\n" +
+		"## Argument Reference\n\n" +
+		"## Attribute Reference\n\n" +
+		"## Import\n"
+
+	d, err := doc.Parse([]byte(source), "test")
+	if err != nil {
+		t.Fatalf("parse error: %v", err)
+	}
+
+	rule := &check.SectionPresenceRule{}
+	results := rule.Check(check.CheckContext{
+		Resource: "test",
+		Type:     tp,
+		Doc:      d,
+	})
+
+	want := "unknown level-2 section: ## Import"
+	found := false
+	for _, r := range results {
+		if strings.Contains(r.Message, want) {
+			found = true
+			break
+		}
+	}
+	if !found {
+		var msgs []string
+		for _, r := range results {
+			msgs = append(msgs, r.Message)
+		}
+		t.Errorf("expected message containing %q, got:\n  %s",
+			want, strings.Join(msgs, "\n  "))
+	}
+}
 
 func TestSectionPresenceRule_AllowUnknownSections(t *testing.T) {
 	t.Parallel()

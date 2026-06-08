@@ -154,14 +154,25 @@ func (r *SectionPresenceRule) checkOrder(ctx CheckContext) []Result {
 	return results
 }
 
-// checkUnknown reports every level-2 heading that did not match a recognized
-// section. Custom sections opted into via the Type's spec are filtered out
-// — they look like "unknown" to the parser but are explicitly allowed.
+// checkUnknown reports every level-2 heading that did not match a section
+// declared on the Type. Two kinds of stray sections are detected:
+//
+//  1. Custom sections (heading text not in the canonical seven) that are
+//     not opted into by the spec.
+//  2. Canonical sections (Import, Timeouts, etc.) present in the doc but
+//     omitted from the Type.Sections list. The type's list is the
+//     complete allow-list — leaving a canonical section off the list
+//     means it should not appear.
 func (r *SectionPresenceRule) checkUnknown(ctx CheckContext) []Result {
-	// Build a set of allowed heading texts for custom sections.
-	allowedCustomHeadings := make(map[string]bool, len(ctx.Type.Sections))
+	// Build the set of section names that are explicitly listed on the
+	// type. Anything outside this set is unknown.
+	declared := make(map[config.SectionName]bool, len(ctx.Type.Sections))
 	for _, spec := range ctx.Type.Sections {
-		name := spec.SectionName()
+		declared[spec.SectionName()] = true
+	}
+
+	allowedCustomHeadings := make(map[string]bool, len(ctx.Type.Sections))
+	for name := range declared {
 		if name.IsCanonical() {
 			continue
 		}
@@ -169,6 +180,9 @@ func (r *SectionPresenceRule) checkUnknown(ctx CheckContext) []Result {
 	}
 
 	var results []Result
+
+	// Custom unknown headings: anything in UnknownHeadings that isn't a
+	// declared custom section.
 	for _, h := range ctx.Doc.Sections.UnknownHeadings {
 		if allowedCustomHeadings[h.Text] {
 			continue
@@ -179,6 +193,27 @@ func (r *SectionPresenceRule) checkUnknown(ctx CheckContext) []Result {
 			Severity: SeverityError,
 			Message:  fmt.Sprintf("unknown level-2 section: ## %s", h.Text),
 			Line:     h.Line,
+		})
+	}
+
+	// Canonical sections present in the doc but omitted from the spec.
+	// Skip Title — it's the H1 heading, not a level-2 section.
+	for _, name := range config.AllSectionNames {
+		if name == config.SectionTitle {
+			continue
+		}
+		if declared[name] {
+			continue
+		}
+		section := canonicalSection(ctx.Doc.Sections, name)
+		if section == nil {
+			continue
+		}
+		results = append(results, Result{
+			Rule:     r.Name(),
+			Resource: ctx.Resource,
+			Severity: SeverityError,
+			Message:  fmt.Sprintf("unknown level-2 section: ## %s", name.HeadingText()),
 		})
 	}
 	return results

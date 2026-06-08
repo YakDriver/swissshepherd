@@ -136,11 +136,12 @@ type CheckConfig struct {
 	Byline      *bool `hcl:"byline,optional"`
 	Deprecated  *bool `hcl:"deprecated,optional"`
 
-	// SectionPresence rule options. nil means enabled (default true).
-	// EnforceOrder = require sections to appear in the order declared on
-	// the Type's section blocks.
-	// AllowUnknownSections = permit level-2 headings that are not in the
+	// SectionPresence rule options.
+	// EnforceOrder requires sections to appear in the order declared on
+	// the Type's section blocks. nil → enabled (strict by default).
+	// AllowUnknownSections permits level-2 headings that are not in the
 	// Type's section spec; otherwise each is reported as an error.
+	// nil → disallowed (strict by default).
 	EnforceOrder         *bool `hcl:"enforce_order,optional"`
 	AllowUnknownSections *bool `hcl:"allow_unknown_sections,optional"`
 
