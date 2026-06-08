@@ -193,6 +193,8 @@ Options ending in `_file` (`ignore_targets_file`, `allow_subcategories_file`, `i
 
 **Per-target** rules run once per (resource, data source, etc.) and compare schema against parsed markdown. **Per-file** rules run on raw file bytes. **Global** rules run once per invocation.
 
+The two largest rules — `schema_docs` and `section_presence` — have detailed reference docs in [docs/rules/](docs/rules/). The smaller rules are documented inline below.
+
 ---
 
 ### `example_section`
@@ -312,191 +314,17 @@ check "region_argument" {
 
 ### `schema_docs`
 
-The primary rule. Validates argument and attribute documentation against the provider schema.
+The primary rule. Validates argument and attribute documentation against the provider schema. Eight sub-checks: `byline`, `coverage`, `deprecated`, `description`, `format`, `heading`, `labels`, `ordering`. Coverage enforces the Required / Optional / Read-Only model at every depth of nesting and supports inline `(Read-Only)` labels via `allow_inline_read_only`.
 
-**Sub-checks** (all enabled by default; disable individually):
-
-| Sub-check | What it validates |
-|-----------|-------------------|
-| `byline` | First paragraph after section heading matches expected byline text (from type) |
-| `coverage` | Every schema attr is documented; every documented attr exists in schema; every block heading in Argument Reference matches a schema block |
-| `deprecated` | Deprecation status matches between schema and docs (both directions) |
-| `description` | Descriptions don't start with bad prefixes ("A ", "The ", "Specifies ", etc.) |
-| `format` | No code blocks in arg/attr sections; single-line attrs; uninterrupted lists |
-| `heading` | Block headings match the preferred template style |
-| `labels` | Arguments have (Required)/(Optional); attributes do not |
-| `ordering` | Attributes alphabetical (single-byline lists as one group; split required/optional bylines as separate groups) |
-
-**Config:**
-
-```hcl
-check "schema_docs" {
-  # Sub-check toggles
-  byline      = true
-  coverage    = true
-  deprecated  = true
-  description = true
-  format      = true
-  heading     = true
-  labels      = true
-  ordering    = true
-
-  # Heading templates (see "Heading templates" section)
-  block_heading_styles           = ["`{Block}` Block", "{Block}", "{Title}"]
-  prefer_block_heading_styles = ["`{Block}` Block"]
-
-  # Coverage options
-  ignore_deprecated      = true                     # skip deprecated schema attrs
-  implicit_attributes    = ["id", "tags_all"]       # never flagged as undocumented
-  allow_phantoms         = ["tags", "tags_all"]     # never flagged as phantom
-  skip_blocks            = ["timeouts"]             # blocks skipped entirely
-  allow_inline_read_only = false                    # see "Schema model" below
-
-  # Description options
-  bad_prefixes = ["A ", "An ", "The ", "Specifies "]
-
-  # Format options
-  no_code_blocks              = true   # no fenced code blocks in arg/attr sections
-  single_line_attrs           = true   # each attribute on one line
-  uninterrupted_lists         = true   # no paragraphs between list items
-  allow_attribute_indentation = true   # allow indented sub-attributes in Attribute Reference (default: true)
-}
-```
-
-#### Schema model: Required / Optional / Read-Only
-
-The `coverage` sub-check enforces presence of every schema attribute at every depth of nesting. swissshepherd uses the same three-category mental model as tfplugindocs:
-
-- **Required** — must be set in configuration. Documented in `## Argument Reference` with `(Required)`.
-- **Optional** — may be set in configuration. Documented in `## Argument Reference` with `(Optional)`. Includes attributes that are both Optional and Computed (configurable, so still `(Optional)`).
-- **Read-Only** — never set in configuration; always populated by the provider. Documented in `## Attribute Reference`, or — when `allow_inline_read_only = true` — inline in `## Argument Reference` with `(Read-Only)`.
-
-For nested blocks, Read-Only attributes can be documented in any of the following equivalent forms:
-
-- Under a nested-block heading inside `## Attribute Reference`:
-
-  ````markdown
-  ### `network` Block
-
-  * `private_ip` - Private IP address.
-  ````
-
-- As a dot-notation reference at the root level of `## Attribute Reference`. Multi-level paths are supported, matching the path style produced by tfplugindocs's anchor IDs:
-
-  ```markdown
-  * `network[*].private_ip` - Private IP address.
-  * `analyzer_configuration.unused_access_configuration.computed_summary` - Summary of unused access.
-  ```
-
-- Inline inside the `### \`block\`` heading in Argument Reference, with the `(Read-Only)` label, when `allow_inline_read_only = true`:
-
-  ````markdown
-  ### `network` Block
-
-  * `private_ip` - (Read-Only) Private IP address.
-  * `subnet_id` - (Required) Subnet identifier.
-  ````
-
-The default (`allow_inline_read_only = false`) preserves the AWS provider's traditional separation: `## Argument Reference` for configurable attributes, `## Attribute Reference` for Read-Only ones. Setting the toggle to `true` permits the tfplugindocs-aligned permissive convention without requiring all docs to convert at once.
-
-#### Coverage: phantom block headings
-
-The `coverage` sub-check also flags H3+ headings inside `## Argument Reference` whose name doesn't match any schema block. Common patterns this catches:
-
-- Stray subsection headings like `#### Arguments` or `#### Nested Blocks` under a real block heading. The H3 already declares the block; nested "Arguments" / "Nested Blocks" subheadings are noise that the parser interprets as phantom blocks.
-- Title-Case descriptive headings (`### Tool Specification`, `### Restore Configuration`) for nested blocks where the schema name is different. Use `` ### `tool_specification` Block `` or another canonical heading style.
-- Combined headings (`### egress and ingress`) when the schema doesn't actually have those blocks (e.g. when the underlying type is attribute-as-blocks).
-
-The check is restricted to `## Argument Reference`. Block-style headings under `## Attribute Reference` (e.g. `### Endpoint`, `### master_user_secret`) commonly document the structure of computed attributes that have no Block representation in the schema, and are not flagged.
-
-#### Ordering: single vs. split lists
-
-The `ordering` sub-check adapts to how arguments are presented in the doc:
-
-- **Single combined list** — when the byline is `This resource supports the following arguments:`, `Each \`block\` supports:`, or any single byline preceding one list, all attributes (Required and Optional) are checked as one alphabetical sequence.
-- **Split lists** — when the doc uses two bylines: `The following arguments are required:` followed (after the required list) by `The following arguments are optional:`, each group is checked independently. Required attributes alphabetical among themselves; Optional attributes alphabetical among themselves.
-
-The signal comes directly from the byline text, not the order of attributes. Mixing labels in a single-list block (e.g., a `(Required)` after several `(Optional)` items) is allowed as long as the names are alphabetical overall.
+See **[docs/rules/schema_docs.md](docs/rules/schema_docs.md)** for the full configuration reference, sub-check details, and the schema model.
 
 ---
 
 ### `section_presence`
 
-Owns the structural integrity of a doc file: presence, order, and recognition of level-2 sections. Configuration comes from two places — the `type` block declares which sections may appear and in what order, and the `check "section_presence"` block toggles enforcement.
+Owns the structural integrity of a doc file: presence, order, and recognition of level-2 sections. Configured in two places — the `type` block declares which sections may appear and in what order; the `check "section_presence"` block toggles enforcement.
 
-**On the `type` block** — list the sections this type may contain, in the order they must appear:
-
-```hcl
-type "resource" {
-  schema_kind   = "resource"
-  website_paths = ["website/docs/r/{name}.html.markdown"]
-  title_prefix  = "Resource"
-
-  section "title"      { required = true }
-  section "example"    { required = true }
-  section "arguments"  { required = true }
-  section "attributes" { required = true }
-  section "timeouts"   {}
-  section "import"     {}
-  section "signature"  { forbidden = true }
-
-  region_aware = true
-}
-```
-
-The list is **exhaustive**: any level-2 heading in the doc that does not match a declared section is reported as unknown. This applies to canonical names too — leaving `import` off the list and then writing `## Import` in the doc is an error, even though `import` is a canonical name.
-
-Each section block accepts:
-
-- `required = true` — section must be present
-- `forbidden = true` — section must be absent
-- both unset — section is optional (allowed but not required)
-- both set — config error
-
-The order of `section` blocks IS the canonical doc order. A type with no `section` blocks (e.g. `guide`, `index`) skips this rule entirely.
-
-**Canonical section names** — `title`, `signature`, `example`, `arguments`, `attributes`, `timeouts`, `import` — are recognized by the parser and have fixed heading text by convention (e.g. `arguments` → `## Argument Reference`, `example` → `## Example Usage`).
-
-**Custom section names** — any other lowercase snake_case identifier opts the type into a non-canonical H2 section. The heading text is derived by title-casing the snake_case name. For example:
-
-```hcl
-type "ephemeral" {
-  schema_kind   = "ephemeral"
-  website_paths = ["website/docs/ephemeral-resources/{name}.html.markdown"]
-  title_prefix  = "Ephemeral"
-
-  section "title"       { required = true }
-  section "example"     { required = true }
-  section "arguments"   { required = true }
-  section "attributes"  { required = true }
-  section "usage_notes" {}    # → ## Usage Notes
-}
-
-type "action" {
-  schema_kind   = "action"
-  website_paths = ["website/docs/actions/{name}.html.markdown"]
-  title_prefix  = "Action"
-
-  section "title"                 { required = true }
-  section "example"               { required = true }
-  section "dependency_management" {}    # → ## Dependency Management
-  section "arguments"             { required = true }
-}
-```
-
-**On the `check "section_presence"` block**:
-
-```hcl
-check "section_presence" {
-  enforce_order          = true   # default
-  allow_unknown_sections = false  # default
-}
-```
-
-- `enforce_order` — when true (default), sections that appear out of the order declared on the type are reported as errors.
-- `allow_unknown_sections` — when true, level-2 headings outside the type's section spec are permitted silently (e.g. for free-form provider docs). Default false.
-
-**Schema-driven Timeouts** — when a schema is loaded, the schema's timeouts block decides whether the section is required, overriding the type's `required`/`forbidden` flag for `timeouts`. A schema-configured timeouts block missing from the doc is an error; a documented timeouts section with no schema configuration is also an error.
+See **[docs/rules/section_presence.md](docs/rules/section_presence.md)** for the full configuration reference, custom-section conventions, and schema-driven Timeouts behavior.
 
 ---
 
