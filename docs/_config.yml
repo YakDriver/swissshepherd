@@ -2,7 +2,7 @@
 # "SPDX-License-Identifier: MPL-2.0"
 
 title: swissshepherd
-description: Terraform AWS provider documentation linter
+description: Terraform provider documentation linter
 theme: jekyll-theme-primer
 
 # jekyll-readme-index serves docs/README.md as the site root, avoiding

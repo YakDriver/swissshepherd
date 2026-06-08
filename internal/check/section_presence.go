@@ -209,11 +209,19 @@ func (r *SectionPresenceRule) checkUnknown(ctx CheckContext) []Result {
 		if section == nil {
 			continue
 		}
+		// Use the section's actual heading text rather than the
+		// canonical text so the error message matches what the user
+		// wrote, even if the parser ever loosens classification beyond
+		// exact match.
+		headingText := section.Text
+		if headingText == "" {
+			headingText = name.HeadingText()
+		}
 		results = append(results, Result{
 			Rule:     r.Name(),
 			Resource: ctx.Resource,
 			Severity: SeverityError,
-			Message:  fmt.Sprintf("unknown level-2 section: ## %s", name.HeadingText()),
+			Message:  fmt.Sprintf("unknown level-2 section: ## %s", headingText),
 		})
 	}
 	return results

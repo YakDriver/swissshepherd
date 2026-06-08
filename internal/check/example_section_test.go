@@ -54,9 +54,14 @@ func TestExampleSectionRule(t *testing.T) {
 			markdown: "# Resource: aws_thing\n\n## Example Usage\n\n```\nresource \"aws_thing\" \"example\" {}\n```\n",
 		},
 		{
-			name:     "error — wrong heading text",
+			// "Examples" is now caught by the parser (only exact "Example
+			// Usage" classifies as the Example section). The
+			// section_presence rule reports it as an unknown heading;
+			// example_section sees no Example section and returns early
+			// with no findings.
+			name:     "no findings — wrong heading classified as unknown",
 			markdown: "# Resource: aws_thing\n\n## Examples\n\n```terraform\nresource \"aws_thing\" \"example\" {}\n```\n",
-			wantErrs: 1,
+			wantErrs: 0,
 		},
 		{
 			name:     "valid — supplementary json block alongside terraform",

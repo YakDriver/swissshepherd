@@ -489,6 +489,11 @@ func TestSectionName_HeadingText(t *testing.T) {
 		"usage_notes":           "Usage Notes",
 		"dependency_management": "Dependency Management",
 		"single":                "Single",
+		// Edge cases: leading/trailing/double underscores must not
+		// produce leading/trailing/double spaces in the heading text.
+		"_underscore":   "Underscore",
+		"trailing_":     "Trailing",
+		"double__under": "Double Under",
 	}
 	for in, want := range cases {
 		if got := in.HeadingText(); got != want {

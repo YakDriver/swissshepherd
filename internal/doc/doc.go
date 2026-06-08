@@ -365,7 +365,7 @@ func stripFrontmatter(source []byte) []byte {
 
 	rest := source[openerLen:]
 
-	// Try each closer pattern in turn. The first three are anchored to a
+	// Try each closer pattern in turn. The first two are anchored to a
 	// trailing newline (LF or CRLF); the last two are EOF-only and require
 	// the match to land at the end of the source.
 	type candidate struct {
@@ -495,6 +495,13 @@ func extractBlocks(tree ast.Node, source []byte, doc *Document, templates Headin
 				inAttributes = strings.HasPrefix(headingText, "Attribute")
 				sawRequiredByline = false
 
+				// Argument and Attribute sections use prefix matching so
+				// both "Argument Reference" (canonical) and "Arguments"
+				// (alternate) classify correctly. The other canonical
+				// sections use exact heading text so similarly named
+				// custom sections (e.g. "Importing", "Import Notes",
+				// "Examples") are recorded as unknown headings rather
+				// than absorbed into a canonical section.
 				switch {
 				case inArguments:
 					currentBlockName = ""
@@ -506,22 +513,26 @@ func extractBlocks(tree ast.Node, source []byte, doc *Document, templates Headin
 					currentBlockAliases = nil
 					ensureBlock(doc.AttributeBlocks, "", headingText)
 					assignSection(&doc.Sections.Attributes, n, headingText)
-				case strings.HasPrefix(headingText, "Example"):
+				case headingText == "Example Usage":
 					assignSection(&doc.Sections.Example, n, headingText)
-				case strings.HasPrefix(headingText, "Timeout"):
+				case headingText == "Timeouts":
 					assignSection(&doc.Sections.Timeouts, n, headingText)
-				case strings.HasPrefix(headingText, "Import"):
+				case headingText == "Import":
 					assignSection(&doc.Sections.Import, n, headingText)
-				case strings.HasPrefix(headingText, "Signature"):
+				case headingText == "Signature":
 					assignSection(&doc.Sections.Signature, n, headingText)
 				default:
 					// Unknown level-2 section — record it for the structural
 					// rule and stop accumulating into any recognized section.
+					// Close the previously active section first so its
+					// EndOffset doesn't bleed past the unknown heading.
+					unknownStart := headingStartOffset(n)
+					closeSection(unknownStart)
 					doc.Sections.UnknownHeadings = append(doc.Sections.UnknownHeadings, ChildHeading{
 						Level:       2,
 						Text:        headingText,
 						Line:        nodeLineNumber(n, source),
-						StartOffset: headingStartOffset(n),
+						StartOffset: unknownStart,
 					})
 					currentSection = nil
 				}

@@ -871,6 +871,15 @@ func findDocBlockIn(blocks map[string]*doc.DocBlock, leaf string, fullPath strin
 	if fullPath == "" {
 		return blocks[""]
 	}
+	// Try the full path first. Doc blocks created from dot-notation
+	// references (e.g. `destination.s3.format.config.attr`) are keyed
+	// by the full parent path, which matches the schema's block keying
+	// for deep paths. Composite-truncation fallbacks below handle doc
+	// blocks created from short-form headings (e.g. `### \`config\`
+	// Block`) keyed by leaf or last-2 segments.
+	if b, ok := blocks[fullPath]; ok {
+		return b
+	}
 	parts := strings.Split(fullPath, ".")
 	if len(parts) >= 3 {
 		for i := len(parts) - 3; i >= 0; i-- {

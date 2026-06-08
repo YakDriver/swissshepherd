@@ -9,8 +9,15 @@ import (
 	"strings"
 )
 
-// SectionName names a recognized doc section. Each value maps to a field on
-// doc.Sections.
+// SectionName identifies a doc section in a Type's section spec.
+//
+// Canonical names — title, signature, example, arguments, attributes,
+// timeouts, import — each correspond to a recognized field on doc.Sections
+// (or, in the case of title, a parser-level structure). Any other lowercase
+// snake_case identifier is treated as a custom section name; the heading
+// text is derived by title-casing it (e.g. "usage_notes" → "Usage Notes")
+// and matched against doc.Sections.UnknownHeadings rather than a typed
+// field.
 type SectionName string
 
 // Recognized section names. The order of these constants matches the
@@ -88,13 +95,17 @@ func (n SectionName) HeadingText() string {
 	case SectionImport:
 		return "Import"
 	}
-	// Custom section — title-case the snake_case name.
-	parts := strings.Split(string(n), "_")
-	for i, p := range parts {
+	// Custom section — title-case the snake_case name. Empty segments
+	// from leading, trailing, or duplicate underscores are dropped so
+	// the rendered heading text never contains leading/trailing/double
+	// spaces (e.g. "_underscore" → "Underscore", not " Underscore").
+	rawParts := strings.Split(string(n), "_")
+	parts := rawParts[:0]
+	for _, p := range rawParts {
 		if p == "" {
 			continue
 		}
-		parts[i] = strings.ToUpper(p[:1]) + p[1:]
+		parts = append(parts, strings.ToUpper(p[:1])+p[1:])
 	}
 	return strings.Join(parts, " ")
 }
