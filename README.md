@@ -346,10 +346,11 @@ check "schema_docs" {
   prefer_block_heading_styles = ["`{Block}` Block"]
 
   # Coverage options
-  ignore_deprecated   = true                     # skip deprecated schema attrs
-  implicit_attributes = ["id", "tags_all"]       # never flagged as undocumented
-  allow_phantoms   = ["tags", "tags_all"]     # never flagged as phantom
-  skip_blocks         = ["timeouts"]             # blocks skipped entirely
+  ignore_deprecated      = true                     # skip deprecated schema attrs
+  implicit_attributes    = ["id", "tags_all"]       # never flagged as undocumented
+  allow_phantoms         = ["tags", "tags_all"]     # never flagged as phantom
+  skip_blocks            = ["timeouts"]             # blocks skipped entirely
+  allow_inline_read_only = false                    # see "Schema model" below
 
   # Description options
   bad_prefixes = ["A ", "An ", "The ", "Specifies "]
@@ -361,6 +362,42 @@ check "schema_docs" {
   allow_attribute_indentation = true   # allow indented sub-attributes in Attribute Reference (default: true)
 }
 ```
+
+#### Schema model: Required / Optional / Read-Only
+
+The `coverage` sub-check enforces presence of every schema attribute at every depth of nesting. swissshepherd uses the same three-category mental model as tfplugindocs:
+
+- **Required** — must be set in configuration. Documented in `## Argument Reference` with `(Required)`.
+- **Optional** — may be set in configuration. Documented in `## Argument Reference` with `(Optional)`. Includes attributes that are both Optional and Computed (configurable, so still `(Optional)`).
+- **Read-Only** — never set in configuration; always populated by the provider. Documented in `## Attribute Reference`, or — when `allow_inline_read_only = true` — inline in `## Argument Reference` with `(Read-Only)`.
+
+For nested blocks, Read-Only attributes can be documented in any of the following equivalent forms:
+
+- Under a nested-block heading inside `## Attribute Reference`:
+
+  ````markdown
+  ### `network` Block
+
+  * `private_ip` - Private IP address.
+  ````
+
+- As a dot-notation reference at the root level of `## Attribute Reference`. Multi-level paths are supported, matching the path style produced by tfplugindocs's anchor IDs:
+
+  ```markdown
+  * `network[*].private_ip` - Private IP address.
+  * `analyzer_configuration.unused_access_configuration.computed_summary` - Summary of unused access.
+  ```
+
+- Inline inside the `### \`block\`` heading in Argument Reference, with the `(Read-Only)` label, when `allow_inline_read_only = true`:
+
+  ````markdown
+  ### `network` Block
+
+  * `private_ip` - (Read-Only) Private IP address.
+  * `subnet_id` - (Required) Subnet identifier.
+  ````
+
+The default (`allow_inline_read_only = false`) preserves the AWS provider's traditional separation: `## Argument Reference` for configurable attributes, `## Attribute Reference` for Read-Only ones. Setting the toggle to `true` permits the tfplugindocs-aligned permissive convention without requiring all docs to convert at once.
 
 #### Coverage: phantom block headings
 
