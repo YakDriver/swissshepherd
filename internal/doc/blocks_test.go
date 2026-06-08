@@ -213,3 +213,33 @@ func TestBlocks_CombinedHeading_DoesNotPolluteNextBlock(t *testing.T) {
 		t.Error("block z missing attribute unique")
 	}
 }
+
+func TestBlocks_UsageBasedPricingTerm(t *testing.T) {
+	t.Parallel()
+
+	source := []byte("# Data Source: test\n\n## Argument Reference\n\n* `id` - (Optional) The ID.\n\n## Attribute Reference\n\n* `usage_based_pricing_term` - Details about the pricing terms. See [`usage_based_pricing_term`](#usage_based_pricing_term).\n\n### `usage_based_pricing_term` Block\n\n* `rate_card` - Details about a usage price for each dimension. See [`rate_card`](#rate_card).\n\n### `rate_card` Block\n\n* `description` - Description of the price rate.\n* `dimension` - Dimension for the price rate.\n* `price` - Single-dimensional rate information.\n* `unit` - Unit associated with the price.\n")
+
+	d, err := doc.Parse(source, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	blocks := d.Blocks()
+
+	// Validate usage_based_pricing_term block
+	usageTermBlock := blocks["usage_based_pricing_term"]
+	if usageTermBlock == nil {
+		t.Fatal("block usage_based_pricing_term not found")
+	}
+	for _, want := range []string{"rate_card"} {
+		found := false
+		for _, attr := range usageTermBlock.Attributes {
+			if attr.Name == want {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("block usage_based_pricing_term missing attribute %q", want)
+		}
+	}
+}
