@@ -36,9 +36,9 @@ func (r *ExampleSectionRule) Check(ctx CheckContext) []Result {
 		results = append(results, Result{Severity: sev, Rule: r.Name(), Resource: ctx.Resource, Message: msg})
 	}
 
-	// Heading-text validation lives at the parser level: only "Example
-	// Usage" classifies as the Example section. Variants like "Examples"
-	// are reported as unknown headings by the section_presence rule.
+	// Heading-text validation lives at the parser level: only "Example Usage"
+	// classifies as the Example section. Variants like "Examples" are treated
+	// as unknown headings and may be reported by section_presence (when enabled).
 
 	allowed := r.AllowLanguages
 	if len(allowed) == 0 {
