@@ -16,7 +16,7 @@ All enabled by default; disable individually via the rule's config block.
 | `description` | Descriptions don't start with bad prefixes ("A ", "The ", "Specifies ", etc.)                                                     |
 | `format`      | No code blocks in arg/attr sections; single-line attrs; uninterrupted lists                                                       |
 | `heading`     | Block headings match the preferred template style                                                                                  |
-| `labels`      | Arguments have (Required)/(Optional)/(Read-Only); attributes do not                                                                |
+| `labels`      | Arguments have (Required)/(Optional) labels (and optionally (Read-Only) when allow_inline_read_only = true); attributes do not                                                                |
 | `ordering`    | Attributes alphabetical (single-byline lists as one group; split required/optional bylines as separate groups)                    |
 
 ## Config
