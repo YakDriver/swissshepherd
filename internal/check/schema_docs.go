@@ -890,7 +890,7 @@ func findDocBlock(d *doc.Document, leaf string, fullPath string) *doc.DocBlock {
 //
 // Returns the first matching block. For coverage checks that need the full
 // set of documented attributes for a schema path (which can be split
-// across multiple doc blocks — e.g. a leaf-keyed `### \`probabilistic\``
+// across multiple doc blocks — e.g. a leaf-keyed `### \`probabilistic\“
 // heading and a dot-notation-routed `rule.probabilistic` block from a
 // reference like `rule[*].probabilistic[*].x` in the attribute section),
 // use findAllDocBlocksIn.
