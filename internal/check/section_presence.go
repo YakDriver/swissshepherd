@@ -222,6 +222,7 @@ func (r *SectionPresenceRule) checkUnknown(ctx CheckContext) []Result {
 			Resource: ctx.Resource,
 			Severity: SeverityError,
 			Message:  fmt.Sprintf("unknown level-2 section: ## %s", headingText),
+			Line:     1 + strings.Count(string(ctx.Doc.Source()[:section.StartOffset]), "\n"),
 		})
 	}
 	return results
