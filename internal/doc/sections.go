@@ -37,8 +37,10 @@ type Section struct {
 
 // ChildHeading records a heading nested inside a section.
 type ChildHeading struct {
-	Level int
-	Text  string
+	Level       int
+	Text        string
+	Line        int // 1-based line number of the heading in source
+	StartOffset int // byte offset of the heading's first byte in source
 }
 
 // SectionListItem records a single top-level list item in a section.
@@ -67,4 +69,10 @@ type Sections struct {
 	Attributes *Section // ## Attribute Reference
 	Timeouts   *Section // ## Timeouts
 	Import     *Section // ## Import
+
+	// UnknownHeadings records every level-2 heading that did not map to one
+	// of the recognized sections above. The parser captures these so the
+	// section_presence rule can flag stray sections like ## My wild heading.
+	// Each entry's Level is always 2; Text is the raw heading text.
+	UnknownHeadings []ChildHeading
 }

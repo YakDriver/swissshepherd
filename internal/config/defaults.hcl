@@ -3,16 +3,22 @@
 # These provide minimal defaults. Providers should override types in their
 # own swissshepherd.hcl to define bylines, frontmatter requirements, and
 # other provider-specific conventions.
+#
+# The order of section blocks within a type IS the canonical doc order.
+# section_presence enforces this order when its enforce_order option is true.
 
 type "resource" {
   schema_kind   = "resource"
   website_paths = ["website/docs/r/{name}.html.markdown"]
   title_prefix  = "Resource"
 
-  require_attributes = "required"
-  require_import     = "optional"
-  require_timeouts   = "optional"
-  require_signature  = "forbidden"
+  section "title"      { required = true }
+  section "example"    { required = true }
+  section "arguments"  { required = true }
+  section "attributes" { required = true }
+  section "timeouts"   {}
+  section "import"     {}
+  section "signature"  { forbidden = true }
 
   region_aware = true
 }
@@ -22,10 +28,13 @@ type "data_source" {
   website_paths = ["website/docs/d/{name}.html.markdown"]
   title_prefix  = "Data Source"
 
-  require_attributes = "required"
-  require_import     = "forbidden"
-  require_timeouts   = "optional"
-  require_signature  = "forbidden"
+  section "title"      { required = true }
+  section "example"    { required = true }
+  section "arguments"  { required = true }
+  section "attributes" { required = true }
+  section "timeouts"   {}
+  section "import"     { forbidden = true }
+  section "signature"  { forbidden = true }
 
   region_aware = true
 }
@@ -35,10 +44,13 @@ type "ephemeral" {
   website_paths = ["website/docs/ephemeral-resources/{name}.html.markdown"]
   title_prefix  = "Ephemeral"
 
-  require_attributes = "required"
-  require_import     = "forbidden"
-  require_timeouts   = "forbidden"
-  require_signature  = "forbidden"
+  section "title"      { required = true }
+  section "example"    { required = true }
+  section "arguments"  { required = true }
+  section "attributes" { required = true }
+  section "timeouts"   { forbidden = true }
+  section "import"     { forbidden = true }
+  section "signature"  { forbidden = true }
 
   region_aware = true
 }
@@ -51,10 +63,13 @@ type "function" {
   arguments_heading              = "Arguments"
   allow_missing_arguments_byline = true
 
-  require_attributes = "forbidden"
-  require_import     = "forbidden"
-  require_timeouts   = "forbidden"
-  require_signature  = "required"
+  section "title"      { required = true }
+  section "example"    { required = true }
+  section "signature"  { required = true }
+  section "arguments"  { required = true }
+  section "attributes" { forbidden = true }
+  section "timeouts"   { forbidden = true }
+  section "import"     { forbidden = true }
 
   region_aware = false
 }
@@ -64,10 +79,13 @@ type "list_resource" {
   website_paths = ["website/docs/list-resources/{name}.html.markdown"]
   title_prefix  = "List Resource"
 
-  require_attributes = "forbidden"
-  require_import     = "forbidden"
-  require_timeouts   = "forbidden"
-  require_signature  = "forbidden"
+  section "title"      { required = true }
+  section "example"    { required = true }
+  section "arguments"  { required = true }
+  section "attributes" { forbidden = true }
+  section "timeouts"   { forbidden = true }
+  section "import"     { forbidden = true }
+  section "signature"  { forbidden = true }
 
   region_aware = true
 }
@@ -77,10 +95,13 @@ type "action" {
   website_paths = ["website/docs/actions/{name}.html.markdown"]
   title_prefix  = "Action"
 
-  require_attributes = "forbidden"
-  require_import     = "forbidden"
-  require_timeouts   = "forbidden"
-  require_signature  = "forbidden"
+  section "title"      { required = true }
+  section "example"    { required = true }
+  section "arguments"  { required = true }
+  section "attributes" { forbidden = true }
+  section "timeouts"   { forbidden = true }
+  section "import"     { forbidden = true }
+  section "signature"  { forbidden = true }
 
   region_aware = false
 }

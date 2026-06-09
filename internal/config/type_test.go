@@ -66,8 +66,33 @@ func TestLoad_DefaultResourceShape(t *testing.T) {
 	if !slices.Equal(r.WebsitePaths, wantPaths) {
 		t.Errorf("WebsitePaths = %v, want %v", r.WebsitePaths, wantPaths)
 	}
-	if r.RequireAttributes != config.SectionRequired {
-		t.Errorf("RequireAttributes = %q, want %q", r.RequireAttributes, config.SectionRequired)
+	// Resource must declare its sections in the canonical order.
+	wantSectionNames := []config.SectionName{
+		config.SectionTitle,
+		config.SectionExample,
+		config.SectionArguments,
+		config.SectionAttributes,
+		config.SectionTimeouts,
+		config.SectionImport,
+		config.SectionSignature,
+	}
+	gotNames := make([]config.SectionName, len(r.Sections))
+	for i, s := range r.Sections {
+		gotNames[i] = s.SectionName()
+	}
+	if !slices.Equal(gotNames, wantSectionNames) {
+		t.Errorf("Sections order = %v, want %v", gotNames, wantSectionNames)
+	}
+	// Spot-check key required and forbidden flags.
+	specByName := make(map[config.SectionName]config.SectionSpec, len(r.Sections))
+	for _, s := range r.Sections {
+		specByName[s.SectionName()] = s
+	}
+	if !specByName[config.SectionAttributes].Required {
+		t.Errorf("Attributes should be required for resource type")
+	}
+	if !specByName[config.SectionSignature].Forbidden {
+		t.Errorf("Signature should be forbidden for resource type")
 	}
 	if !r.RegionAware {
 		t.Error("RegionAware should be true for resource type")
@@ -211,25 +236,117 @@ type "broken" {
 	}
 }
 
-func TestLoad_InvalidType_InvalidSectionRequirement(t *testing.T) {
+func TestLoad_InvalidType_InvalidSectionName(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
 	cfgPath := filepath.Join(root, "swissshepherd.hcl")
 	writeFile(t, cfgPath, `
 type "broken" {
-  schema_kind       = "none"
-  website_paths     = ["docs/{name}.md"]
-  require_attributes = "mandatory"
+  schema_kind   = "none"
+  website_paths = ["docs/{name}.md"]
+  section "Not-Snake-Case" {
+    required = true
+  }
 }
 `)
 
 	_, err := config.Load(cfgPath)
 	if err == nil {
-		t.Fatal("expected error for invalid section requirement")
+		t.Fatal("expected error for invalid section name")
 	}
-	if !strings.Contains(err.Error(), "require_attributes") {
-		t.Errorf("error should name the offending field; got: %v", err)
+	if !strings.Contains(err.Error(), "Not-Snake-Case") {
+		t.Errorf("error should name the offending section; got: %v", err)
+	}
+}
+
+// TestLoad_CustomSectionNameAccepted documents that any lowercase
+// snake_case identifier is valid as a section name; canonical names get
+// special parser support, custom names are matched by heading text.
+func TestLoad_CustomSectionNameAccepted(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	cfgPath := filepath.Join(root, "swissshepherd.hcl")
+	writeFile(t, cfgPath, `
+type "ephemeral_with_notes" {
+  schema_kind   = "ephemeral"
+  website_paths = ["website/docs/ephemeral-resources/{name}.html.markdown"]
+  title_prefix  = "Ephemeral"
+
+  section "title"       { required = true }
+  section "example"     { required = true }
+  section "arguments"   { required = true }
+  section "attributes"  { required = true }
+  section "usage_notes" {}
+}
+`)
+
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	tp := cfg.GetType("ephemeral_with_notes")
+	if tp == nil {
+		t.Fatal("custom type not loaded")
+	}
+	if len(tp.Sections) != 5 {
+		t.Fatalf("expected 5 sections, got %d", len(tp.Sections))
+	}
+	last := tp.Sections[4]
+	if last.Name != "usage_notes" {
+		t.Errorf("last section name = %q, want %q", last.Name, "usage_notes")
+	}
+	if got := last.SectionName().HeadingText(); got != "Usage Notes" {
+		t.Errorf("HeadingText(usage_notes) = %q, want %q", got, "Usage Notes")
+	}
+}
+
+func TestLoad_InvalidType_DuplicateSection(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	cfgPath := filepath.Join(root, "swissshepherd.hcl")
+	writeFile(t, cfgPath, `
+type "broken" {
+  schema_kind   = "none"
+  website_paths = ["docs/{name}.md"]
+  section "arguments" { required = true }
+  section "arguments" {}
+}
+`)
+
+	_, err := config.Load(cfgPath)
+	if err == nil {
+		t.Fatal("expected error for duplicate section")
+	}
+	if !strings.Contains(err.Error(), "more than once") {
+		t.Errorf("error should explain duplicate sections; got: %v", err)
+	}
+}
+
+func TestLoad_InvalidType_RequiredAndForbiddenSection(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	cfgPath := filepath.Join(root, "swissshepherd.hcl")
+	writeFile(t, cfgPath, `
+type "broken" {
+  schema_kind   = "none"
+  website_paths = ["docs/{name}.md"]
+  section "arguments" {
+    required  = true
+    forbidden = true
+  }
+}
+`)
+
+	_, err := config.Load(cfgPath)
+	if err == nil {
+		t.Fatal("expected error for both required and forbidden")
+	}
+	if !strings.Contains(err.Error(), "both required and forbidden") {
+		t.Errorf("error should explain the conflict; got: %v", err)
 	}
 }
 
@@ -303,21 +420,84 @@ func TestType_ResolveDocPath(t *testing.T) {
 	}
 }
 
-func TestSectionRequirement_IsValid(t *testing.T) {
+func TestSectionName_IsValid(t *testing.T) {
 	t.Parallel()
 
-	cases := map[config.SectionRequirement]bool{
-		"":          true,
-		"required":  true,
-		"optional":  true,
-		"forbidden": true,
-		"REQUIRED":  false,
-		"must":      false,
-		"foo":       false,
+	cases := map[config.SectionName]bool{
+		// Canonical names.
+		config.SectionTitle:      true,
+		config.SectionSignature:  true,
+		config.SectionExample:    true,
+		config.SectionArguments:  true,
+		config.SectionAttributes: true,
+		config.SectionTimeouts:   true,
+		config.SectionImport:     true,
+		// Custom snake_case names.
+		"usage_notes":           true,
+		"dependency_management": true,
+		"foo123":                true,
+		// Invalid: empty, uppercase, hyphens, spaces, special chars.
+		"":            false,
+		"TITLE":       false,
+		"Title":       false,
+		"foo-bar":     false,
+		"foo bar":     false,
+		"foo.bar":     false,
+		"_underscore": true, // underscore start is fine — still snake_case
 	}
 	for in, want := range cases {
 		if got := in.IsValid(); got != want {
-			t.Errorf("SectionRequirement(%q).IsValid() = %v, want %v", in, got, want)
+			t.Errorf("SectionName(%q).IsValid() = %v, want %v", in, got, want)
+		}
+	}
+}
+
+func TestSectionName_IsCanonical(t *testing.T) {
+	t.Parallel()
+
+	cases := map[config.SectionName]bool{
+		config.SectionTitle:      true,
+		config.SectionSignature:  true,
+		config.SectionExample:    true,
+		config.SectionArguments:  true,
+		config.SectionAttributes: true,
+		config.SectionTimeouts:   true,
+		config.SectionImport:     true,
+		"usage_notes":            false,
+		"dependency_management":  false,
+		"":                       false,
+	}
+	for in, want := range cases {
+		if got := in.IsCanonical(); got != want {
+			t.Errorf("SectionName(%q).IsCanonical() = %v, want %v", in, got, want)
+		}
+	}
+}
+
+func TestSectionName_HeadingText(t *testing.T) {
+	t.Parallel()
+
+	cases := map[config.SectionName]string{
+		config.SectionTitle:      "<title>",
+		config.SectionSignature:  "Signature",
+		config.SectionExample:    "Example Usage",
+		config.SectionArguments:  "Argument Reference",
+		config.SectionAttributes: "Attribute Reference",
+		config.SectionTimeouts:   "Timeouts",
+		config.SectionImport:     "Import",
+		// Custom snake_case → Title Case.
+		"usage_notes":           "Usage Notes",
+		"dependency_management": "Dependency Management",
+		"single":                "Single",
+		// Edge cases: leading/trailing/double underscores must not
+		// produce leading/trailing/double spaces in the heading text.
+		"_underscore":   "Underscore",
+		"trailing_":     "Trailing",
+		"double__under": "Double Under",
+	}
+	for in, want := range cases {
+		if got := in.HeadingText(); got != want {
+			t.Errorf("SectionName(%q).HeadingText() = %q, want %q", in, got, want)
 		}
 	}
 }

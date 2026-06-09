@@ -12,6 +12,7 @@ import (
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/ast"
 	"github.com/yuin/goldmark/text"
+	"gopkg.in/yaml.v3"
 )
 
 // DocAttribute represents a single documented attribute.
@@ -19,6 +20,7 @@ type DocAttribute struct {
 	Name        string
 	Required    bool
 	Optional    bool
+	ReadOnly    bool
 	Deprecated  bool
 	Description string
 	Line        int // 1-based line number in the source file
@@ -86,15 +88,12 @@ func (t HeadingTemplates) Match(heading string) string {
 
 // MatchAll returns all block names from a heading. Combined headings like
 // "`publish_auth_mode` and `subscribe_auth_mode`" return both names.
+//
+// MatchAll is only meaningful for headings that the doc structure permits
+// in the Argument Reference or Attribute Reference sections. The parser
+// guards the call site so it never sees Example Usage subheadings.
 func (t HeadingTemplates) MatchAll(heading string) []string {
 	h := strings.TrimSpace(heading)
-
-	// Skip example/usage headings (but not snake_case block names that happen
-	// to contain "usage", e.g. "usage_based_pricing_term Block").
-	lower := strings.ToLower(h)
-	if (strings.Contains(lower, "example") || strings.Contains(lower, "usage")) && !strings.Contains(h, "_") {
-		return nil
-	}
 
 	// Try combined "X and Y" pattern first.
 	if parts := splitCombinedHeading(h); len(parts) > 1 {
@@ -309,8 +308,15 @@ func Parse(source []byte, name string) (*Document, error) {
 
 // ParseWithTemplates parses markdown source with specific heading templates.
 func ParseWithTemplates(source []byte, name string, templates HeadingTemplates) (*Document, error) {
+	// Strip YAML frontmatter before handing the source to Goldmark.
+	// Goldmark without the meta extension treats the closing "---" as a
+	// setext H2 underline for the preceding paragraph, which produces
+	// spurious section headings. Blank out the frontmatter region in place
+	// so byte offsets and line numbers remain accurate for the rest of
+	// the file.
+	parseSource := stripFrontmatter(source)
 	md := goldmark.New()
-	reader := text.NewReader(source)
+	reader := text.NewReader(parseSource)
 	tree := md.Parser().Parse(reader)
 
 	doc := &Document{
@@ -323,6 +329,106 @@ func ParseWithTemplates(source []byte, name string, templates HeadingTemplates) 
 
 	extractBlocks(tree, source, doc, templates)
 	return doc, nil
+}
+
+// stripFrontmatter returns a copy of source where any leading YAML
+// frontmatter block (delimited by "---" on its own line at the start, and a
+// matching "---" line that follows) is replaced byte-for-byte with spaces,
+// preserving newlines. Goldmark therefore sees blank lines where the
+// frontmatter was, while every byte offset and line number in the
+// remaining content stays identical to the original.
+//
+// The candidate region between opener and closer is validated as YAML
+// before stripping. This prevents two failure modes:
+//
+//  1. A body thematic break ("\n---\n" further down in real content) being
+//     mistaken for the frontmatter closer when the file's frontmatter is
+//     malformed (no proper closer).
+//  2. A "\n---" without a trailing newline being matched anywhere in the
+//     body and silently truncating real content.
+//
+// When uncertain, the source is returned unchanged. Goldmark will then
+// produce a setext H2 heading for the malformed closer, which the
+// section_presence rule reports as a stray unknown section — annoying but
+// non-destructive.
+func stripFrontmatter(source []byte) []byte {
+	// Detect opener: "---\n" or "---\r\n" at the very start.
+	openerLen := 0
+	switch {
+	case bytes.HasPrefix(source, []byte("---\n")):
+		openerLen = 4
+	case bytes.HasPrefix(source, []byte("---\r\n")):
+		openerLen = 5
+	default:
+		return source
+	}
+
+	rest := source[openerLen:]
+
+	// Try each closer pattern in turn. The first two are anchored to a
+	// trailing newline (LF or CRLF); the last two are EOF-only and require
+	// the match to land at the end of the source.
+	type candidate struct {
+		// blockEnd is the absolute offset (relative to source) where the
+		// frontmatter region ends — i.e., the byte after the closing
+		// "---" line.
+		blockEnd int
+		// blockStart and blockStop bound the YAML body to validate.
+		blockStart int
+		blockStop  int
+	}
+
+	var candidates []candidate
+
+	for _, sep := range [][]byte{
+		[]byte("\n---\n"),
+		[]byte("\n---\r\n"),
+	} {
+		if idx := bytes.Index(rest, sep); idx >= 0 {
+			candidates = append(candidates, candidate{
+				blockStart: openerLen,
+				blockStop:  openerLen + idx, // up to the "\n" before "---"
+				blockEnd:   openerLen + idx + len(sep),
+			})
+		}
+	}
+	for _, suffix := range [][]byte{
+		[]byte("\n---\r"),
+		[]byte("\n---"),
+	} {
+		if bytes.HasSuffix(rest, suffix) {
+			candidates = append(candidates, candidate{
+				blockStart: openerLen,
+				blockStop:  len(source) - len(suffix),
+				blockEnd:   len(source),
+			})
+		}
+	}
+
+	// Try each candidate in order. The first whose YAML region parses
+	// cleanly wins. If none parse, leave source untouched.
+	for _, c := range candidates {
+		body := source[c.blockStart:c.blockStop]
+		var stub map[string]any
+		if err := yaml.Unmarshal(body, &stub); err == nil {
+			return blankFrontmatter(source, c.blockEnd)
+		}
+	}
+	return source
+}
+
+// blankFrontmatter returns a copy of source with bytes [0, end) replaced
+// by spaces, preserving '\n' and '\r' so byte offsets and line numbers
+// stay aligned with the original.
+func blankFrontmatter(source []byte, end int) []byte {
+	out := make([]byte, len(source))
+	copy(out, source)
+	for i := range end {
+		if out[i] != '\n' && out[i] != '\r' {
+			out[i] = ' '
+		}
+	}
+	return out
 }
 
 func extractBlocks(tree ast.Node, source []byte, doc *Document, templates HeadingTemplates) {
@@ -339,21 +445,27 @@ func extractBlocks(tree ast.Node, source []byte, doc *Document, templates Headin
 		}
 	}
 
+	// headingStartOffset returns the byte offset of a heading's first byte
+	// (the '#' character), found by walking back from Goldmark's content
+	// start to the previous newline.
+	headingStartOffset := func(heading *ast.Heading) int {
+		startOff := 0
+		if lines := heading.Lines(); lines.Len() > 0 {
+			startOff = lines.At(0).Start
+			for startOff > 0 && source[startOff-1] != '\n' {
+				startOff--
+			}
+		}
+		return startOff
+	}
+
 	// assignSection records a freshly discovered top-level section and makes it
 	// the current accumulator target for paragraphs and code blocks that follow.
 	// Only the first occurrence of each section is captured — duplicate headings
 	// keep pointing at the first one so rules can still reason about "the"
 	// section without the walker silently replacing it.
 	assignSection := func(field **Section, heading *ast.Heading, text string) {
-		startOff := 0
-		if lines := heading.Lines(); lines.Len() > 0 {
-			// Lines().At(0).Start is the content start (after "## ").
-			// Walk backwards to find the actual line start (the # character).
-			startOff = lines.At(0).Start
-			for startOff > 0 && source[startOff-1] != '\n' {
-				startOff--
-			}
-		}
+		startOff := headingStartOffset(heading)
 		closeSection(startOff)
 		if *field == nil {
 			*field = &Section{Heading: heading, Text: text, StartOffset: startOff}
@@ -383,6 +495,13 @@ func extractBlocks(tree ast.Node, source []byte, doc *Document, templates Headin
 				inAttributes = strings.HasPrefix(headingText, "Attribute")
 				sawRequiredByline = false
 
+				// Argument and Attribute sections use prefix matching so
+				// both "Argument Reference" (canonical) and "Arguments"
+				// (alternate) classify correctly. The other canonical
+				// sections use exact heading text so similarly named
+				// custom sections (e.g. "Importing", "Import Notes",
+				// "Examples") are recorded as unknown headings rather
+				// than absorbed into a canonical section.
 				switch {
 				case inArguments:
 					currentBlockName = ""
@@ -394,17 +513,27 @@ func extractBlocks(tree ast.Node, source []byte, doc *Document, templates Headin
 					currentBlockAliases = nil
 					ensureBlock(doc.AttributeBlocks, "", headingText)
 					assignSection(&doc.Sections.Attributes, n, headingText)
-				case strings.HasPrefix(headingText, "Example"):
+				case headingText == "Example Usage":
 					assignSection(&doc.Sections.Example, n, headingText)
-				case strings.HasPrefix(headingText, "Timeout"):
+				case headingText == "Timeouts":
 					assignSection(&doc.Sections.Timeouts, n, headingText)
-				case strings.HasPrefix(headingText, "Import"):
+				case headingText == "Import":
 					assignSection(&doc.Sections.Import, n, headingText)
-				case strings.HasPrefix(headingText, "Signature"):
+				case headingText == "Signature":
 					assignSection(&doc.Sections.Signature, n, headingText)
 				default:
-					// Unknown level-2 section — stop accumulating into any
-					// recognized section until the next known heading.
+					// Unknown level-2 section — record it for the structural
+					// rule and stop accumulating into any recognized section.
+					// Close the previously active section first so its
+					// EndOffset doesn't bleed past the unknown heading.
+					unknownStart := headingStartOffset(n)
+					closeSection(unknownStart)
+					doc.Sections.UnknownHeadings = append(doc.Sections.UnknownHeadings, ChildHeading{
+						Level:       2,
+						Text:        headingText,
+						Line:        nodeLineNumber(n, source),
+						StartOffset: unknownStart,
+					})
 					currentSection = nil
 				}
 				return ast.WalkSkipChildren, nil
@@ -425,7 +554,7 @@ func extractBlocks(tree ast.Node, source []byte, doc *Document, templates Headin
 					currentBlockAliases = blockNames[1:]
 				}
 				if currentSection != nil {
-					currentSection.ChildHeadings = append(currentSection.ChildHeadings, ChildHeading{Level: n.Level, Text: headingText})
+					currentSection.ChildHeadings = append(currentSection.ChildHeadings, ChildHeading{Level: n.Level, Text: headingText, Line: nodeLineNumber(n, source), StartOffset: headingStartOffset(n)})
 				}
 				return ast.WalkSkipChildren, nil
 			}
@@ -434,7 +563,7 @@ func extractBlocks(tree ast.Node, source []byte, doc *Document, templates Headin
 			// as a child heading of the current section (e.g. ### Basic Usage
 			// inside ## Example Usage).
 			if n.Level >= 3 && currentSection != nil {
-				currentSection.ChildHeadings = append(currentSection.ChildHeadings, ChildHeading{Level: n.Level, Text: headingText})
+				currentSection.ChildHeadings = append(currentSection.ChildHeadings, ChildHeading{Level: n.Level, Text: headingText, Line: nodeLineNumber(n, source), StartOffset: headingStartOffset(n)})
 			}
 
 			return ast.WalkSkipChildren, nil
@@ -509,6 +638,21 @@ func extractBlocks(tree ast.Node, source []byte, doc *Document, templates Headin
 								ab.Attributes = append(ab.Attributes, attr)
 							}
 						}
+					} else if ref := parseNestedRef(li, source); ref.Parent != "" {
+						// A dot-notation reference (e.g. `network[*].private_ip`)
+						// in the current section. Route it to the parent block's
+						// implicit DocBlock in the same section type so coverage
+						// checks find it under the nested path.
+						refAttr := DocAttribute{
+							Name:        ref.Attribute,
+							Description: ref.Description,
+							ReadOnly:    ref.ReadOnly,
+							Required:    ref.Required,
+							Optional:    ref.Optional,
+							Line:        line,
+						}
+						ensureBlock(target, ref.Parent, "")
+						target[ref.Parent].Attributes = append(target[ref.Parent].Attributes, refAttr)
 					} else if name := malformedAttrName(li, source); name != "" {
 						block.MalformedAttributes = append(block.MalformedAttributes, MalformedAttr{Name: name, Line: line})
 					}
@@ -670,6 +814,8 @@ func parseListItem(li *ast.ListItem, source []byte) DocAttribute {
 						attr.Required = true
 					case "Optional":
 						attr.Optional = true
+					case "Read-Only":
+						attr.ReadOnly = true
 					case "Deprecated", "**Deprecated**":
 						attr.Deprecated = true
 					default:
@@ -686,6 +832,110 @@ func parseListItem(li *ast.ListItem, source []byte) DocAttribute {
 	}
 
 	return attr
+}
+
+// NestedRef represents a dot-notation reference to a nested attribute,
+// e.g. `network[*].private_ip`, `tags[0].key`, or
+// `analyzer_configuration.unused_access_configuration.unused_access_age`.
+// These appear in the root Argument Reference / Attribute Reference
+// sections as a convenience shorthand when the author doesn't want to
+// introduce separate nested block headings, and in tfplugindocs-style
+// schemas where deeply-nested attribute paths are documented inline.
+type NestedRef struct {
+	Parent      string // dot-separated path with array indexers stripped
+	Attribute   string // leaf attribute name
+	Description string
+	Required    bool
+	Optional    bool
+	ReadOnly    bool
+}
+
+// parseNestedRef detects list items whose name is a dot-notation reference
+// and returns the parsed parent/attribute/description triple. Supports:
+//
+//   - Single-level: `network[*].private_ip`, `tags[0].key`, `network.private_ip`
+//   - Multi-level: `a.b.c.attr`, `parent.child[*].grandchild.attr`
+//
+// The leaf segment becomes Attribute; everything before the last dot
+// becomes Parent (with array indexers like [*] or [0] stripped from each
+// segment). Returns a zero NestedRef if the item is not a dot-notation
+// reference.
+func parseNestedRef(li *ast.ListItem, source []byte) NestedRef {
+	var rawText string
+	for child := li.FirstChild(); child != nil; child = child.NextSibling() {
+		switch c := child.(type) {
+		case *ast.TextBlock:
+			rawText = string(c.Text(source))
+		case *ast.Paragraph:
+			rawText = string(c.Text(source))
+		}
+		if rawText != "" {
+			break
+		}
+	}
+	if rawText == "" {
+		return NestedRef{}
+	}
+
+	parts := strings.SplitN(rawText, " - ", 2)
+	name := strings.Trim(strings.TrimSpace(parts[0]), "`")
+	if !strings.Contains(name, ".") {
+		return NestedRef{}
+	}
+
+	// Split on the LAST dot so multi-level paths like
+	// "analyzer_configuration.unused_access_configuration.unused_access_age"
+	// produce parent="analyzer_configuration.unused_access_configuration"
+	// and attribute="unused_access_age".
+	lastDot := strings.LastIndex(name, ".")
+	parentRaw := name[:lastDot]
+	attribute := name[lastDot+1:]
+	if parentRaw == "" || attribute == "" {
+		return NestedRef{}
+	}
+	if strings.ContainsAny(attribute, " .[]*") {
+		return NestedRef{}
+	}
+
+	// Strip array indexers ([*], [0], [N]) from each parent segment so
+	// `network[*].private_ip` and `network.private_ip` both produce
+	// parent="network", and `parent[*].child.attr` produces
+	// parent="parent.child".
+	segments := strings.Split(parentRaw, ".")
+	for i, seg := range segments {
+		if j := strings.IndexAny(seg, "[*"); j >= 0 {
+			seg = seg[:j]
+		}
+		if seg == "" || strings.ContainsAny(seg, " ") {
+			return NestedRef{}
+		}
+		segments[i] = seg
+	}
+	parent := strings.Join(segments, ".")
+
+	ref := NestedRef{Parent: parent, Attribute: attribute}
+	if len(parts) == 2 {
+		desc := parts[1]
+		if strings.HasPrefix(desc, "(") {
+			if end := strings.IndexByte(desc, ')'); end > 0 {
+				traits := desc[1:end]
+				for trait := range strings.SplitSeq(traits, ", ") {
+					switch strings.TrimSpace(trait) {
+					case "Required":
+						ref.Required = true
+					case "Optional":
+						ref.Optional = true
+					case "Read-Only":
+						ref.ReadOnly = true
+					}
+				}
+				ref.Description = strings.TrimSpace(desc[end+1:])
+			}
+		} else {
+			ref.Description = strings.TrimSpace(desc)
+		}
+	}
+	return ref
 }
 
 // malformedAttrName detects list items that look like attributes but are missing
@@ -712,7 +962,7 @@ func malformedAttrName(li *ast.ListItem, source []byte) string {
 		return ""
 	}
 
-	// Look for pattern: name (Required|Optional) or name – (with em-dash)
+	// Look for pattern: name (Required|Optional|Read-Only) or name – (with em-dash)
 	// Extract potential name (first word, no spaces, looks like snake_case)
 	parts := strings.Fields(rawText)
 	if len(parts) < 2 {

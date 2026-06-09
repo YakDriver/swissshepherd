@@ -1,0 +1,15 @@
+# Copyright IBM Corp. 2019, 2026
+# "SPDX-License-Identifier: MPL-2.0"
+
+title: swissshepherd
+description: Terraform provider documentation linter
+theme: jekyll-theme-primer
+
+# jekyll-readme-index serves docs/README.md as the site root, avoiding
+# the need to maintain a separate docs/index.md alongside the README.
+# jekyll-relative-links rewrites links like [x](rules/schema_docs.md)
+# to use .html on the Pages site so cross-document navigation works
+# both on github.com and at https://yakdriver.github.io/swissshepherd/.
+plugins:
+  - jekyll-readme-index
+  - jekyll-relative-links

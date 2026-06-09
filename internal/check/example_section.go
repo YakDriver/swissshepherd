@@ -31,16 +31,14 @@ func (r *ExampleSectionRule) Check(ctx CheckContext) []Result {
 		return nil
 	}
 
-	expected := "Example Usage"
-
 	var results []Result
 	add := func(sev Severity, msg string) {
 		results = append(results, Result{Severity: sev, Rule: r.Name(), Resource: ctx.Resource, Message: msg})
 	}
 
-	if section.Text != expected {
-		add(SeverityError, fmt.Sprintf("example section heading %q should be: %q", section.Text, expected))
-	}
+	// Heading-text validation lives at the parser level: only "Example Usage"
+	// classifies as the Example section. Variants like "Examples" are treated
+	// as unknown headings and may be reported by section_presence (when enabled).
 
 	allowed := r.AllowLanguages
 	if len(allowed) == 0 {

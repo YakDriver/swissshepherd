@@ -136,3 +136,84 @@ func docAttrNames(attrs []doc.DocAttribute) []string {
 	}
 	return names
 }
+
+// TestParse_FrontmatterDoesNotProduceSetextHeadings is a regression test for
+// the case where Goldmark, lacking a meta extension, treats the closing "---"
+// of YAML frontmatter as a setext H2 underline for the preceding paragraph.
+// Stripping the frontmatter region before parsing keeps this from happening.
+func TestParse_FrontmatterDoesNotProduceSetextHeadings(t *testing.T) {
+	t.Parallel()
+
+	source := []byte(`---
+subcategory: "Transcribe"
+layout: "aws"
+page_title: "AWS: aws_transcribe_start_transcription_job"
+description: |-
+  Starts an Amazon Transcribe transcription job.
+---
+
+# Action: aws_transcribe_start_transcription_job
+
+## Argument Reference
+
+* ` + "`name`" + ` - (Required) Job name.
+`)
+
+	d, err := doc.Parse(source, "test")
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+
+	if d.Sections.Title == nil {
+		t.Fatal("Title section should be discovered")
+	}
+	if d.Sections.Arguments == nil {
+		t.Fatal("Argument Reference section should be discovered")
+	}
+	if got := len(d.Sections.UnknownHeadings); got != 0 {
+		var texts []string
+		for _, h := range d.Sections.UnknownHeadings {
+			texts = append(texts, h.Text)
+		}
+		t.Errorf("expected 0 unknown headings (frontmatter must not produce setext H2s), got %d: %v", got, texts)
+	}
+}
+
+// TestParse_MalformedFrontmatter_DoesNotCorruptBody is a regression test for
+// the case where YAML frontmatter is opened but never properly closed, and
+// the body contains a "\n---" sequence (e.g. as a thematic break or in a
+// quoted code block). The frontmatter stripper must not match a body
+// "\n---" as the closer and silently blank out real content.
+func TestParse_MalformedFrontmatter_DoesNotCorruptBody(t *testing.T) {
+	t.Parallel()
+
+	// Opening "---" with no matching closing line. The body contains a
+	// "---" thematic break in the middle of real content. A buggy stripper
+	// would match "\n---" anywhere in the file and blank out the title and
+	// the first H2.
+	source := []byte("---\n" +
+		"subcategory: \"Foo\"\n" +
+		// no closing "---" line
+		"\n" +
+		"# Resource: aws_test\n\n" +
+		"## Example Usage\n\n" +
+		"Some lead-in text.\n\n" +
+		"---\n" + // body thematic break
+		"\n" +
+		"## Argument Reference\n\n" +
+		"* `id` - (Optional) The ID.\n")
+
+	d, err := doc.Parse(source, "test")
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if d.Sections.Title == nil {
+		t.Error("Title section should be discovered (body must not be corrupted)")
+	}
+	if d.Sections.Example == nil {
+		t.Error("Example Usage section should be discovered")
+	}
+	if d.Sections.Arguments == nil {
+		t.Error("Argument Reference section should be discovered")
+	}
+}

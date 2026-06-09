@@ -185,6 +185,7 @@ func runCheck(cmd *cobra.Command, args []string) error {
 			ImplicitAttributes:        cc.ImplicitAttributes,
 			AllowPhantoms:             cc.AllowPhantoms,
 			SkipBlocks:                cc.SkipBlocks,
+			AllowInlineReadOnly:       cc.AllowInlineReadOnly,
 			Coverage:                  cc.Coverage,
 			Ordering:                  cc.Ordering,
 			Description:               cc.Description,
@@ -207,7 +208,11 @@ func runCheck(cmd *cobra.Command, args []string) error {
 		})
 	}
 	if cfg.IsCheckEnabled("section_presence") {
-		rules = append(rules, &check.SectionPresenceRule{})
+		cc := cfg.GetCheck("section_presence")
+		rules = append(rules, &check.SectionPresenceRule{
+			EnforceOrder:         cc.EnforceOrder,
+			AllowUnknownSections: cc.AllowUnknownSections,
+		})
 	}
 	if cfg.IsCheckEnabled("timeouts_section") {
 		rules = append(rules, &check.TimeoutsSectionRule{})

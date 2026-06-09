@@ -112,10 +112,11 @@ type CheckConfig struct {
 	AllowPrefixes []string `hcl:"allow_prefixes,optional"`
 
 	// Completeness rule options.
-	IgnoreDeprecated   *bool    `hcl:"ignore_deprecated,optional"`
-	ImplicitAttributes []string `hcl:"implicit_attributes,optional"`
-	AllowPhantoms      []string `hcl:"allow_phantoms,optional"`
-	SkipBlocks         []string `hcl:"skip_blocks,optional"`
+	IgnoreDeprecated    *bool    `hcl:"ignore_deprecated,optional"`
+	ImplicitAttributes  []string `hcl:"implicit_attributes,optional"`
+	AllowPhantoms       []string `hcl:"allow_phantoms,optional"`
+	SkipBlocks          []string `hcl:"skip_blocks,optional"`
+	AllowInlineReadOnly *bool    `hcl:"allow_inline_read_only,optional"`
 
 	// DescriptionStyle rule options.
 	BadPrefixes []string `hcl:"bad_prefixes,optional"`
@@ -135,6 +136,15 @@ type CheckConfig struct {
 	Labels      *bool `hcl:"labels,optional"`
 	Byline      *bool `hcl:"byline,optional"`
 	Deprecated  *bool `hcl:"deprecated,optional"`
+
+	// SectionPresence rule options.
+	// EnforceOrder requires sections to appear in the order declared on
+	// the Type's section blocks. nil → enabled (strict by default).
+	// AllowUnknownSections permits level-2 headings that are not in the
+	// Type's section spec; otherwise each is reported as an error.
+	// nil → disallowed (strict by default).
+	EnforceOrder         *bool `hcl:"enforce_order,optional"`
+	AllowUnknownSections *bool `hcl:"allow_unknown_sections,optional"`
 
 	// ImportSection rule options.
 	RequireIdentitySection *bool `hcl:"require_identity_section,optional"`
