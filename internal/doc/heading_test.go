@@ -131,6 +131,31 @@ func TestHeadingTemplates_Match(t *testing.T) {
 			heading:   "Network",
 			want:      "",
 		},
+		// {Block} rejects punctuation and hyphens (mirrors {Path})
+		{
+			name:      "block rejects hyphen",
+			templates: doc.HeadingTemplates{"`{Block}` Block"},
+			heading:   "foo-bar Block",
+			want:      "",
+		},
+		{
+			name:      "block rejects slash",
+			templates: doc.HeadingTemplates{"`{Block}` Block"},
+			heading:   "a/b Block",
+			want:      "",
+		},
+		{
+			name:      "block rejects dot",
+			templates: doc.HeadingTemplates{"`{Block}` Block"},
+			heading:   "foo.bar Block",
+			want:      "",
+		},
+		{
+			name:      "block accepts digits and underscores",
+			templates: doc.HeadingTemplates{"`{Block}` Block"},
+			heading:   "config_v2 Block",
+			want:      "config_v2",
+		},
 		// {Parent} template — single parent
 		{
 			name:      "parent single word",

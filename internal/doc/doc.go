@@ -292,11 +292,11 @@ func matchTemplate(tmpl, heading string) string {
 		}
 		name := heading[len(prefix) : len(heading)-len(suffix)]
 		name = strings.TrimSpace(name)
-		if name == "" || strings.Contains(name, " ") {
-			return ""
-		}
-		// Must look like snake_case
-		if name != strings.ToLower(name) {
+		// Must be a real snake_case segment: [a-z0-9_]+, no spaces,
+		// no hyphens/slashes/punctuation. Mirrors the {Path}
+		// validation so a typo like "foo-bar Block" doesn't slip
+		// through and produce a doc block keyed by an invalid name.
+		if !isSnakeCaseSegment(name) {
 			return ""
 		}
 		return name
