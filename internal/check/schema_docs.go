@@ -562,7 +562,11 @@ func (r *SchemaDocsRule) checkHeadings(ctx CheckContext) []Result {
 			if block.Name == "" || block.Heading == "" {
 				continue
 			}
-			if !schemaLeaves[block.Name] {
+			// block.Name may be a leaf ("match") or a full dot-path
+			// ("spec.grpc_route.match"). Look up by leaf so path-keyed
+			// blocks still participate in the preferred-style check.
+			blockLeaf := leafName(block.Name)
+			if !schemaLeaves[blockLeaf] {
 				continue
 			}
 
@@ -574,7 +578,7 @@ func (r *SchemaDocsRule) checkHeadings(ctx CheckContext) []Result {
 			// Skip the ambiguity warning when the heading is keyed by a
 			// full path already (block.Name contains a dot) — the author
 			// has already opted into the path form.
-			if ambiguousLeaves[block.Name] && !strings.Contains(block.Name, ".") {
+			if ambiguousLeaves[blockLeaf] && !strings.Contains(block.Name, ".") {
 				pathTemplate := ""
 				for _, tmpl := range r.Preferred {
 					if strings.Contains(tmpl, "{Path}") {
@@ -585,7 +589,7 @@ func (r *SchemaDocsRule) checkHeadings(ctx CheckContext) []Result {
 				if pathTemplate == "" {
 					pathTemplate = "`{Path}` Block"
 				}
-				paths := append([]string(nil), leafPaths[block.Name]...)
+				paths := append([]string(nil), leafPaths[blockLeaf]...)
 				sort.Strings(paths)
 				example := ""
 				if len(paths) > 0 {
@@ -595,7 +599,7 @@ func (r *SchemaDocsRule) checkHeadings(ctx CheckContext) []Result {
 					Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityWarning,
 					Message: fmt.Sprintf(
 						"block %q heading %q is ambiguous (schema has %d blocks named %q: %s); use the full dot-path form, e.g. %q",
-						block.Name, block.Heading, len(paths), block.Name, strings.Join(paths, ", "), example,
+						block.Name, block.Heading, len(paths), blockLeaf, strings.Join(paths, ", "), example,
 					),
 					Block: block.Name,
 				})
@@ -609,12 +613,12 @@ func (r *SchemaDocsRule) checkHeadings(ctx CheckContext) []Result {
 			var suggested string
 			for _, tmpl := range r.Preferred {
 				if !strings.Contains(tmpl, "{Parent}") && !strings.Contains(tmpl, "{Path}") {
-					suggested = doc.RenderHeading(tmpl, block.Name)
+					suggested = doc.RenderHeading(tmpl, blockLeaf)
 					break
 				}
 			}
 			if suggested == "" {
-				suggested = doc.RenderHeading("`{Block}` Block", block.Name)
+				suggested = doc.RenderHeading("`{Block}` Block", blockLeaf)
 			}
 			results = append(results, Result{
 				Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityWarning,

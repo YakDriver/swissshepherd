@@ -4,6 +4,7 @@
 package doc_test
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/YakDriver/swissshepherd/internal/doc"
@@ -154,6 +155,7 @@ func argumentKeys(d *doc.Document) []string {
 	for k := range d.ArgumentBlocks {
 		keys = append(keys, k)
 	}
+	slices.Sort(keys)
 	return keys
 }
 

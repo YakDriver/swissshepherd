@@ -59,6 +59,26 @@ func RenderHeading(tmpl, blockName string) string {
 	return result
 }
 
+// isSnakeCaseSegment reports whether s is a non-empty run of [a-z0-9_].
+// Used to validate {Path} segments so headings like `foo-bar` or `a/b`
+// don't slip through the dot-notation matcher.
+func isSnakeCaseSegment(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c >= 'a' && c <= 'z':
+		case c >= '0' && c <= '9':
+		case c == '_':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 func snakeToTitle(s string) string {
 	words := strings.Split(s, "_")
 	for i, w := range words {
@@ -245,7 +265,8 @@ func matchTemplate(tmpl, heading string) string {
 			return ""
 		}
 		// Must be one or more dot-separated lowercase snake_case segments.
-		// Reject leading/trailing/double dots and any non-snake content.
+		// Each segment is [a-z0-9_]+. Reject leading/trailing/double dots
+		// and any non-snake content (hyphens, slashes, uppercase, etc.).
 		if strings.HasPrefix(path, ".") || strings.HasSuffix(path, ".") {
 			return ""
 		}
@@ -253,7 +274,7 @@ func matchTemplate(tmpl, heading string) string {
 			if seg == "" {
 				return ""
 			}
-			if seg != strings.ToLower(seg) || strings.ContainsAny(seg, " \t") {
+			if !isSnakeCaseSegment(seg) {
 				return ""
 			}
 		}

@@ -229,6 +229,30 @@ func TestHeadingTemplates_Match(t *testing.T) {
 			heading:   "partition spec.fields Block",
 			want:      "",
 		},
+		{
+			name:      "path rejects hyphen in segment",
+			templates: doc.HeadingTemplates{"`{Path}` Block"},
+			heading:   "foo-bar.fields Block",
+			want:      "",
+		},
+		{
+			name:      "path rejects slash in segment",
+			templates: doc.HeadingTemplates{"`{Path}` Block"},
+			heading:   "a/b.fields Block",
+			want:      "",
+		},
+		{
+			name:      "path rejects punctuation in segment",
+			templates: doc.HeadingTemplates{"`{Path}` Block"},
+			heading:   "foo+bar.fields Block",
+			want:      "",
+		},
+		{
+			name:      "path accepts digits",
+			templates: doc.HeadingTemplates{"`{Path}` Block"},
+			heading:   "config_v2.field_1 Block",
+			want:      "config_v2.field_1",
+		},
 		// Default templates accept the path forms
 		{
 			name:      "defaults accept dot-notation block",
