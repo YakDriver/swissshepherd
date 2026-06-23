@@ -88,11 +88,103 @@ func TestSchemaDocsRule_PathKeyedHeadings_PreferredStyle(t *testing.T) {
 	}
 }
 
-// TestSchemaDocsRule_PathKeyedHeadings_BadStyleStillWarns confirms
-// that path-keyed blocks aren't given a free pass on preferred-style
-// when they use a non-preferred form. The previous bug was that
-// path-keyed blocks were skipped entirely; now they should be checked
-// like any other block.
+// TestSchemaDocsRule_PathKeyedHeadings_PartialPathStillAmbiguous
+// covers the case Copilot flagged: a partial-path key like
+// `header.match` (from a `{Parent}` template or similar) still
+// resolves to multiple schema paths under the suffix-composite
+// lookup. The ambiguity warning must fire in this case even though
+// the doc key contains a dot.
+func TestSchemaDocsRule_PathKeyedHeadings_PartialPathStillAmbiguous(t *testing.T) {
+	t.Parallel()
+
+	rs := &schema.ResourceSchema{
+		Name: "aws_test",
+		Blocks: map[string]*schema.Block{
+			"": {
+				Attributes:  []schema.Attribute{{Name: "name", Required: true}},
+				ChildBlocks: []string{"spec"},
+			},
+			"spec": {
+				ChildBlocks: []string{"spec.http_route", "spec.http2_route"},
+			},
+			"spec.http_route": {
+				ChildBlocks: []string{"spec.http_route.header"},
+			},
+			"spec.http_route.header": {
+				ChildBlocks: []string{"spec.http_route.header.match"},
+			},
+			"spec.http_route.header.match": {
+				Attributes: []schema.Attribute{{Name: "exact", Optional: true}},
+			},
+			"spec.http2_route": {
+				ChildBlocks: []string{"spec.http2_route.header"},
+			},
+			"spec.http2_route.header": {
+				ChildBlocks: []string{"spec.http2_route.header.match"},
+			},
+			"spec.http2_route.header.match": {
+				Attributes: []schema.Attribute{{Name: "regex", Optional: true}},
+			},
+		},
+	}
+
+	// Heading uses a {Parent} template producing doc key
+	// "header.match". This 2-segment composite resolves to BOTH
+	// schema paths via the suffix-composite lookup, so the doc key
+	// does not actually disambiguate.
+	markdown := "## Argument Reference\n\n" +
+		"* `name` - (Required) Name.\n" +
+		"* `spec` - (Required) Spec.\n\n" +
+		"### `header` `match` Block\n\n" +
+		"* `exact` - (Optional) Exact.\n" +
+		"* `regex` - (Optional) Regex.\n"
+
+	// Use a parent template so the heading parses to "header.match".
+	templates := doc.HeadingTemplates{
+		"`{Parent}` `{Block}` Block",
+		"`{Path}` Block",
+		"`{Block}` Block",
+	}
+	d, err := doc.ParseWithTemplates([]byte(markdown), "aws_test", templates)
+	if err != nil {
+		t.Fatalf("parse error: %v", err)
+	}
+
+	// Confirm the doc actually keyed the block as "header.match" via
+	// the {Parent} template — otherwise the test isn't exercising the
+	// scenario.
+	if _, ok := d.ArgumentBlocks["header.match"]; !ok {
+		var keys []string
+		for k := range d.ArgumentBlocks {
+			keys = append(keys, k)
+		}
+		t.Fatalf("expected ArgumentBlocks[\"header.match\"] (got keys: %v)", keys)
+	}
+
+	rule := &check.SchemaDocsRule{
+		Preferred: doc.HeadingTemplates{"`{Path}` Block", "`{Block}` Block"},
+	}
+	results := rule.Check(check.CheckContext{Resource: "aws_test", Schema: rs, Doc: d})
+
+	var ambiguityFound bool
+	for _, r := range results {
+		if !strings.Contains(r.Message, "ambiguous") {
+			continue
+		}
+		if strings.Contains(r.Message, "header.match") &&
+			strings.Contains(r.Message, "spec.http_route.header.match") &&
+			strings.Contains(r.Message, "spec.http2_route.header.match") {
+			ambiguityFound = true
+		}
+	}
+	if !ambiguityFound {
+		t.Errorf("expected ambiguity warning on partial-path key 'header.match' citing both colliding schema paths; got %d results", len(results))
+		for _, r := range results {
+			t.Logf("  result: %s", r.Message)
+		}
+	}
+}
+
 func TestSchemaDocsRule_PathKeyedHeadings_BadStyleStillWarns(t *testing.T) {
 	t.Parallel()
 

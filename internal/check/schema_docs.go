@@ -542,13 +542,9 @@ func (r *SchemaDocsRule) checkHeadings(ctx CheckContext) []Result {
 	schemaLeaves := make(map[string]bool)
 	ambiguousLeaves := make(map[string]bool)
 	leafAttrs := make(map[string]string)
-	leafPaths := make(map[string][]string)
 	for path, block := range rs.Blocks {
 		leaf := leafName(path)
 		schemaLeaves[leaf] = true
-		if path != "" {
-			leafPaths[leaf] = append(leafPaths[leaf], path)
-		}
 		sig := blockSignature(block)
 		if prev, exists := leafAttrs[leaf]; exists && prev != sig {
 			ambiguousLeaves[leaf] = true
@@ -573,36 +569,42 @@ func (r *SchemaDocsRule) checkHeadings(ctx CheckContext) []Result {
 			// Ambiguity check is orthogonal to preferred-style check: a
 			// heading can be in a perfectly preferred style and still
 			// collide with multiple schema blocks sharing its leaf. The
-			// only safe disambiguator is the full dot-notation path.
+			// only safe disambiguator is a doc key that resolves to
+			// exactly one schema block under findAllDocBlocksIn.
 			//
-			// Skip the ambiguity warning when the heading is keyed by a
-			// full path already (block.Name contains a dot) — the author
-			// has already opted into the path form.
-			if ambiguousLeaves[blockLeaf] && !strings.Contains(block.Name, ".") {
-				pathTemplate := ""
-				for _, tmpl := range r.Preferred {
-					if strings.Contains(tmpl, "{Path}") {
-						pathTemplate = tmpl
-						break
+			// Skipping by "block.Name contains a dot" is too coarse —
+			// {Parent}-template composites and other partial-path keys
+			// can still match multiple schema paths via the existing
+			// 2- and 3-segment composite-suffix lookups. Instead,
+			// compute the actual set of schema paths this doc key
+			// would resolve to. If it's 1, the heading uniquely
+			// identifies a schema block. If it's ≥2, the heading is
+			// still ambiguous and we warn with the precise collision
+			// list.
+			if ambiguousLeaves[blockLeaf] {
+				resolved := schemaPathsResolvedByDocKey(rs, block.Name)
+				if len(resolved) > 1 {
+					pathTemplate := ""
+					for _, tmpl := range r.Preferred {
+						if strings.Contains(tmpl, "{Path}") {
+							pathTemplate = tmpl
+							break
+						}
 					}
+					if pathTemplate == "" {
+						pathTemplate = "`{Path}` Block"
+					}
+					sort.Strings(resolved)
+					example := doc.RenderHeading(pathTemplate, resolved[0])
+					results = append(results, Result{
+						Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityWarning,
+						Message: fmt.Sprintf(
+							"block %q heading %q is ambiguous (resolves to %d schema blocks: %s); use the full dot-path form, e.g. %q",
+							block.Name, block.Heading, len(resolved), strings.Join(resolved, ", "), example,
+						),
+						Block: block.Name,
+					})
 				}
-				if pathTemplate == "" {
-					pathTemplate = "`{Path}` Block"
-				}
-				paths := append([]string(nil), leafPaths[blockLeaf]...)
-				sort.Strings(paths)
-				example := ""
-				if len(paths) > 0 {
-					example = doc.RenderHeading(pathTemplate, paths[0])
-				}
-				results = append(results, Result{
-					Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityWarning,
-					Message: fmt.Sprintf(
-						"block %q heading %q is ambiguous (schema has %d blocks named %q: %s); use the full dot-path form, e.g. %q",
-						block.Name, block.Heading, len(paths), blockLeaf, strings.Join(paths, ", "), example,
-					),
-					Block: block.Name,
-				})
 			}
 
 			// Preferred-style check: does the heading match one of the
@@ -662,6 +664,35 @@ func blockSignature(block *schema.Block) string {
 		names = append(names, a.Name)
 	}
 	return strings.Join(names, ",")
+}
+
+// schemaPathsResolvedByDocKey returns every schema path P such that
+// findAllDocBlocksIn would resolve a lookup for P to a doc block keyed
+// by docKey. This is the precise inverse of the schema→doc lookup
+// machinery and is the right notion of "does this doc key disambiguate
+// to a single schema block?" — a 1-element result means yes, ≥2 means
+// the doc key is still ambiguous (even if it contains dots, e.g. when
+// it's a {Parent}-template composite that suffix-matches several
+// schema paths).
+func schemaPathsResolvedByDocKey(rs *schema.ResourceSchema, docKey string) []string {
+	if rs == nil || docKey == "" {
+		return nil
+	}
+	fake := map[string]*doc.DocBlock{docKey: {Name: docKey}}
+	docLeaf := leafName(docKey)
+	var matches []string
+	for path := range rs.Blocks {
+		if path == "" {
+			continue
+		}
+		if leafName(path) != docLeaf {
+			continue
+		}
+		if len(findAllDocBlocksIn(fake, leafName(path), path)) > 0 {
+			matches = append(matches, path)
+		}
+	}
+	return matches
 }
 
 // --- Format (raw-line checks) ---
