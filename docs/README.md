@@ -6,6 +6,8 @@
 
 A documentation linter for Terraform providers. swissshepherd compares a provider's schema against its Markdown documentation and reports missing, phantom, misordered, mislabeled, or misformatted docs.
 
+🐙 **Source code:** <https://github.com/YakDriver/swissshepherd>
+
 <br clear="left">
 
 ## Table of contents
