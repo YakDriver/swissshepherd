@@ -158,6 +158,96 @@ func TestHeadingTemplates_Match(t *testing.T) {
 			heading:   "header Block",
 			want:      "",
 		},
+		// {Path} template — single segment (acts like {Block})
+		{
+			name:      "path single segment",
+			templates: doc.HeadingTemplates{"`{Path}` Block"},
+			heading:   "network Block",
+			want:      "network",
+		},
+		// {Path} template — two segments dot-notation
+		{
+			name:      "path two segments",
+			templates: doc.HeadingTemplates{"`{Path}` Block"},
+			heading:   "partition_spec.fields Block",
+			want:      "partition_spec.fields",
+		},
+		// {Path} template — three segments dot-notation
+		{
+			name:      "path three segments",
+			templates: doc.HeadingTemplates{"`{Path}` Block"},
+			heading:   "analyzer_configuration.internal_access_configuration.internal_access_analysis_rule Block",
+			want:      "analyzer_configuration.internal_access_configuration.internal_access_analysis_rule",
+		},
+		// tfplugindocs canonical heading
+		{
+			name:      "tfplugindocs nested schema",
+			templates: doc.HeadingTemplates{"Nested Schema for `{Path}`"},
+			heading:   "Nested Schema for partition_spec.fields",
+			want:      "partition_spec.fields",
+		},
+		{
+			name:      "tfplugindocs nested schema single segment",
+			templates: doc.HeadingTemplates{"Nested Schema for `{Path}`"},
+			heading:   "Nested Schema for analyzer_configuration",
+			want:      "analyzer_configuration",
+		},
+		{
+			name:      "tfplugindocs nested schema deep",
+			templates: doc.HeadingTemplates{"Nested Schema for `{Path}`"},
+			heading:   "Nested Schema for analyzer_configuration.unused_access_configuration.analysis_rule.exclusions.resource_tags",
+			want:      "analyzer_configuration.unused_access_configuration.analysis_rule.exclusions.resource_tags",
+		},
+		// {Path} rejects malformed dot-notation
+		{
+			name:      "path rejects leading dot",
+			templates: doc.HeadingTemplates{"`{Path}` Block"},
+			heading:   ".fields Block",
+			want:      "",
+		},
+		{
+			name:      "path rejects trailing dot",
+			templates: doc.HeadingTemplates{"`{Path}` Block"},
+			heading:   "fields. Block",
+			want:      "",
+		},
+		{
+			name:      "path rejects double dot",
+			templates: doc.HeadingTemplates{"`{Path}` Block"},
+			heading:   "a..b Block",
+			want:      "",
+		},
+		{
+			name:      "path rejects uppercase segment",
+			templates: doc.HeadingTemplates{"`{Path}` Block"},
+			heading:   "Foo.bar Block",
+			want:      "",
+		},
+		{
+			name:      "path rejects space in segment",
+			templates: doc.HeadingTemplates{"`{Path}` Block"},
+			heading:   "partition spec.fields Block",
+			want:      "",
+		},
+		// Default templates accept the path forms
+		{
+			name:      "defaults accept dot-notation block",
+			templates: doc.DefaultHeadingTemplates(),
+			heading:   "partition_spec.fields Block",
+			want:      "partition_spec.fields",
+		},
+		{
+			name:      "defaults accept tfplugindocs",
+			templates: doc.DefaultHeadingTemplates(),
+			heading:   "Nested Schema for partition_spec.fields",
+			want:      "partition_spec.fields",
+		},
+		{
+			name:      "defaults accept bare dot-notation",
+			templates: doc.DefaultHeadingTemplates(),
+			heading:   "partition_spec.fields",
+			want:      "partition_spec.fields",
+		},
 	}
 
 	for _, tt := range tests {

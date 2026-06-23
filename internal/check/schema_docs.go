@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"fmt"
 	"slices"
+	"sort"
 	"strings"
 
 	"github.com/YakDriver/swissshepherd/internal/doc"
@@ -541,9 +542,13 @@ func (r *SchemaDocsRule) checkHeadings(ctx CheckContext) []Result {
 	schemaLeaves := make(map[string]bool)
 	ambiguousLeaves := make(map[string]bool)
 	leafAttrs := make(map[string]string)
+	leafPaths := make(map[string][]string)
 	for path, block := range rs.Blocks {
 		leaf := leafName(path)
 		schemaLeaves[leaf] = true
+		if path != "" {
+			leafPaths[leaf] = append(leafPaths[leaf], path)
+		}
 		sig := blockSignature(block)
 		if prev, exists := leafAttrs[leaf]; exists && prev != sig {
 			ambiguousLeaves[leaf] = true
@@ -560,33 +565,62 @@ func (r *SchemaDocsRule) checkHeadings(ctx CheckContext) []Result {
 			if !schemaLeaves[block.Name] {
 				continue
 			}
-			if r.Preferred.Match(block.Heading) != "" {
-				continue
-			}
-			if ambiguousLeaves[block.Name] {
-				suggested := fmt.Sprintf("`{parent}` `%s` Block", block.Name)
-				results = append(results, Result{
-					Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityWarning,
-					Message: fmt.Sprintf("block %q heading %q is ambiguous (multiple blocks share this name with different schemas); use parent to disambiguate: %s", block.Name, block.Heading, suggested),
-					Block:   block.Name,
-				})
-			} else {
-				var suggested string
+
+			// Ambiguity check is orthogonal to preferred-style check: a
+			// heading can be in a perfectly preferred style and still
+			// collide with multiple schema blocks sharing its leaf. The
+			// only safe disambiguator is the full dot-notation path.
+			//
+			// Skip the ambiguity warning when the heading is keyed by a
+			// full path already (block.Name contains a dot) — the author
+			// has already opted into the path form.
+			if ambiguousLeaves[block.Name] && !strings.Contains(block.Name, ".") {
+				pathTemplate := ""
 				for _, tmpl := range r.Preferred {
-					if !strings.Contains(tmpl, "{Parent}") {
-						suggested = doc.RenderHeading(tmpl, block.Name)
+					if strings.Contains(tmpl, "{Path}") {
+						pathTemplate = tmpl
 						break
 					}
 				}
-				if suggested == "" {
-					suggested = doc.RenderHeading("`{Block}` Block", block.Name)
+				if pathTemplate == "" {
+					pathTemplate = "`{Path}` Block"
+				}
+				paths := append([]string(nil), leafPaths[block.Name]...)
+				sort.Strings(paths)
+				example := ""
+				if len(paths) > 0 {
+					example = doc.RenderHeading(pathTemplate, paths[0])
 				}
 				results = append(results, Result{
 					Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityWarning,
-					Message: fmt.Sprintf("block %q heading %q should be %q", block.Name, block.Heading, suggested),
-					Block:   block.Name,
+					Message: fmt.Sprintf(
+						"block %q heading %q is ambiguous (schema has %d blocks named %q: %s); use the full dot-path form, e.g. %q",
+						block.Name, block.Heading, len(paths), block.Name, strings.Join(paths, ", "), example,
+					),
+					Block: block.Name,
 				})
 			}
+
+			// Preferred-style check: does the heading match one of the
+			// preferred templates? Independent of ambiguity.
+			if r.Preferred.Match(block.Heading) != "" {
+				continue
+			}
+			var suggested string
+			for _, tmpl := range r.Preferred {
+				if !strings.Contains(tmpl, "{Parent}") && !strings.Contains(tmpl, "{Path}") {
+					suggested = doc.RenderHeading(tmpl, block.Name)
+					break
+				}
+			}
+			if suggested == "" {
+				suggested = doc.RenderHeading("`{Block}` Block", block.Name)
+			}
+			results = append(results, Result{
+				Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityWarning,
+				Message: fmt.Sprintf("block %q heading %q should be %q", block.Name, block.Heading, suggested),
+				Block:   block.Name,
+			})
 		}
 	}
 	return results

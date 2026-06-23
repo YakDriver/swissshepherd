@@ -48,10 +48,13 @@ type HeadingTemplates []string
 
 // Render produces a heading string from a template and block name.
 // For {Block} templates, inserts the name directly.
+// For {Path} templates, inserts the dot-notation path directly (the
+// caller is expected to pass a path-shaped name).
 // For {Title} templates, converts snake_case to Title Case.
 // {Parent} is left as-is (caller must substitute if needed).
 func RenderHeading(tmpl, blockName string) string {
 	result := strings.Replace(tmpl, "{Block}", blockName, 1)
+	result = strings.Replace(result, "{Path}", blockName, 1)
 	result = strings.Replace(result, "{Title}", snakeToTitle(blockName), 1)
 	return result
 }
@@ -66,11 +69,17 @@ func snakeToTitle(s string) string {
 	return strings.Join(words, " ")
 }
 
-// DefaultHeadingTemplates accepts common formats.
+// DefaultHeadingTemplates accepts common formats, including the
+// tfplugindocs "Nested Schema for `<path>`" form and the dot-notation
+// `<path>` Block / `<path>` forms that disambiguate blocks whose leaf
+// names repeat under multiple parents.
 func DefaultHeadingTemplates() HeadingTemplates {
 	return HeadingTemplates{
+		"`{Path}` Block",
 		"`{Block}` Block",
 		"{Block} Block",
+		"Nested Schema for `{Path}`",
+		"`{Path}`",
 		"`{Block}`",
 		"{Block}",
 		"{Title}",
@@ -147,6 +156,13 @@ func splitCombinedHeading(heading string) []string {
 // matchTemplate tries to match a single template against a heading.
 func matchTemplate(tmpl, heading string) string {
 	// {Block} matches a snake_case name (no spaces, lowercase with underscores)
+	// {Path}  matches a dot-separated chain of snake_case segments (e.g.
+	//         "partition_spec.fields", "analyzer_configuration.internal_access_configuration").
+	//         This is the tfplugindocs-compatible form and also the
+	//         unambiguous AWS-provider form for blocks whose leaf name
+	//         repeats under multiple parents. The returned key is the
+	//         literal dot-notation path, so downstream lookups via
+	//         findAllDocBlocksIn match by full path directly.
 	// {Title} matches title-case words (converted to snake_case)
 	// {Parent} matches a snake_case name (used as disambiguator, value is discarded)
 
@@ -210,6 +226,38 @@ func matchTemplate(tmpl, heading string) string {
 		}
 		// Single parent: use it directly
 		return parentWords[0] + "." + blockName
+	}
+
+	if strings.Contains(tmpl, "{Path}") {
+		prefix, suffix, _ := strings.Cut(tmpl, "{Path}")
+		// Goldmark strips backticks from inline code spans, so a template
+		// like "`{Path}` Block" arrives as "{Path} Block". Mirror that
+		// here for parity with the {Block} branch.
+		prefix = strings.ReplaceAll(prefix, "`", "")
+		suffix = strings.ReplaceAll(suffix, "`", "")
+
+		if !strings.HasPrefix(heading, prefix) || !strings.HasSuffix(heading, suffix) {
+			return ""
+		}
+		path := heading[len(prefix) : len(heading)-len(suffix)]
+		path = strings.TrimSpace(path)
+		if path == "" {
+			return ""
+		}
+		// Must be one or more dot-separated lowercase snake_case segments.
+		// Reject leading/trailing/double dots and any non-snake content.
+		if strings.HasPrefix(path, ".") || strings.HasSuffix(path, ".") {
+			return ""
+		}
+		for seg := range strings.SplitSeq(path, ".") {
+			if seg == "" {
+				return ""
+			}
+			if seg != strings.ToLower(seg) || strings.ContainsAny(seg, " \t") {
+				return ""
+			}
+		}
+		return path
 	}
 
 	if strings.Contains(tmpl, "{Block}") {
