@@ -610,15 +610,41 @@ func (r *SchemaDocsRule) checkHeadings(ctx CheckContext) []Result {
 			if r.Preferred.Match(block.Heading) != "" {
 				continue
 			}
+
+			// Suggestion strategy depends on whether the block is
+			// already path-keyed:
+			//
+			//  - path-keyed (block.Name contains a dot): pick the first
+			//    {Path} template so the suggestion preserves the full
+			//    dot-path disambiguator. Falling back to a leaf-only
+			//    template here would reintroduce the ambiguity this
+			//    rule is designed to catch.
+			//
+			//  - leaf-keyed: pick the first non-{Parent}, non-{Path}
+			//    template since a single segment can't fill {Path} in
+			//    a useful way and {Parent} requires words we don't
+			//    have.
 			var suggested string
-			for _, tmpl := range r.Preferred {
-				if !strings.Contains(tmpl, "{Parent}") && !strings.Contains(tmpl, "{Path}") {
-					suggested = doc.RenderHeading(tmpl, blockLeaf)
-					break
+			if strings.Contains(block.Name, ".") {
+				for _, tmpl := range r.Preferred {
+					if strings.Contains(tmpl, "{Path}") {
+						suggested = doc.RenderHeading(tmpl, block.Name)
+						break
+					}
 				}
-			}
-			if suggested == "" {
-				suggested = doc.RenderHeading("`{Block}` Block", blockLeaf)
+				if suggested == "" {
+					suggested = doc.RenderHeading("`{Path}` Block", block.Name)
+				}
+			} else {
+				for _, tmpl := range r.Preferred {
+					if !strings.Contains(tmpl, "{Parent}") && !strings.Contains(tmpl, "{Path}") {
+						suggested = doc.RenderHeading(tmpl, blockLeaf)
+						break
+					}
+				}
+				if suggested == "" {
+					suggested = doc.RenderHeading("`{Block}` Block", blockLeaf)
+				}
 			}
 			results = append(results, Result{
 				Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityWarning,

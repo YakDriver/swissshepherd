@@ -133,14 +133,24 @@ func TestSchemaDocsRule_PathKeyedHeadings_BadStyleStillWarns(t *testing.T) {
 	results := rule.Check(check.CheckContext{Resource: "aws_test", Schema: rs, Doc: d})
 
 	// We expect a preferred-style warning on the bare path-form
-	// heading suggesting the Block-suffix form.
+	// heading suggesting the `<full.path>` Block form. The suggestion
+	// must contain the full dot-path "foo.bar", NOT just the leaf
+	// "bar" (which would drop the disambiguator and reintroduce the
+	// ambiguity this PR fixes).
 	var found bool
 	for _, r := range results {
-		if strings.Contains(r.Message, "foo.bar") &&
-			strings.Contains(r.Message, "should be") {
-			found = true
-			break
+		if !strings.Contains(r.Message, "foo.bar") || !strings.Contains(r.Message, "should be") {
+			continue
 		}
+		// The suggested text is the `should be %q` portion; the
+		// message contains "foo.bar" twice already (block name and
+		// heading text). Look specifically for the suggested form
+		// to confirm it preserves the full path.
+		if !strings.Contains(r.Message, "`foo.bar` Block") {
+			t.Errorf("preferred-style suggestion drops dot-path; expected \"`foo.bar` Block\" in suggestion, got: %s", r.Message)
+		}
+		found = true
+		break
 	}
 	if !found {
 		t.Errorf("expected preferred-style finding on `foo.bar` heading; got %d results", len(results))
