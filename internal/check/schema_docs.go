@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"fmt"
 	"slices"
+	"sort"
 	"strings"
 
 	"github.com/YakDriver/swissshepherd/internal/doc"
@@ -557,36 +558,101 @@ func (r *SchemaDocsRule) checkHeadings(ctx CheckContext) []Result {
 			if block.Name == "" || block.Heading == "" {
 				continue
 			}
-			if !schemaLeaves[block.Name] {
+			// block.Name may be a leaf ("match") or a full dot-path
+			// ("spec.grpc_route.match"). Look up by leaf so path-keyed
+			// blocks still participate in the preferred-style check.
+			blockLeaf := leafName(block.Name)
+			if !schemaLeaves[blockLeaf] {
 				continue
 			}
+
+			// Ambiguity check is orthogonal to preferred-style check: a
+			// heading can be in a perfectly preferred style and still
+			// collide with multiple schema blocks sharing its leaf. The
+			// only safe disambiguator is a doc key that resolves to
+			// exactly one schema block under findAllDocBlocksIn.
+			//
+			// Skipping by "block.Name contains a dot" is too coarse —
+			// {Parent}-template composites and other partial-path keys
+			// can still match multiple schema paths via the existing
+			// 2- and 3-segment composite-suffix lookups. Instead,
+			// compute the actual set of schema paths this doc key
+			// would resolve to. If it's 1, the heading uniquely
+			// identifies a schema block. If it's ≥2, the heading is
+			// still ambiguous and we warn with the precise collision
+			// list.
+			if ambiguousLeaves[blockLeaf] {
+				resolved := schemaPathsResolvedByDocKey(rs, block.Name)
+				if len(resolved) > 1 {
+					pathTemplate := ""
+					for _, tmpl := range r.Preferred {
+						if strings.Contains(tmpl, "{Path}") {
+							pathTemplate = tmpl
+							break
+						}
+					}
+					if pathTemplate == "" {
+						pathTemplate = "`{Path}` Block"
+					}
+					sort.Strings(resolved)
+					example := doc.RenderHeading(pathTemplate, resolved[0])
+					results = append(results, Result{
+						Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityWarning,
+						Message: fmt.Sprintf(
+							"block %q heading %q is ambiguous (resolves to %d schema blocks: %s); use the full dot-path form, e.g. %q",
+							block.Name, block.Heading, len(resolved), strings.Join(resolved, ", "), example,
+						),
+						Block: block.Name,
+					})
+				}
+			}
+
+			// Preferred-style check: does the heading match one of the
+			// preferred templates? Independent of ambiguity.
 			if r.Preferred.Match(block.Heading) != "" {
 				continue
 			}
-			if ambiguousLeaves[block.Name] {
-				suggested := fmt.Sprintf("`{parent}` `%s` Block", block.Name)
-				results = append(results, Result{
-					Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityWarning,
-					Message: fmt.Sprintf("block %q heading %q is ambiguous (multiple blocks share this name with different schemas); use parent to disambiguate: %s", block.Name, block.Heading, suggested),
-					Block:   block.Name,
-				})
-			} else {
-				var suggested string
+
+			// Suggestion strategy depends on whether the block is
+			// already path-keyed:
+			//
+			//  - path-keyed (block.Name contains a dot): pick the first
+			//    {Path} template so the suggestion preserves the full
+			//    dot-path disambiguator. Falling back to a leaf-only
+			//    template here would reintroduce the ambiguity this
+			//    rule is designed to catch.
+			//
+			//  - leaf-keyed: pick the first non-{Parent}, non-{Path}
+			//    template since a single segment can't fill {Path} in
+			//    a useful way and {Parent} requires words we don't
+			//    have.
+			var suggested string
+			if strings.Contains(block.Name, ".") {
 				for _, tmpl := range r.Preferred {
-					if !strings.Contains(tmpl, "{Parent}") {
+					if strings.Contains(tmpl, "{Path}") {
 						suggested = doc.RenderHeading(tmpl, block.Name)
 						break
 					}
 				}
 				if suggested == "" {
-					suggested = doc.RenderHeading("`{Block}` Block", block.Name)
+					suggested = doc.RenderHeading("`{Path}` Block", block.Name)
 				}
-				results = append(results, Result{
-					Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityWarning,
-					Message: fmt.Sprintf("block %q heading %q should be %q", block.Name, block.Heading, suggested),
-					Block:   block.Name,
-				})
+			} else {
+				for _, tmpl := range r.Preferred {
+					if !strings.Contains(tmpl, "{Parent}") && !strings.Contains(tmpl, "{Path}") {
+						suggested = doc.RenderHeading(tmpl, blockLeaf)
+						break
+					}
+				}
+				if suggested == "" {
+					suggested = doc.RenderHeading("`{Block}` Block", blockLeaf)
+				}
 			}
+			results = append(results, Result{
+				Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityWarning,
+				Message: fmt.Sprintf("block %q heading %q should be %q", block.Name, block.Heading, suggested),
+				Block:   block.Name,
+			})
 		}
 	}
 	return results
@@ -598,6 +664,35 @@ func blockSignature(block *schema.Block) string {
 		names = append(names, a.Name)
 	}
 	return strings.Join(names, ",")
+}
+
+// schemaPathsResolvedByDocKey returns every schema path P such that
+// findAllDocBlocksIn would resolve a lookup for P to a doc block keyed
+// by docKey. This is the precise inverse of the schema→doc lookup
+// machinery and is the right notion of "does this doc key disambiguate
+// to a single schema block?" — a 1-element result means yes, ≥2 means
+// the doc key is still ambiguous (even if it contains dots, e.g. when
+// it's a {Parent}-template composite that suffix-matches several
+// schema paths).
+func schemaPathsResolvedByDocKey(rs *schema.ResourceSchema, docKey string) []string {
+	if rs == nil || docKey == "" {
+		return nil
+	}
+	fake := map[string]*doc.DocBlock{docKey: {Name: docKey}}
+	docLeaf := leafName(docKey)
+	var matches []string
+	for path := range rs.Blocks {
+		if path == "" {
+			continue
+		}
+		if leafName(path) != docLeaf {
+			continue
+		}
+		if len(findAllDocBlocksIn(fake, leafName(path), path)) > 0 {
+			matches = append(matches, path)
+		}
+	}
+	return matches
 }
 
 // --- Format (raw-line checks) ---

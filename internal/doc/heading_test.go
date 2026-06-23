@@ -131,6 +131,31 @@ func TestHeadingTemplates_Match(t *testing.T) {
 			heading:   "Network",
 			want:      "",
 		},
+		// {Block} rejects punctuation and hyphens (mirrors {Path})
+		{
+			name:      "block rejects hyphen",
+			templates: doc.HeadingTemplates{"`{Block}` Block"},
+			heading:   "foo-bar Block",
+			want:      "",
+		},
+		{
+			name:      "block rejects slash",
+			templates: doc.HeadingTemplates{"`{Block}` Block"},
+			heading:   "a/b Block",
+			want:      "",
+		},
+		{
+			name:      "block rejects dot",
+			templates: doc.HeadingTemplates{"`{Block}` Block"},
+			heading:   "foo.bar Block",
+			want:      "",
+		},
+		{
+			name:      "block accepts digits and underscores",
+			templates: doc.HeadingTemplates{"`{Block}` Block"},
+			heading:   "config_v2 Block",
+			want:      "config_v2",
+		},
 		// {Parent} template — single parent
 		{
 			name:      "parent single word",
@@ -157,6 +182,120 @@ func TestHeadingTemplates_Match(t *testing.T) {
 			templates: doc.HeadingTemplates{"`{Parent}` `{Block}` Block"},
 			heading:   "header Block",
 			want:      "",
+		},
+		// {Path} template — single segment (acts like {Block})
+		{
+			name:      "path single segment",
+			templates: doc.HeadingTemplates{"`{Path}` Block"},
+			heading:   "network Block",
+			want:      "network",
+		},
+		// {Path} template — two segments dot-notation
+		{
+			name:      "path two segments",
+			templates: doc.HeadingTemplates{"`{Path}` Block"},
+			heading:   "partition_spec.fields Block",
+			want:      "partition_spec.fields",
+		},
+		// {Path} template — three segments dot-notation
+		{
+			name:      "path three segments",
+			templates: doc.HeadingTemplates{"`{Path}` Block"},
+			heading:   "analyzer_configuration.internal_access_configuration.internal_access_analysis_rule Block",
+			want:      "analyzer_configuration.internal_access_configuration.internal_access_analysis_rule",
+		},
+		// tfplugindocs canonical heading
+		{
+			name:      "tfplugindocs nested schema",
+			templates: doc.HeadingTemplates{"Nested Schema for `{Path}`"},
+			heading:   "Nested Schema for partition_spec.fields",
+			want:      "partition_spec.fields",
+		},
+		{
+			name:      "tfplugindocs nested schema single segment",
+			templates: doc.HeadingTemplates{"Nested Schema for `{Path}`"},
+			heading:   "Nested Schema for analyzer_configuration",
+			want:      "analyzer_configuration",
+		},
+		{
+			name:      "tfplugindocs nested schema deep",
+			templates: doc.HeadingTemplates{"Nested Schema for `{Path}`"},
+			heading:   "Nested Schema for analyzer_configuration.unused_access_configuration.analysis_rule.exclusions.resource_tags",
+			want:      "analyzer_configuration.unused_access_configuration.analysis_rule.exclusions.resource_tags",
+		},
+		// {Path} rejects malformed dot-notation
+		{
+			name:      "path rejects leading dot",
+			templates: doc.HeadingTemplates{"`{Path}` Block"},
+			heading:   ".fields Block",
+			want:      "",
+		},
+		{
+			name:      "path rejects trailing dot",
+			templates: doc.HeadingTemplates{"`{Path}` Block"},
+			heading:   "fields. Block",
+			want:      "",
+		},
+		{
+			name:      "path rejects double dot",
+			templates: doc.HeadingTemplates{"`{Path}` Block"},
+			heading:   "a..b Block",
+			want:      "",
+		},
+		{
+			name:      "path rejects uppercase segment",
+			templates: doc.HeadingTemplates{"`{Path}` Block"},
+			heading:   "Foo.bar Block",
+			want:      "",
+		},
+		{
+			name:      "path rejects space in segment",
+			templates: doc.HeadingTemplates{"`{Path}` Block"},
+			heading:   "partition spec.fields Block",
+			want:      "",
+		},
+		{
+			name:      "path rejects hyphen in segment",
+			templates: doc.HeadingTemplates{"`{Path}` Block"},
+			heading:   "foo-bar.fields Block",
+			want:      "",
+		},
+		{
+			name:      "path rejects slash in segment",
+			templates: doc.HeadingTemplates{"`{Path}` Block"},
+			heading:   "a/b.fields Block",
+			want:      "",
+		},
+		{
+			name:      "path rejects punctuation in segment",
+			templates: doc.HeadingTemplates{"`{Path}` Block"},
+			heading:   "foo+bar.fields Block",
+			want:      "",
+		},
+		{
+			name:      "path accepts digits",
+			templates: doc.HeadingTemplates{"`{Path}` Block"},
+			heading:   "config_v2.field_1 Block",
+			want:      "config_v2.field_1",
+		},
+		// Default templates accept the path forms
+		{
+			name:      "defaults accept dot-notation block",
+			templates: doc.DefaultHeadingTemplates(),
+			heading:   "partition_spec.fields Block",
+			want:      "partition_spec.fields",
+		},
+		{
+			name:      "defaults accept tfplugindocs",
+			templates: doc.DefaultHeadingTemplates(),
+			heading:   "Nested Schema for partition_spec.fields",
+			want:      "partition_spec.fields",
+		},
+		{
+			name:      "defaults accept bare dot-notation",
+			templates: doc.DefaultHeadingTemplates(),
+			heading:   "partition_spec.fields",
+			want:      "partition_spec.fields",
 		},
 	}
 
