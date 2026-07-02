@@ -302,6 +302,16 @@ func (r *SchemaDocsRule) checkPhantomBlocks(ctx CheckContext) []Result {
 		}
 		schemaLeaves[leafName(path)] = true
 	}
+	// Object-typed nested attributes (list/set/single object attributes,
+	// e.g. list(object({...}))) are documented with block-style headings
+	// (### `application_settings`) even though they are attributes, not
+	// blocks. They live as Attribute.Children in the schema model rather
+	// than as rs.Blocks entries, so add their leaf names too — otherwise
+	// a correctly-documented nested attribute is flagged as a phantom
+	// block.
+	for leaf := range nestedAttributeLeaves(ctx.Schema) {
+		schemaLeaves[leaf] = true
+	}
 
 	reported := make(map[string]bool)
 	var results []Result
@@ -328,6 +338,36 @@ func (r *SchemaDocsRule) checkPhantomBlocks(ctx CheckContext) []Result {
 		})
 	}
 	return results
+}
+
+// nestedAttributeLeaves collects the leaf names of object-typed nested
+// attributes (those with children) at every depth of the schema. Such
+// attributes — encoded as list(object({...})), set(object({...})), or a
+// bare object, whether SDK cty types or Framework nested types — are
+// conventionally documented with block-style headings and a list of
+// their sub-attributes, exactly like a nested block. They are stored as
+// Attribute.Children rather than as rs.Blocks entries, so callers that
+// only consult rs.Blocks would otherwise treat these legitimate
+// headings as phantom blocks.
+func nestedAttributeLeaves(rs *schema.ResourceSchema) map[string]bool {
+	leaves := make(map[string]bool)
+	var walk func(attrs []schema.Attribute)
+	walk = func(attrs []schema.Attribute) {
+		for _, a := range attrs {
+			if len(a.Children) == 0 {
+				continue
+			}
+			leaves[a.Name] = true
+			walk(a.Children)
+		}
+	}
+	for _, b := range rs.Blocks {
+		if b == nil {
+			continue
+		}
+		walk(b.Attributes)
+	}
+	return leaves
 }
 
 // checkAttributeCoverage ensures every Read-Only (computed-only) schema
