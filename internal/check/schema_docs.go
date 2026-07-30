@@ -622,7 +622,7 @@ func (r *SchemaDocsRule) checkHeadings(ctx CheckContext) []Result {
 			// still ambiguous and we warn with the precise collision
 			// list.
 			if ambiguousLeaves[blockLeaf] {
-				resolved := schemaPathsResolvedByDocKey(rs, block.Name)
+				resolved := schemaPathsResolvedByDocKey(rs, blocks, block.Name)
 				if len(resolved) > 1 {
 					pathTemplate := ""
 					for _, tmpl := range r.Preferred {
@@ -698,27 +698,44 @@ func (r *SchemaDocsRule) checkHeadings(ctx CheckContext) []Result {
 	return results
 }
 
+// blockSignature returns an order-independent signature of a block's
+// immediate attribute names, used to decide whether two schema blocks
+// sharing a leaf name are structurally distinct. The names are sorted
+// so that blocks with the same attribute set but different schema
+// declaration order compare equal — otherwise identical blocks would be
+// falsely flagged as an ambiguous leaf.
 func blockSignature(block *schema.Block) string {
-	var names []string
+	names := make([]string, 0, len(block.Attributes))
 	for _, a := range block.Attributes {
 		names = append(names, a.Name)
 	}
+	slices.Sort(names)
 	return strings.Join(names, ",")
 }
 
-// schemaPathsResolvedByDocKey returns every schema path P such that
-// findAllDocBlocksIn would resolve a lookup for P to a doc block keyed
-// by docKey. This is the precise inverse of the schema→doc lookup
-// machinery and is the right notion of "does this doc key disambiguate
-// to a single schema block?" — a 1-element result means yes, ≥2 means
-// the doc key is still ambiguous (even if it contains dots, e.g. when
-// it's a {Parent}-template composite that suffix-matches several
-// schema paths).
-func schemaPathsResolvedByDocKey(rs *schema.ResourceSchema, docKey string) []string {
+// schemaPathsResolvedByDocKey returns every schema path P for which the
+// doc heading keyed by docKey is P's MOST-SPECIFIC matching heading,
+// given the full set of doc headings in docBlocks. It is the right
+// notion of "does this doc key disambiguate to a single schema block?"
+// — a 1-element result means yes, ≥2 means the key genuinely covers
+// multiple schema blocks and is ambiguous.
+//
+// The most-specific qualifier is essential. findAllDocBlocksIn matches a
+// schema path not only against an exact-path doc key but also against
+// non-contiguous composites (e.g. parts[0].parts[1].leaf) and the bare
+// leaf. Evaluating docKey in isolation therefore over-counts: a parent
+// heading like "spec.http2_route.match" would appear to also "resolve" a
+// descendant like "spec.http2_route.match.header.match" via the
+// composite matcher, even when that descendant has its own exact
+// full-path heading that should own it. By consulting the real
+// docBlocks and taking findAllDocBlocksIn's most-specific match
+// (returned first), a path counts toward docKey only when no more
+// specific heading claims it — eliminating the phantom, self-suggesting
+// ambiguity warnings.
+func schemaPathsResolvedByDocKey(rs *schema.ResourceSchema, docBlocks map[string]*doc.DocBlock, docKey string) []string {
 	if rs == nil || docKey == "" {
 		return nil
 	}
-	fake := map[string]*doc.DocBlock{docKey: {Name: docKey}}
 	docLeaf := leafName(docKey)
 	var matches []string
 	for path := range rs.Blocks {
@@ -728,7 +745,10 @@ func schemaPathsResolvedByDocKey(rs *schema.ResourceSchema, docKey string) []str
 		if leafName(path) != docLeaf {
 			continue
 		}
-		if len(findAllDocBlocksIn(fake, leafName(path), path)) > 0 {
+		// The heading that owns this schema path is its most-specific
+		// match, which findAllDocBlocksIn returns first. Count the path
+		// toward docKey only when docKey is that owner.
+		if best := findAllDocBlocksIn(docBlocks, leafName(path), path); len(best) > 0 && best[0].Name == docKey {
 			matches = append(matches, path)
 		}
 	}
