@@ -113,10 +113,49 @@ func TestFileMatchRule_RequireDoc(t *testing.T) {
 	for _, r := range results {
 		if strings.Contains(r.Message, "aws_bucket") && strings.Contains(r.Message, "no documentation") {
 			found = true
+			if r.Severity != check.SeverityError {
+				t.Errorf("missing doc file: Severity = %v, want SeverityError", r.Severity)
+			}
 		}
 	}
 	if !found {
 		t.Error("expected finding for missing doc file")
+	}
+}
+
+// TestFileMatchRule_RequireDoc_IgnoreMissing confirms a schema resource
+// listed in ignore_missing produces no missing-doc finding, even though
+// the finding is now an error.
+func TestFileMatchRule_RequireDoc_IgnoreMissing(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	mkDirs(t, dir, "docs/resources")
+	touch(t, filepath.Join(dir, "docs/resources/instance.md"))
+
+	cfg := &config.Config{
+		ProviderSource: "registry.terraform.io/hashicorp/aws",
+		ProviderDir:    dir,
+		Types: []config.Type{{
+			Name:         "resource",
+			SchemaKind:   "resource",
+			WebsitePaths: []string{"docs/resources/{name}.md"},
+		}},
+	}
+	ps := &schema.ProviderSchema{
+		Resources: map[string]*schema.ResourceSchema{
+			"aws_instance": {},
+			"aws_bucket":   {},
+		},
+	}
+
+	rule := &check.FileMatchRule{IgnoreMissing: []string{"aws_bucket"}}
+	results := rule.Check(cfg, ps)
+
+	for _, r := range results {
+		if strings.Contains(r.Message, "aws_bucket") {
+			t.Errorf("ignore_missing resource should not be flagged; got: %s", r.Message)
+		}
 	}
 }
 
