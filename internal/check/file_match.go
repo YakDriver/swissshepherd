@@ -99,7 +99,7 @@ func (r *FileMatchRule) checkRequireDoc(cfg *config.Config, ps *schema.ProviderS
 				continue
 			}
 			results = append(results, Result{
-				Rule: r.Name(), Resource: name, Severity: SeverityWarning,
+				Rule: r.Name(), Resource: name, Severity: SeverityError,
 				Message: fmt.Sprintf("no documentation file found for %s %q", t.Name, name),
 			})
 		}
