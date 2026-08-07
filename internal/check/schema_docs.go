@@ -28,7 +28,9 @@ var DefaultSkipBlocks = []string{"timeouts"}
 
 // DefaultBadDescriptionPrefixes is the list of weak or redundant description starts.
 var DefaultBadDescriptionPrefixes = []string{
-	"A ", "An ", "The ", "Indicates ", "Specifies ", "Describes ", "Defines ",
+	"A ", "An ", "The ", "This ", "It ",
+	"Indicates ", "Specifies ", "Describes ", "Defines ",
+	"Contains ", "Determines ", "Identifies ", "Represents ", "Denotes ", "Holds ", "Used ",
 }
 
 // SchemaDocsRule validates argument and attribute sections against the schema.

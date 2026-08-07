@@ -195,9 +195,67 @@ func TestSchemaDocsRule_DefaultPrefixesMatchesTfproviderdocs(t *testing.T) {
 
 	// Pin the default list so a future refactor can't silently drop a prefix
 	// that AWS CI depends on.
-	want := []string{"A ", "An ", "The ", "Indicates ", "Specifies ", "Describes ", "Defines "}
+	want := []string{
+		"A ", "An ", "The ", "This ", "It ",
+		"Indicates ", "Specifies ", "Describes ", "Defines ",
+		"Contains ", "Determines ", "Identifies ", "Represents ", "Denotes ", "Holds ", "Used ",
+	}
 	if !slices.Equal(check.DefaultBadDescriptionPrefixes, want) {
 		t.Errorf("DefaultBadDescriptionPrefixes = %v, want %v", check.DefaultBadDescriptionPrefixes, want)
+	}
+}
+
+// TestSchemaDocsRule_DefaultPrefixes_WeakVsLegitimate confirms the expanded
+// default list flags weak/redundant/meta starts (This, It, Contains,
+// Determines, Identifies, Represents, Denotes, Holds, Used) while leaving
+// legitimate noun-phrase and boolean starts alone.
+func TestSchemaDocsRule_DefaultPrefixes_WeakVsLegitimate(t *testing.T) {
+	t.Parallel()
+
+	descFlagged := func(desc string) bool {
+		d, err := doc.Parse([]byte("## Argument Reference\n\n* `x` - (Optional) "+desc+"\n"), "t")
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, r := range (&check.SchemaDocsRule{}).Check(check.CheckContext{Resource: "t", Doc: d}) {
+			if strings.Contains(r.Message, "should not start with") {
+				return true
+			}
+		}
+		return false
+	}
+
+	weak := []string{
+		"This is the Id or ARN of the service.",
+		"It is the name of the hosted zone.",
+		"Contains the list of rules.",
+		"Determines whether to enable the feature.",
+		"Identifies the resource uniquely.",
+		"Represents the current state.",
+		"Denotes the type of association.",
+		"Holds the encoded value.",
+		"Used to select the mode.",
+	}
+	for _, d := range weak {
+		if !descFlagged(d) {
+			t.Errorf("expected weak start to be flagged: %q", d)
+		}
+	}
+
+	// Legitimate starts that must NOT be flagged.
+	fine := []string{
+		"Whether to enable the feature.",
+		"Set of ARNs to associate.",
+		"List of names for the group.",
+		"Map of tags to assign.",
+		"Configuration block for logging.",
+		"Region where this resource is managed.",
+		"Name of the thing.", // starts with a real noun, not a blocked word
+	}
+	for _, d := range fine {
+		if descFlagged(d) {
+			t.Errorf("legitimate start should not be flagged: %q", d)
+		}
 	}
 }
 
