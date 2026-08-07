@@ -151,6 +151,14 @@ type CheckConfig struct {
 	Byline      *bool `hcl:"byline,optional"`
 	Deprecated  *bool `hcl:"deprecated,optional"`
 
+	// NestedObjectAttributes, when true, models object-typed attributes
+	// (list(object({...})), set(object({...})), object({...})) as nested
+	// blocks so their fields are covered and style-checked like nested-block
+	// attributes. It also makes the doc parser capture the inline-indented
+	// sub-bullets those fields are documented with. Default false (nil): the
+	// fields are neither required nor style-checked, matching prior behavior.
+	NestedObjectAttributes *bool `hcl:"nested_object_attributes,optional"`
+
 	// SectionPresence rule options.
 	// EnforceOrder requires sections to appear in the order declared on
 	// the Type's section blocks. nil → enabled (strict by default).

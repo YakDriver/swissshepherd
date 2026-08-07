@@ -377,6 +377,23 @@ func Parse(source []byte, name string) (*Document, error) {
 
 // ParseWithTemplates parses markdown source with specific heading templates.
 func ParseWithTemplates(source []byte, name string, templates HeadingTemplates) (*Document, error) {
+	return ParseWithOptions(source, name, templates, ParseOptions{})
+}
+
+// ParseOptions controls optional parsing behavior.
+type ParseOptions struct {
+	// CaptureNestedAttributes, when true, records inline-indented nested
+	// list attributes (the "Each object has the following attributes:"
+	// pattern used to document list(object({...})) fields) as dot-path
+	// keyed DocBlocks, e.g. an "items" bullet with indented "arn"/"dns_entry"
+	// sub-bullets yields blocks "items" and "items.dns_entry". Off by
+	// default: nested sub-bullets are ignored, exactly as before.
+	CaptureNestedAttributes bool
+}
+
+// ParseWithOptions parses markdown source with specific heading templates and
+// optional parsing behavior.
+func ParseWithOptions(source []byte, name string, templates HeadingTemplates, opts ParseOptions) (*Document, error) {
 	// Strip YAML frontmatter before handing the source to Goldmark.
 	// Goldmark without the meta extension treats the closing "---" as a
 	// setext H2 underline for the preceding paragraph, which produces
@@ -396,7 +413,7 @@ func ParseWithTemplates(source []byte, name string, templates HeadingTemplates) 
 		source:          source,
 	}
 
-	extractBlocks(tree, source, doc, templates)
+	extractBlocks(tree, source, doc, templates, opts.CaptureNestedAttributes)
 	return doc, nil
 }
 
@@ -500,7 +517,7 @@ func blankFrontmatter(source []byte, end int) []byte {
 	return out
 }
 
-func extractBlocks(tree ast.Node, source []byte, doc *Document, templates HeadingTemplates) {
+func extractBlocks(tree ast.Node, source []byte, doc *Document, templates HeadingTemplates, captureNested bool) {
 	var currentBlockName string
 	var currentBlockAliases []string
 	var currentSection *Section
@@ -707,6 +724,12 @@ func extractBlocks(tree ast.Node, source []byte, doc *Document, templates Headin
 								ab.Attributes = append(ab.Attributes, attr)
 							}
 						}
+						// Capture inline-indented nested attributes (e.g. the
+						// fields of a list(object({...})) documented as
+						// sub-bullets) into a dot-path keyed block.
+						if captureNested {
+							captureNestedAttrs(li, joinDocPath(currentBlockName, attr.Name), target, source)
+						}
 					} else if ref := parseNestedRef(li, source); ref.Parent != "" {
 						// A dot-notation reference (e.g. `network[*].private_ip`)
 						// in the current section. Route it to the parent block's
@@ -810,6 +833,53 @@ func hasMalformedSeparator(li *ast.ListItem, source []byte, name string) bool {
 func ensureBlock(blocks map[string]*DocBlock, name, heading string) {
 	if _, exists := blocks[name]; !exists {
 		blocks[name] = &DocBlock{Name: name, Heading: heading}
+	}
+}
+
+// joinDocPath joins a parent block path and a child attribute name into a
+// dot-path. The root block has an empty path, so its children are keyed by
+// bare name.
+func joinDocPath(parent, child string) string {
+	if parent == "" {
+		return child
+	}
+	return parent + "." + child
+}
+
+// firstChildList returns the first nested *ast.List child of a node, or nil.
+// In the doc AST a list item that has indented sub-bullets holds them in a
+// nested List that follows the item's TextBlock.
+func firstChildList(n ast.Node) *ast.List {
+	for c := n.FirstChild(); c != nil; c = c.NextSibling() {
+		if l, ok := c.(*ast.List); ok {
+			return l
+		}
+	}
+	return nil
+}
+
+// captureNestedAttrs records a list item's inline-indented sub-attributes into
+// the DocBlock keyed by path, recursing so deeper nesting yields deeper
+// dot-path blocks. It is a no-op for items with no nested list.
+func captureNestedAttrs(li *ast.ListItem, path string, target map[string]*DocBlock, source []byte) {
+	sub := firstChildList(li)
+	if sub == nil {
+		return
+	}
+	ensureBlock(target, path, "")
+	b := target[path]
+	for child := sub.FirstChild(); child != nil; child = child.NextSibling() {
+		cli, ok := child.(*ast.ListItem)
+		if !ok {
+			continue
+		}
+		attr := parseListItem(cli, source)
+		if attr.Name == "" {
+			continue
+		}
+		attr.Line = nodeLineNumber(cli, source)
+		b.Attributes = append(b.Attributes, attr)
+		captureNestedAttrs(cli, joinDocPath(path, attr.Name), target, source)
 	}
 }
 
