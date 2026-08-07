@@ -121,6 +121,20 @@ type CheckConfig struct {
 	// DescriptionStyle rule options.
 	BadPrefixes []string `hcl:"bad_prefixes,optional"`
 
+	// Gloss rule options. BannedGlosses maps a spelled-out phrase to its
+	// recommended abbreviation, e.g. {"Amazon Resource Name" = "ARN"}. The
+	// gloss check flags both the glossed form ("Amazon Resource Name (ARN)")
+	// and the standalone phrase ("Amazon Resource Name") anywhere in the
+	// document, recommending the abbreviation. There is no default list —
+	// the check does nothing unless a provider configures this map.
+	// SkipFrontmatter excludes the leading YAML frontmatter block from the
+	// scan (useful because subcategory values come from a fixed taxonomy).
+	// Severity sets the finding severity for this check ("error" or
+	// "warning"). Empty uses the check's own default.
+	BannedGlosses   map[string]string `hcl:"banned_glosses,optional"`
+	SkipFrontmatter bool              `hcl:"skip_frontmatter,optional"`
+	Severity        string            `hcl:"severity,optional"`
+
 	// FormatStyle rule options. nil means enabled (default true).
 	NoCodeBlocks              *bool `hcl:"no_code_blocks,optional"`
 	SingleLineAttrs           *bool `hcl:"single_line_attrs,optional"`
