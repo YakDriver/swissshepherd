@@ -248,6 +248,13 @@ func runCheck(cmd *cobra.Command, args []string) error {
 			InlineLinks:             cc.InlineLinks,
 		})
 	}
+	// banned_glosses is opt-in: only enforced when a provider configures a
+	// non-empty phrase→abbreviation map. No default list.
+	if cfg.IsCheckEnabled("banned_glosses") {
+		if glosses := cfg.GetCheck("banned_glosses").BannedGlosses; len(glosses) > 0 {
+			fileRules = append(fileRules, check.NewGlossRule(glosses))
+		}
+	}
 
 	runner := &check.Runner{
 		Schema:                    ps,

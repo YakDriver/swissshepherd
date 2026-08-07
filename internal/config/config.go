@@ -121,6 +121,14 @@ type CheckConfig struct {
 	// DescriptionStyle rule options.
 	BadPrefixes []string `hcl:"bad_prefixes,optional"`
 
+	// Gloss rule options. BannedGlosses maps a spelled-out phrase to its
+	// recommended abbreviation, e.g. {"Amazon Resource Name" = "ARN"}. The
+	// gloss check flags both the glossed form ("Amazon Resource Name (ARN)")
+	// and the standalone phrase ("Amazon Resource Name") anywhere in the
+	// document, recommending the abbreviation. There is no default list —
+	// the check does nothing unless a provider configures this map.
+	BannedGlosses map[string]string `hcl:"banned_glosses,optional"`
+
 	// FormatStyle rule options. nil means enabled (default true).
 	NoCodeBlocks              *bool `hcl:"no_code_blocks,optional"`
 	SingleLineAttrs           *bool `hcl:"single_line_attrs,optional"`
