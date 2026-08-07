@@ -282,6 +282,67 @@ func flattenSchema(name string, s *tfjson.Schema) *ResourceSchema {
 	return rs
 }
 
+// ExpandObjectAttributes models object-typed attributes — list(object({...})),
+// set(object({...})), or a bare object({...}), whether SDK cty types or
+// Framework nested types — as nested blocks. For every attribute that carries
+// Children, it adds a Block keyed by the attribute's dot-path with those
+// children as the block's attributes, recursing to any depth. Without this,
+// object-typed attribute fields live only on Attribute.Children and are never
+// reached by the block-oriented checks (coverage, ordering, descriptions,
+// labels, headings). Existing block paths are never overwritten, and the
+// transform is idempotent.
+func ExpandObjectAttributes(ps *ProviderSchema) {
+	if ps == nil {
+		return
+	}
+	for _, m := range []map[string]*ResourceSchema{
+		ps.Resources, ps.DataSources, ps.Ephemerals, ps.ListResources, ps.Actions,
+	} {
+		for _, rs := range m {
+			expandResourceObjectAttributes(rs)
+		}
+	}
+}
+
+func expandResourceObjectAttributes(rs *ResourceSchema) {
+	if rs == nil {
+		return
+	}
+	// Snapshot the current (path, attributes) pairs: addObjectAttrBlocks
+	// mutates rs.Blocks, and ranging a map while inserting is unsafe.
+	type entry struct {
+		path  string
+		attrs []Attribute
+	}
+	seed := make([]entry, 0, len(rs.Blocks))
+	for path, b := range rs.Blocks {
+		if b != nil {
+			seed = append(seed, entry{path, b.Attributes})
+		}
+	}
+	for _, e := range seed {
+		for _, attr := range e.attrs {
+			addObjectAttrBlocks(rs, e.path, attr)
+		}
+	}
+}
+
+func addObjectAttrBlocks(rs *ResourceSchema, parentPath string, attr Attribute) {
+	if len(attr.Children) == 0 {
+		return
+	}
+	childPath := attr.Name
+	if parentPath != "" {
+		childPath = parentPath + "." + attr.Name
+	}
+	if _, exists := rs.Blocks[childPath]; !exists {
+		rs.Blocks[childPath] = &Block{Path: childPath, Attributes: attr.Children}
+	}
+	for _, c := range attr.Children {
+		addObjectAttrBlocks(rs, childPath, c)
+	}
+}
+
 func flattenBlock(rs *ResourceSchema, path string, block *tfjson.SchemaBlock) {
 	b := &Block{
 		Path:       path,

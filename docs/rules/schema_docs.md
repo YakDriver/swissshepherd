@@ -52,8 +52,22 @@ check "schema_docs" {
   single_line_attrs           = true   # each attribute on one line
   uninterrupted_lists         = true   # no paragraphs between list items
   allow_attribute_indentation = true   # allow indented sub-attributes in Attribute Reference (default: true)
+
+  # Object-typed attribute coverage (opt-in; default false)
+  nested_object_attributes    = true   # check fields of list(object)/set(object)/object attributes
 }
 ```
+
+## Object-typed attributes (`nested_object_attributes`)
+
+Legacy `list(object({...}))` / `set(object({...}))` / bare `object({...})` attributes carry their fields as a nested *type*, not as a schema block. By default swissshepherd treats such an attribute as a single leaf: its inner fields are neither required to be documented nor style-checked.
+
+Set `nested_object_attributes = true` to model those fields as nested blocks. When enabled:
+
+- the schema expands each object-typed attribute into dot-path blocks (e.g. `items`, `items.dns_entry`), so `coverage`, `description`, `ordering`, and `labels` apply to their fields at every depth; and
+- the doc parser captures the inline-indented sub-bullets those fields are conventionally documented with (the "Each object has the following attributes:" pattern), matching them against the expanded schema.
+
+This is **off by default** because enabling it surfaces a large number of new findings in docs that previously passed. Roll it out gradually — stage with `ignore_targets` / `skip_blocks`, or enable it once the affected docs are clean.
 
 ## Schema model: Required / Optional / Read-Only
 

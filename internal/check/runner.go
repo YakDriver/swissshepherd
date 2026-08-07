@@ -36,6 +36,12 @@ type Runner struct {
 	Logger                    *slog.Logger
 	HeadingTemplates          doc.HeadingTemplates
 	PreferredHeadingTemplates doc.HeadingTemplates
+
+	// CaptureNestedAttrs enables parsing of inline-indented nested object
+	// attributes (see doc.ParseOptions.CaptureNestedAttributes). It is
+	// driven by the same toggle that expands object-typed attributes into
+	// schema blocks, so the two stay consistent.
+	CaptureNestedAttrs bool
 }
 
 // RunAll runs every configured rule against every target of every type that
@@ -174,7 +180,9 @@ func (r *Runner) runTarget(t *config.Type, name string, logOnError bool) ([]Resu
 		return nil, fmt.Errorf("reading doc for %s: %w", name, err)
 	}
 
-	d, err := doc.ParseWithTemplates(content, docPath, r.HeadingTemplates)
+	d, err := doc.ParseWithOptions(content, docPath, r.HeadingTemplates, doc.ParseOptions{
+		CaptureNestedAttributes: r.CaptureNestedAttrs,
+	})
 	if err != nil {
 		if logOnError {
 			r.Logger.Warn("cannot parse doc", "type", t.Name, "name", name, "path", docPath, "error", err)

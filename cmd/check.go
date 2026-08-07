@@ -178,6 +178,16 @@ func runCheck(cmd *cobra.Command, args []string) error {
 	var rules []check.Rule
 	var fileRules []check.FileRule
 
+	// Opt-in: model object-typed attributes (list(object)/set(object)/object)
+	// as nested blocks and capture their inline-indented doc sub-bullets, so
+	// their fields are covered and style-checked. One toggle drives both the
+	// schema expansion and the doc parser to keep them consistent.
+	nestedCfg := cfg.GetCheck("schema_docs").NestedObjectAttributes
+	nestedObjects := cfg.IsCheckEnabled("schema_docs") && nestedCfg != nil && *nestedCfg
+	if nestedObjects {
+		schema.ExpandObjectAttributes(ps)
+	}
+
 	if cfg.IsCheckEnabled("schema_docs") {
 		cc := cfg.GetCheck("schema_docs")
 		rules = append(rules, &check.SchemaDocsRule{
@@ -266,6 +276,7 @@ func runCheck(cmd *cobra.Command, args []string) error {
 		Logger:                    logger,
 		HeadingTemplates:          headingTemplates(cfg),
 		PreferredHeadingTemplates: preferredHeadingTemplates(cfg),
+		CaptureNestedAttrs:        nestedObjects,
 	}
 
 	// Verbose: log enabled checks and their scoping
