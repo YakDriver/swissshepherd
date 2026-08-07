@@ -13,7 +13,7 @@ All enabled by default; disable individually via the rule's config block.
 | `byline`      | First paragraph after section heading matches expected byline text (from type)                                                    |
 | `coverage`    | Every schema attr is documented; every documented attr exists in schema; every block heading in Argument Reference matches a schema block |
 | `deprecated`  | Deprecation status matches between schema and docs (both directions)                                                              |
-| `description` | Descriptions don't start with bad prefixes ("A ", "The ", "Specifies ", etc.)                                                     |
+| `description` | Descriptions don't start with weak/redundant/meta prefixes ("The ", "This ", "Contains ", "Used ", etc.)                              |
 | `format`      | No code blocks in arg/attr sections; single-line attrs; uninterrupted lists                                                       |
 | `heading`     | Block headings match the preferred template style                                                                                  |
 | `labels`      | Arguments have (Required)/(Optional) labels (and optionally (Read-Only) when allow_inline_read_only = true); attributes do not                                                                |
@@ -45,7 +45,11 @@ check "schema_docs" {
   allow_inline_read_only = false                    # see "Schema model" below
 
   # Description options
-  bad_prefixes = ["A ", "An ", "The ", "Specifies "]
+  # Overrides the default weak/redundant/meta starts. Default:
+  #   "A ", "An ", "The ", "This ", "It ",
+  #   "Indicates ", "Specifies ", "Describes ", "Defines ",
+  #   "Contains ", "Determines ", "Identifies ", "Represents ", "Denotes ", "Holds ", "Used "
+  bad_prefixes = ["A ", "An ", "The ", "This ", "Specifies "]
 
   # Format options
   no_code_blocks              = true   # no fenced code blocks in arg/attr sections
