@@ -272,6 +272,8 @@ check "banned_glosses" {
     "Simple Storage Service" = "S3"
     "Virtual Private Cloud"  = "VPC"
   }
+
+  skip_frontmatter = true   # optional; default false
 }
 ```
 
@@ -282,7 +284,7 @@ For each configured pair it flags both forms and recommends the abbreviation:
 
 The bare abbreviation (`ARN`) on its own is always accepted and never flagged. An optional leading `Amazon `/`AWS ` on the phrase, and an optional `Amazon `/`AWS ` inside the parenthetical (`Amazon Simple Storage Service (Amazon S3)`), are recognized. A trailing plural is tolerated (`Amazon Resource Names` → `ARNs`).
 
-The scan covers the whole document — descriptions, prose, callouts, and frontmatter — but skips fenced code blocks, inline code spans, and URLs so configuration and identifiers are left alone. Each occurrence is reported with its line number. Like every check, it honors the standard scoping options (`types`, `prefixes`, `targets`, `ignore_targets`, `ignore_prefixes`).
+The scan covers the whole document — descriptions, prose, callouts, and frontmatter — but skips fenced code blocks, inline code spans, and URLs so configuration and identifiers are left alone. Set `skip_frontmatter = true` to exclude the leading YAML frontmatter block (handy because `subcategory` values come from a fixed taxonomy and shouldn't be rewritten). Each occurrence is reported with its line number. Like every check, it honors the standard scoping options (`types`, `prefixes`, `targets`, `ignore_targets`, `ignore_prefixes`).
 
 ---
 

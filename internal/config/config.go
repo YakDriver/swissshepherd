@@ -127,7 +127,10 @@ type CheckConfig struct {
 	// and the standalone phrase ("Amazon Resource Name") anywhere in the
 	// document, recommending the abbreviation. There is no default list —
 	// the check does nothing unless a provider configures this map.
-	BannedGlosses map[string]string `hcl:"banned_glosses,optional"`
+	// SkipFrontmatter excludes the leading YAML frontmatter block from the
+	// scan (useful because subcategory values come from a fixed taxonomy).
+	BannedGlosses   map[string]string `hcl:"banned_glosses,optional"`
+	SkipFrontmatter bool              `hcl:"skip_frontmatter,optional"`
 
 	// FormatStyle rule options. nil means enabled (default true).
 	NoCodeBlocks              *bool `hcl:"no_code_blocks,optional"`

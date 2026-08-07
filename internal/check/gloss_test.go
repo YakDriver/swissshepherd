@@ -12,7 +12,7 @@ import (
 )
 
 func runGloss(glosses map[string]string, content string) []check.Result {
-	rule := check.NewGlossRule(glosses)
+	rule := check.NewGlossRule(glosses, false)
 	return rule.CheckFile(check.FileCheckContext{
 		Resource: "aws_thing",
 		Path:     "website/docs/r/thing.html.markdown",
@@ -123,6 +123,39 @@ func TestGlossRule_Plural(t *testing.T) {
 	}
 }
 
+func TestGlossRule_SkipFrontmatter(t *testing.T) {
+	t.Parallel()
+
+	glosses := map[string]string{
+		"Elastic Compute Cloud": "EC2",
+		"Amazon Resource Name":  "ARN",
+	}
+	doc := "---\n" +
+		"subcategory: \"EC2 (Elastic Compute Cloud)\"\n" +
+		"page_title: \"AWS\"\n" +
+		"---\n" +
+		"\n" +
+		"The Amazon Resource Name (ARN) of the thing.\n"
+
+	// Default (scan everything): frontmatter phrase + body gloss = 2.
+	if got := check.NewGlossRule(glosses, false).CheckFile(check.FileCheckContext{
+		Resource: "aws_thing", Path: "p", Content: []byte(doc),
+	}); len(got) != 2 {
+		t.Fatalf("scan-all: got %d findings, want 2: %+v", len(got), got)
+	}
+
+	// SkipFrontmatter: only the body gloss remains.
+	got := check.NewGlossRule(glosses, true).CheckFile(check.FileCheckContext{
+		Resource: "aws_thing", Path: "p", Content: []byte(doc),
+	})
+	if len(got) != 1 {
+		t.Fatalf("skip-frontmatter: got %d findings, want 1: %+v", len(got), got)
+	}
+	if got[0].Line != 6 {
+		t.Errorf("remaining finding Line = %d, want 6 (body)", got[0].Line)
+	}
+}
+
 func TestGlossRule_EmptyConfigIsNoop(t *testing.T) {
 	t.Parallel()
 
@@ -146,7 +179,7 @@ func TestGlossRule_ScopingViaCheckConfig(t *testing.T) {
 	t.Parallel()
 
 	cc := config.CheckConfig{
-		Name:          check.NewGlossRule(map[string]string{"Amazon Resource Name": "ARN"}).Name(),
+		Name:          check.NewGlossRule(map[string]string{"Amazon Resource Name": "ARN"}, false).Name(),
 		IgnoreTargets: []string{"aws_thing"},
 	}
 	if cc.AppliesTo("aws_thing", "resource") {

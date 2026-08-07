@@ -25,7 +25,8 @@ import (
 // over the whole document body but skips fenced code blocks, inline code
 // spans, and URLs so real configuration and identifiers are left alone.
 type GlossRule struct {
-	entries []glossEntry
+	entries         []glossEntry
+	skipFrontmatter bool
 }
 
 type glossEntry struct {
@@ -35,9 +36,10 @@ type glossEntry struct {
 
 // NewGlossRule compiles a GlossRule from a phrase→abbreviation map. Entries
 // with an empty phrase or abbreviation are skipped. A rule with no usable
-// entries produces no findings.
-func NewGlossRule(glosses map[string]string) *GlossRule {
-	r := &GlossRule{}
+// entries produces no findings. When skipFrontmatter is true, the leading
+// YAML frontmatter block is excluded from the scan.
+func NewGlossRule(glosses map[string]string, skipFrontmatter bool) *GlossRule {
+	r := &GlossRule{skipFrontmatter: skipFrontmatter}
 	for _, phrase := range slices.Sorted(maps.Keys(glosses)) {
 		abb := strings.TrimSpace(glosses[phrase])
 		p := strings.TrimSpace(phrase)
@@ -68,8 +70,16 @@ func (r *GlossRule) CheckFile(ctx FileCheckContext) []Result {
 	}
 
 	var results []Result
+	lines := strings.Split(string(ctx.Content), "\n")
+	fmEnd := -1
+	if r.skipFrontmatter {
+		fmEnd = frontmatterEnd(lines)
+	}
 	inFence := false
-	for i, raw := range strings.Split(string(ctx.Content), "\n") {
+	for i, raw := range lines {
+		if i <= fmEnd {
+			continue
+		}
 		if isFenceDelimiter(raw) {
 			inFence = !inFence
 			continue
@@ -110,6 +120,21 @@ func recommend(matched, abb string) string {
 func isFenceDelimiter(line string) bool {
 	t := strings.TrimSpace(line)
 	return strings.HasPrefix(t, "```") || strings.HasPrefix(t, "~~~")
+}
+
+// frontmatterEnd returns the index of the closing "---" of a leading YAML
+// frontmatter block, or -1 when the document has none. Lines 0..return
+// (inclusive) constitute the frontmatter.
+func frontmatterEnd(lines []string) int {
+	if len(lines) == 0 || strings.TrimSpace(lines[0]) != "---" {
+		return -1
+	}
+	for j := 1; j < len(lines); j++ {
+		if strings.TrimSpace(lines[j]) == "---" {
+			return j
+		}
+	}
+	return -1
 }
 
 var (
