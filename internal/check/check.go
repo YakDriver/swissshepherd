@@ -4,6 +4,8 @@
 package check
 
 import (
+	"strings"
+
 	"github.com/YakDriver/swissshepherd/internal/config"
 	"github.com/YakDriver/swissshepherd/internal/doc"
 	"github.com/YakDriver/swissshepherd/internal/schema"
@@ -23,6 +25,20 @@ func (s Severity) String() string {
 		return "warning"
 	default:
 		return "error"
+	}
+}
+
+// ParseSeverity maps a config string ("error", "warning"/"warn") to a
+// Severity. Empty or unrecognized values return def, so callers can supply a
+// per-check default. Matching is case-insensitive and whitespace-tolerant.
+func ParseSeverity(s string, def Severity) Severity {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "error":
+		return SeverityError
+	case "warning", "warn":
+		return SeverityWarning
+	default:
+		return def
 	}
 }
 

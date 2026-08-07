@@ -12,7 +12,7 @@ import (
 )
 
 func runGloss(glosses map[string]string, content string) []check.Result {
-	rule := check.NewGlossRule(glosses, false)
+	rule := check.NewGlossRule(glosses, false, check.SeverityWarning)
 	return rule.CheckFile(check.FileCheckContext{
 		Resource: "aws_thing",
 		Path:     "website/docs/r/thing.html.markdown",
@@ -47,8 +47,8 @@ func TestGlossRule_GlossFormAndStandalone(t *testing.T) {
 				if r.Rule != "banned_glosses" {
 					t.Errorf("rule = %q, want banned_glosses", r.Rule)
 				}
-				if r.Severity != check.SeverityError {
-					t.Errorf("severity = %v, want error", r.Severity)
+				if r.Severity != check.SeverityWarning {
+					t.Errorf("severity = %v, want warning (from runGloss)", r.Severity)
 				}
 				if !strings.Contains(r.Message, `"ARN"`) {
 					t.Errorf("message should recommend ARN: %q", r.Message)
@@ -138,14 +138,14 @@ func TestGlossRule_SkipFrontmatter(t *testing.T) {
 		"The Amazon Resource Name (ARN) of the thing.\n"
 
 	// Default (scan everything): frontmatter phrase + body gloss = 2.
-	if got := check.NewGlossRule(glosses, false).CheckFile(check.FileCheckContext{
+	if got := check.NewGlossRule(glosses, false, check.SeverityError).CheckFile(check.FileCheckContext{
 		Resource: "aws_thing", Path: "p", Content: []byte(doc),
 	}); len(got) != 2 {
 		t.Fatalf("scan-all: got %d findings, want 2: %+v", len(got), got)
 	}
 
 	// SkipFrontmatter: only the body gloss remains.
-	got := check.NewGlossRule(glosses, true).CheckFile(check.FileCheckContext{
+	got := check.NewGlossRule(glosses, true, check.SeverityError).CheckFile(check.FileCheckContext{
 		Resource: "aws_thing", Path: "p", Content: []byte(doc),
 	})
 	if len(got) != 1 {
@@ -153,6 +153,48 @@ func TestGlossRule_SkipFrontmatter(t *testing.T) {
 	}
 	if got[0].Line != 6 {
 		t.Errorf("remaining finding Line = %d, want 6 (body)", got[0].Line)
+	}
+}
+
+func TestGlossRule_SeverityIsConfigurable(t *testing.T) {
+	t.Parallel()
+
+	content := "The Amazon Resource Name (ARN) of the thing."
+	glosses := map[string]string{"Amazon Resource Name": "ARN"}
+
+	for _, sev := range []check.Severity{check.SeverityError, check.SeverityWarning} {
+		got := check.NewGlossRule(glosses, false, sev).CheckFile(check.FileCheckContext{
+			Resource: "aws_thing", Path: "p", Content: []byte(content),
+		})
+		if len(got) != 1 {
+			t.Fatalf("sev %v: got %d findings, want 1", sev, len(got))
+		}
+		if got[0].Severity != sev {
+			t.Errorf("Severity = %v, want %v", got[0].Severity, sev)
+		}
+	}
+}
+
+func TestParseSeverity(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		in   string
+		def  check.Severity
+		want check.Severity
+	}{
+		{"error", check.SeverityWarning, check.SeverityError},
+		{"warning", check.SeverityError, check.SeverityWarning},
+		{"warn", check.SeverityError, check.SeverityWarning},
+		{"  ERROR  ", check.SeverityWarning, check.SeverityError},
+		{"", check.SeverityWarning, check.SeverityWarning},      // empty → default
+		{"bogus", check.SeverityWarning, check.SeverityWarning}, // invalid → default
+		{"", check.SeverityError, check.SeverityError},
+	}
+	for _, tc := range cases {
+		if got := check.ParseSeverity(tc.in, tc.def); got != tc.want {
+			t.Errorf("ParseSeverity(%q, %v) = %v, want %v", tc.in, tc.def, got, tc.want)
+		}
 	}
 }
 
@@ -179,7 +221,7 @@ func TestGlossRule_ScopingViaCheckConfig(t *testing.T) {
 	t.Parallel()
 
 	cc := config.CheckConfig{
-		Name:          check.NewGlossRule(map[string]string{"Amazon Resource Name": "ARN"}, false).Name(),
+		Name:          check.NewGlossRule(map[string]string{"Amazon Resource Name": "ARN"}, false, check.SeverityWarning).Name(),
 		IgnoreTargets: []string{"aws_thing"},
 	}
 	if cc.AppliesTo("aws_thing", "resource") {

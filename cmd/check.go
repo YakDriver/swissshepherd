@@ -253,7 +253,8 @@ func runCheck(cmd *cobra.Command, args []string) error {
 	if cfg.IsCheckEnabled("banned_glosses") {
 		cc := cfg.GetCheck("banned_glosses")
 		if len(cc.BannedGlosses) > 0 {
-			fileRules = append(fileRules, check.NewGlossRule(cc.BannedGlosses, cc.SkipFrontmatter))
+			sev := check.ParseSeverity(cc.Severity, check.SeverityWarning)
+			fileRules = append(fileRules, check.NewGlossRule(cc.BannedGlosses, cc.SkipFrontmatter, sev))
 		}
 	}
 

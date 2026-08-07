@@ -27,6 +27,7 @@ import (
 type GlossRule struct {
 	entries         []glossEntry
 	skipFrontmatter bool
+	severity        Severity
 }
 
 type glossEntry struct {
@@ -37,9 +38,10 @@ type glossEntry struct {
 // NewGlossRule compiles a GlossRule from a phrase→abbreviation map. Entries
 // with an empty phrase or abbreviation are skipped. A rule with no usable
 // entries produces no findings. When skipFrontmatter is true, the leading
-// YAML frontmatter block is excluded from the scan.
-func NewGlossRule(glosses map[string]string, skipFrontmatter bool) *GlossRule {
-	r := &GlossRule{skipFrontmatter: skipFrontmatter}
+// YAML frontmatter block is excluded from the scan. severity sets the
+// severity of the findings it emits.
+func NewGlossRule(glosses map[string]string, skipFrontmatter bool, severity Severity) *GlossRule {
+	r := &GlossRule{skipFrontmatter: skipFrontmatter, severity: severity}
 	for _, phrase := range slices.Sorted(maps.Keys(glosses)) {
 		abb := strings.TrimSpace(glosses[phrase])
 		p := strings.TrimSpace(phrase)
@@ -95,7 +97,7 @@ func (r *GlossRule) CheckFile(ctx FileCheckContext) []Result {
 				results = append(results, Result{
 					Rule:     r.Name(),
 					Resource: ctx.Resource,
-					Severity: SeverityError,
+					Severity: r.severity,
 					Line:     i + 1,
 					Message:  fmt.Sprintf("avoid %q; use %q instead", matched, recommend(matched, e.abb)),
 				})
