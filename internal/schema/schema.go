@@ -54,6 +54,21 @@ type Block struct {
 	Path        string
 	Attributes  []Attribute
 	ChildBlocks []string // names of immediate child blocks
+
+	// ConfigUnknown is set on blocks synthesized by ExpandObjectAttributes
+	// from an object-typed attribute (list/set/map(object({...})), object)
+	// whose parent is configurable (Optional and/or Required). The cty type
+	// encoding of an object carries no per-field Required/Optional/Computed
+	// metadata, so for a configurable parent we cannot know whether each
+	// field is a user-supplied argument or a provider-computed value. Checks
+	// that enforce Argument-vs-Attribute-Reference placement must not do so
+	// for these blocks. It stays false for objects whose parent is
+	// Computed-only (their fields are necessarily read-only).
+	//
+	// For the full rationale (the proto5 mux constraint that forces the lossy
+	// ElementType: types.ObjectType shape, and the proto6 migration that
+	// resolves it) see docs/rules/object-typed-attributes.md.
+	ConfigUnknown bool
 }
 
 // ResourceSchema holds the flattened block map for a single block-based
@@ -322,12 +337,19 @@ func expandResourceObjectAttributes(rs *ResourceSchema) {
 	}
 	for _, e := range seed {
 		for _, attr := range e.attrs {
-			addObjectAttrBlocks(rs, e.path, attr)
+			addObjectAttrBlocks(rs, e.path, attr, false)
 		}
 	}
 }
 
-func addObjectAttrBlocks(rs *ResourceSchema, parentPath string, attr Attribute) {
+// addObjectAttrBlocks recursively turns an object-typed attribute's children
+// into rs.Blocks entries keyed by dot-path. ancestorConfigurable is true when
+// any attribute on the path from the root to attr is Optional and/or Required;
+// once configurable, everything nested below is treated as configurable too. A
+// block's ConfigUnknown reflects whether the object holding its fields is
+// configurable (so its cty-encoded fields have unknown per-field
+// configurability) rather than Computed-only.
+func addObjectAttrBlocks(rs *ResourceSchema, parentPath string, attr Attribute, ancestorConfigurable bool) {
 	if len(attr.Children) == 0 {
 		return
 	}
@@ -335,11 +357,12 @@ func addObjectAttrBlocks(rs *ResourceSchema, parentPath string, attr Attribute) 
 	if parentPath != "" {
 		childPath = parentPath + "." + attr.Name
 	}
+	configurable := ancestorConfigurable || attr.Optional || attr.Required
 	if _, exists := rs.Blocks[childPath]; !exists {
-		rs.Blocks[childPath] = &Block{Path: childPath, Attributes: attr.Children}
+		rs.Blocks[childPath] = &Block{Path: childPath, Attributes: attr.Children, ConfigUnknown: configurable}
 	}
 	for _, c := range attr.Children {
-		addObjectAttrBlocks(rs, childPath, c)
+		addObjectAttrBlocks(rs, childPath, c, configurable)
 	}
 }
 

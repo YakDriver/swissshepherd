@@ -71,7 +71,14 @@ Set `nested_object_attributes = true` to model those fields as nested blocks. Wh
 - the schema expands each object-typed attribute into dot-path blocks (e.g. `items`, `items.dns_entry`), so `coverage`, `description`, `ordering`, and `labels` apply to their fields at every depth; and
 - the doc parser captures the inline-indented sub-bullets those fields are conventionally documented with (the "Each object has the following attributes:" pattern), matching them against the expanded schema.
 
+The cty type encoding of an object (`list/set/map(object({...}))`, `object`) records field names and types but **no per-field** `Required`/`Optional`/`Computed`. swissshepherd therefore uses the *parent* attribute's configurability:
+
+- when the parent is **Computed-only**, its fields are necessarily read-only and must be documented in `## Attribute Reference` (the usual Read-Only coverage rule); but
+- when the parent is **Optional and/or Required**, each field's configurability is unknowable, so a field may be documented in **either** Argument Reference (as an argument) or Attribute Reference — coverage still requires it to be documented *somewhere*, but no specific section is enforced. (If AWS later migrates such an attribute to a Framework `nested_type`, which does carry per-field flags, section-precise checking resumes automatically.)
+
 This is **off by default** because enabling it surfaces a large number of new findings in docs that previously passed. Roll it out gradually — stage with `ignore_targets` / `skip_blocks`, or enable it once the affected docs are clean.
+
+For the full rationale behind the parent-configurability model and the `ConfigUnknown` flag — why some object fields cannot be classified into a specific section, the proto5 constraint that causes it, and the future-alignment path — see [Object-typed attributes, proto5, and the `ConfigUnknown` escape hatch](object-typed-attributes.md).
 
 ## Schema model: Required / Optional / Read-Only
 
