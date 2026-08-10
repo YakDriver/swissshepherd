@@ -424,7 +424,16 @@ func (r *SchemaDocsRule) checkAttributeCoverage(ctx CheckContext) []Result {
 			// Documented in Attribute Reference always satisfies the rule.
 			// Documented inline in Argument Reference satisfies the rule
 			// only when AllowInlineReadOnly is true.
-			if inAttrs || (allowInline && inArgs) {
+			//
+			// For ConfigUnknown blocks — object-typed attributes whose
+			// configurable parent leaves per-field Required/Optional/Computed
+			// unknowable — documentation in either section satisfies the rule,
+			// since the schema gives us no basis to demand a specific one.
+			if schemaBlock.ConfigUnknown {
+				if inAttrs || inArgs {
+					continue
+				}
+			} else if inAttrs || (allowInline && inArgs) {
 				continue
 			}
 
@@ -435,9 +444,13 @@ func (r *SchemaDocsRule) checkAttributeCoverage(ctx CheckContext) []Result {
 			reported[key] = true
 
 			var msg string
-			if blockPath == "" {
+			switch {
+			case schemaBlock.ConfigUnknown:
+				// Section can't be dictated; report neutrally as undocumented.
+				msg = fmt.Sprintf("attribute %q in block %q is not documented", attr.Name, displayPath(blockPath))
+			case blockPath == "":
 				msg = fmt.Sprintf("Read-Only attribute %q should be documented in Attribute Reference section", attr.Name)
-			} else {
+			default:
 				msg = fmt.Sprintf("Read-Only attribute %q in block %q should be documented in Attribute Reference section", attr.Name, displayPath(blockPath))
 			}
 			results = append(results, Result{

@@ -82,3 +82,84 @@ func TestExpandObjectAttributes_DoesNotOverwrite(t *testing.T) {
 		t.Error(`existing "items" block must not be overwritten`)
 	}
 }
+
+// TestExpandObjectAttributes_ConfigUnknown verifies that the expanded block's
+// ConfigUnknown flag tracks whether the object's parent is configurable
+// (Optional and/or Required) — since a configurable object's cty-encoded
+// fields have unknowable per-field configurability — and that it propagates to
+// nested object blocks. A Computed-only parent's fields are necessarily
+// read-only, so its block stays ConfigUnknown == false.
+func TestExpandObjectAttributes_ConfigUnknown(t *testing.T) {
+	t.Parallel()
+
+	rs := &schema.ResourceSchema{
+		Name: "aws_test",
+		Blocks: map[string]*schema.Block{
+			"": {Path: "", Attributes: []schema.Attribute{
+				// Configurable (Optional+Computed) object → fields unknown.
+				{Name: "scaling_target", Optional: true, Computed: true, Children: []schema.Attribute{
+					{Name: "max_task_count", Computed: true},
+				}},
+				// Optional-only object → fields unknown.
+				{Name: "contacts", Optional: true, Children: []schema.Attribute{
+					{Name: "email", Computed: true},
+				}},
+				// Computed-only output object → fields genuinely read-only,
+				// with a further-nested object that must also stay known.
+				{Name: "items", Computed: true, Children: []schema.Attribute{
+					{Name: "arn", Computed: true},
+					{Name: "dns_entry", Computed: true, Children: []schema.Attribute{
+						{Name: "domain_name", Computed: true},
+					}},
+				}},
+			}},
+		},
+	}
+	schema.ExpandObjectAttributes(&schema.ProviderSchema{
+		Resources: map[string]*schema.ResourceSchema{"aws_test": rs},
+	})
+
+	cases := map[string]bool{
+		"scaling_target":  true,
+		"contacts":        true,
+		"items":           false,
+		"items.dns_entry": false,
+	}
+	for path, want := range cases {
+		b := rs.Blocks[path]
+		if b == nil {
+			t.Fatalf("expected block %q after expansion", path)
+		}
+		if b.ConfigUnknown != want {
+			t.Errorf("block %q ConfigUnknown = %v, want %v", path, b.ConfigUnknown, want)
+		}
+	}
+}
+
+// TestExpandObjectAttributes_ConfigUnknownPropagates confirms that once an
+// ancestor object is configurable, a nested Computed-only sub-object still
+// inherits ConfigUnknown — a configurable block's sub-fields remain unknowable.
+func TestExpandObjectAttributes_ConfigUnknownPropagates(t *testing.T) {
+	t.Parallel()
+
+	rs := &schema.ResourceSchema{
+		Name: "aws_test",
+		Blocks: map[string]*schema.Block{
+			"": {Path: "", Attributes: []schema.Attribute{
+				{Name: "config", Optional: true, Children: []schema.Attribute{
+					// cty sub-object: no flags recovered, defaults Computed:true.
+					{Name: "logging", Computed: true, Children: []schema.Attribute{
+						{Name: "level", Computed: true},
+					}},
+				}},
+			}},
+		},
+	}
+	schema.ExpandObjectAttributes(&schema.ProviderSchema{
+		Resources: map[string]*schema.ResourceSchema{"aws_test": rs},
+	})
+
+	if b := rs.Blocks["config.logging"]; b == nil || !b.ConfigUnknown {
+		t.Errorf(`block "config.logging" ConfigUnknown = %v, want true (configurable ancestor)`, b != nil && b.ConfigUnknown)
+	}
+}

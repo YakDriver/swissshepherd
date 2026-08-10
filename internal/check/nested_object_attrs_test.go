@@ -140,3 +140,80 @@ func TestNestedObject_Off_NoFindings(t *testing.T) {
 		t.Errorf("did not expect nested arn description finding with toggle off:\n  %s", joinMessages(results))
 	}
 }
+
+// configurableObjectSchema builds a resource with `scaling_target`, an
+// Optional+Computed object-typed attribute whose fields (max_task_count) are
+// genuine arguments the schema can't distinguish from computed values.
+func configurableObjectSchema() *schema.ResourceSchema {
+	return &schema.ResourceSchema{
+		Name: "aws_test",
+		Blocks: map[string]*schema.Block{
+			"": {Path: "", Attributes: []schema.Attribute{
+				{Name: "name", Required: true},
+				{Name: "scaling_target", Optional: true, Computed: true, Children: []schema.Attribute{
+					{Name: "max_task_count", Computed: true},
+				}},
+			}},
+		},
+	}
+}
+
+// TestNestedObject_ConfigUnknown_ArgumentReferenceSatisfies: a configurable
+// object's field documented as an (Optional) argument in Argument Reference
+// satisfies coverage — it must NOT be demanded in Attribute Reference (issues
+// #50/#52).
+func TestNestedObject_ConfigUnknown_ArgumentReferenceSatisfies(t *testing.T) {
+	t.Parallel()
+
+	rs := configurableObjectSchema()
+	schema.ExpandObjectAttributes(&schema.ProviderSchema{
+		Resources: map[string]*schema.ResourceSchema{"aws_test": rs},
+	})
+
+	md := "## Argument Reference\n\n" +
+		"* `name` - (Required) Name.\n" +
+		"* `scaling_target` - (Optional) Scaling. Each object has the following attributes:\n" +
+		"    * `max_task_count` - (Optional) Max tasks.\n\n" +
+		"## Attribute Reference\n\n" +
+		"* `id` - ID.\n"
+
+	results := (&check.SchemaDocsRule{}).Check(check.CheckContext{
+		Resource: "aws_test", Schema: rs, Doc: parseCaptured(t, md),
+	})
+
+	if hasMessage(results, `max_task_count`) {
+		t.Errorf("configurable object field in Argument Reference should satisfy coverage, got:\n  %s", joinMessages(results))
+	}
+}
+
+// TestNestedObject_ConfigUnknown_UndocumentedIsNeutral: a genuinely
+// undocumented field of a configurable object is still flagged, but with a
+// neutral "is not documented" message — not a spurious "Attribute Reference"
+// demand.
+func TestNestedObject_ConfigUnknown_UndocumentedIsNeutral(t *testing.T) {
+	t.Parallel()
+
+	rs := configurableObjectSchema()
+	schema.ExpandObjectAttributes(&schema.ProviderSchema{
+		Resources: map[string]*schema.ResourceSchema{"aws_test": rs},
+	})
+
+	// scaling_target documented, but max_task_count omitted entirely.
+	md := "## Argument Reference\n\n" +
+		"* `name` - (Required) Name.\n" +
+		"* `scaling_target` - (Optional) Scaling. Each object has the following attributes:\n" +
+		"    * `other` - (Optional) Unrelated.\n\n" +
+		"## Attribute Reference\n\n" +
+		"* `id` - ID.\n"
+
+	results := (&check.SchemaDocsRule{}).Check(check.CheckContext{
+		Resource: "aws_test", Schema: rs, Doc: parseCaptured(t, md),
+	})
+
+	if !hasMessage(results, `attribute "max_task_count" in block "scaling_target" is not documented`) {
+		t.Errorf("expected neutral not-documented message, got:\n  %s", joinMessages(results))
+	}
+	if hasMessage(results, `Read-Only attribute "max_task_count"`) {
+		t.Errorf("configurable object field must not be demanded in Attribute Reference, got:\n  %s", joinMessages(results))
+	}
+}
