@@ -167,7 +167,7 @@ func (r *SchemaDocsRule) checkCoverage(ctx CheckContext) []Result {
 		}
 
 		docBlockName := leafName(blockPath)
-		docBlocks := findAllDocBlocksIn(ctx.Doc.Blocks(), docBlockName, blockPath)
+		docBlocks := findAllDocBlocksIn(ctx.Doc.Blocks(), docBlockName, blockPath, nil)
 
 		if len(docBlocks) == 0 {
 			if hasConfigurableAttributes(schemaBlock) {
@@ -402,8 +402,8 @@ func (r *SchemaDocsRule) checkAttributeCoverage(ctx CheckContext) []Result {
 			continue
 		}
 
-		argDocs := findAllDocBlocksIn(ctx.Doc.ArgumentBlocks, leafName(blockPath), blockPath)
-		attrDocs := findAllDocBlocksIn(ctx.Doc.AttributeBlocks, leafName(blockPath), blockPath)
+		argDocs := findAllDocBlocksIn(ctx.Doc.ArgumentBlocks, leafName(blockPath), blockPath, ctx.Doc.BlockAnchors)
+		attrDocs := findAllDocBlocksIn(ctx.Doc.AttributeBlocks, leafName(blockPath), blockPath, ctx.Doc.BlockAnchors)
 
 		for _, attr := range schemaBlock.Attributes {
 			// Only Read-Only (computed-only) attributes are covered here.
@@ -763,7 +763,7 @@ func schemaPathsResolvedByDocKey(rs *schema.ResourceSchema, docBlocks map[string
 		// The heading that owns this schema path is its most-specific
 		// match, which findAllDocBlocksIn returns first. Count the path
 		// toward docKey only when docKey is that owner.
-		if best := findAllDocBlocksIn(docBlocks, leafName(path), path); len(best) > 0 && best[0].Name == docKey {
+		if best := findAllDocBlocksIn(docBlocks, leafName(path), path, nil); len(best) > 0 && best[0].Name == docKey {
 			matches = append(matches, path)
 		}
 	}
@@ -1065,7 +1065,7 @@ func findDocBlock(d *doc.Document, leaf string, fullPath string) *doc.DocBlock {
 // reference like `rule[*].probabilistic[*].x` in the attribute section),
 // use findAllDocBlocksIn.
 func findDocBlockIn(blocks map[string]*doc.DocBlock, leaf string, fullPath string) *doc.DocBlock {
-	matches := findAllDocBlocksIn(blocks, leaf, fullPath)
+	matches := findAllDocBlocksIn(blocks, leaf, fullPath, nil)
 	if len(matches) == 0 {
 		return nil
 	}
@@ -1078,7 +1078,13 @@ func findDocBlockIn(blocks map[string]*doc.DocBlock, leaf string, fullPath strin
 // (findDocBlockIn returns the first), but for coverage-style checks the
 // caller should iterate all of them so attributes documented under
 // alternative key shapes (e.g. leaf vs full path) are all counted.
-func findAllDocBlocksIn(blocks map[string]*doc.DocBlock, leaf string, fullPath string) []*doc.DocBlock {
+//
+// anchors (Document.BlockAnchors) enables shared-subsection resolution: when
+// the parent block documents this leaf with a bullet that links to another
+// subsection (`management` - ... See [Endpoint](#endpoint)), that subsection's
+// block is included too. This is precise — anchored on the exact parent+leaf
+// bullet — so it never mis-credits sibling paths. Pass nil to disable.
+func findAllDocBlocksIn(blocks map[string]*doc.DocBlock, leaf string, fullPath string, anchors map[string]string) []*doc.DocBlock {
 	if fullPath == "" {
 		if b := blocks[""]; b != nil {
 			return []*doc.DocBlock{b}
@@ -1109,6 +1115,26 @@ func findAllDocBlocksIn(blocks map[string]*doc.DocBlock, leaf string, fullPath s
 		}
 	}
 	add(blocks[leaf])
+
+	// Shared-subsection link: locate the bullet for this leaf in the parent
+	// block and, if it links to a differently-named subsection, include that
+	// subsection's block. Only the leaf's own bullet is followed, so a
+	// structurally-identical sibling (endpoints.management vs
+	// endpoints.intercluster) each resolves to the shared block, while
+	// unrelated paths are untouched. The parent of a single-segment path is
+	// the root block ("").
+	if anchors != nil {
+		parent := strings.Join(parts[:len(parts)-1], ".")
+		for _, pb := range findAllDocBlocksIn(blocks, leafName(parent), parent, nil) {
+			for _, a := range pb.Attributes {
+				if a.Name == leaf && a.LinkAnchor != "" {
+					if target, ok := anchors[a.LinkAnchor]; ok && target != leaf {
+						add(blocks[target])
+					}
+				}
+			}
+		}
+	}
 	return matches
 }
 
@@ -1223,6 +1249,11 @@ func isListProse(line string) bool {
 		return true
 	}
 	if strings.HasPrefix(line, "~>") || strings.HasPrefix(line, "->") || strings.HasPrefix(line, "!>") {
+		return true
+	}
+	// A legacy nested-block lead-in ("The `x[0].y[0]` block also exports:")
+	// introduces a block, like a heading — not an interruption.
+	if _, ok := doc.NestedBlockLeadIn(line); ok {
 		return true
 	}
 	return false

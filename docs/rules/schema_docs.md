@@ -80,6 +80,35 @@ This is **off by default** because enabling it surfaces a large number of new fi
 
 For the full rationale behind the parent-configurability model and the `ConfigUnknown` flag — why some object fields cannot be classified into a specific section, the proto5 constraint that causes it, and the future-alignment path — see [Object-typed attributes, proto5, and the `ConfigUnknown` escape hatch](object-typed-attributes.md).
 
+### Nested fields documented under a shared or prose-introduced subsection
+
+Two long-standing documentation conventions attach a nested block's fields to it without a dedicated per-path heading. When `nested_object_attributes` is enabled, coverage understands both:
+
+- **Shared subsection.** Structurally-identical sibling blocks are often documented once under a single subsection that each sibling links to, e.g.
+
+  ```markdown
+  * `management` - Endpoint ... See [Endpoint](#endpoint).
+  * `intercluster` - Endpoint ... See [Endpoint](#endpoint).
+
+  #### Endpoint
+
+  * `dns_name` - ...
+  * `ip_addresses` - ...
+  ```
+
+  Coverage follows each sibling bullet's in-page link to the shared subsection, so both `endpoints.management` and `endpoints.intercluster` are credited with the `Endpoint` block's fields. The link is followed only for the sibling's own bullet, so unrelated paths are never mis-credited. Siblings with different names sharing one subsection (e.g. `available_labels`/`consumed_labels` under `### Labels`) work the same way.
+
+- **Legacy indexed prose lead-in.** Older docs introduce a nested block's fields with a sentence instead of a heading:
+
+  ```markdown
+  The `catalog_properties[0].data_lake_access_properties[0]` block also exports:
+
+  * `managed_workgroup_name` - ...
+  * `status_message` - ...
+  ```
+
+  swissshepherd recognizes this lead-in (a backtick-quoted dotted/indexed path followed by `block ... supports:`/`exports:`) as a block boundary, keying the following bullets to the dot-path — just as a `#### catalog_properties.data_lake_access_properties` heading would. This avoids a cascade of misattributed coverage, ordering, and "list interrupted" findings.
+
 ## Schema model: Required / Optional / Read-Only
 
 The `coverage` sub-check enforces presence of every schema attribute at every depth of nesting. swissshepherd uses the same three-category mental model as tfplugindocs:
