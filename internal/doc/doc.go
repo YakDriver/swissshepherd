@@ -23,7 +23,8 @@ type DocAttribute struct {
 	ReadOnly    bool
 	Deprecated  bool
 	Description string
-	Line        int // 1-based line number in the source file
+	Line        int    // 1-based line number in the source file
+	LinkAnchor  string // target of a `[text](#anchor)` link in the item, without the leading '#'
 }
 
 // MalformedAttr records an attribute name with a formatting issue and its location.
@@ -331,7 +332,12 @@ type Document struct {
 	ArgumentBlocks  map[string]*DocBlock
 	AttributeBlocks map[string]*DocBlock
 	Sections        *Sections
-	source          []byte
+	// BlockAnchors maps a subsection heading's GitHub anchor slug to the
+	// primary block name it defines, so a bullet that links to a shared
+	// subsection (`management` - ... See [Endpoint](#endpoint)) can be
+	// resolved to that subsection's documented attributes.
+	BlockAnchors map[string]string
+	source       []byte
 }
 
 // Source returns the raw markdown source bytes.
@@ -524,6 +530,12 @@ func extractBlocks(tree ast.Node, source []byte, doc *Document, templates Headin
 	var inArguments, inAttributes bool
 	var sawRequiredByline bool // true between a "required:" byline and the next list
 
+	// blockAnchors maps a heading's GitHub anchor slug to the primary block
+	// name it defines, so sibling bullets that link to a shared subsection
+	// (e.g. `management` - ... See [Endpoint](#endpoint)) can be resolved to
+	// that subsection's documented attributes.
+	blockAnchors := map[string]string{}
+
 	// closeSection finalizes the current section's EndOffset.
 	closeSection := func(endOffset int) {
 		if currentSection != nil && currentSection.EndOffset == 0 {
@@ -630,6 +642,11 @@ func extractBlocks(tree ast.Node, source []byte, doc *Document, templates Headin
 				if len(blockNames) > 0 {
 					currentBlockName = blockNames[0]
 					sawRequiredByline = false
+					if slug := headingAnchorSlug(headingText); slug != "" {
+						if _, seen := blockAnchors[slug]; !seen {
+							blockAnchors[slug] = blockNames[0]
+						}
+					}
 					for _, bn := range blockNames {
 						if inArguments {
 							ensureBlock(doc.ArgumentBlocks, bn, headingText)
@@ -671,6 +688,22 @@ func extractBlocks(tree ast.Node, source []byte, doc *Document, templates Headin
 				paraText := strings.ToLower(strings.TrimSpace(string(n.Text(source))))
 				if strings.Contains(paraText, "arguments are required:") {
 					sawRequiredByline = true
+				}
+			}
+			// Detect a legacy prose lead-in that introduces a nested block's
+			// attributes without a heading (e.g. "The `x[0].y[0]` block also
+			// exports:"). Route the following list to that dot-path block,
+			// exactly as a `#### x.y` heading would.
+			if inArguments || inAttributes {
+				if path, ok := NestedBlockLeadIn(string(n.Text(source))); ok {
+					currentBlockName = path
+					currentBlockAliases = nil
+					sawRequiredByline = false
+					target := doc.ArgumentBlocks
+					if inAttributes {
+						target = doc.AttributeBlocks
+					}
+					ensureBlock(target, path, "")
 				}
 			}
 			return ast.WalkSkipChildren, nil
@@ -758,6 +791,10 @@ func extractBlocks(tree ast.Node, source []byte, doc *Document, templates Headin
 
 	// Finalize the last section's EndOffset.
 	closeSection(len(source))
+
+	// Expose the heading anchor map so coverage can resolve sibling bullets
+	// that point at a shared subsection (see Document.BlockAnchors).
+	doc.BlockAnchors = blockAnchors
 }
 
 // parseSectionListItem extracts a name/value pair from a list item in a
@@ -940,6 +977,7 @@ func parseListItem(li *ast.ListItem, source []byte) DocAttribute {
 	}
 
 	attr := DocAttribute{Name: name}
+	attr.LinkAnchor = firstAnchorLink(li)
 
 	if len(parts) == 2 {
 		desc := parts[1]
@@ -987,6 +1025,92 @@ type NestedRef struct {
 	Required    bool
 	Optional    bool
 	ReadOnly    bool
+}
+
+// firstAnchorLink returns the target of the first in-page `[text](#anchor)`
+// link found in a list item (without the leading '#'), or "" if none. Used to
+// resolve sibling bullets that point at a shared subsection, e.g.
+// `management` - ... See [Endpoint](#endpoint).
+func firstAnchorLink(li *ast.ListItem) string {
+	var anchor string
+	_ = ast.Walk(li, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
+		if !entering || anchor != "" {
+			return ast.WalkContinue, nil
+		}
+		if link, ok := n.(*ast.Link); ok {
+			if dest := string(link.Destination); strings.HasPrefix(dest, "#") {
+				anchor = strings.TrimPrefix(dest, "#")
+				return ast.WalkStop, nil
+			}
+		}
+		return ast.WalkContinue, nil
+	})
+	return anchor
+}
+
+// headingAnchorSlug computes the GitHub-style anchor slug for a heading's text
+// (lowercase; spaces become hyphens; other punctuation dropped). Backticks are
+// already stripped by goldmark's Text(). For example "Endpoint" -> "endpoint",
+// "endpoints Block" -> "endpoints-block".
+func headingAnchorSlug(s string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(s) {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '-':
+			b.WriteRune(r)
+		case r == ' ':
+			b.WriteRune('-')
+		}
+	}
+	return b.String()
+}
+
+// normalizeDotPath strips array indexers ([*], [0], [N]) from each segment of a
+// dot path and validates that each segment is a bare identifier. It returns the
+// normalized path and true, e.g.
+// "catalog_properties[0].data_lake_access_properties[0]" ->
+// "catalog_properties.data_lake_access_properties".
+func normalizeDotPath(raw string) (string, bool) {
+	segments := strings.Split(raw, ".")
+	for i, seg := range segments {
+		if j := strings.IndexAny(seg, "[*"); j >= 0 {
+			seg = seg[:j]
+		}
+		if seg == "" || strings.ContainsAny(seg, " \t`") {
+			return "", false
+		}
+		segments[i] = seg
+	}
+	return strings.Join(segments, "."), true
+}
+
+// NestedBlockLeadIn recognizes a legacy prose sentence that introduces a nested
+// block's attributes in place of a heading, e.g.
+//
+//	The `catalog_properties[0].data_lake_access_properties[0]` block also exports:
+//
+// It returns the normalized dot-path (array indexers stripped) and true. Only
+// dotted or indexed paths are recognized — single-name blocks use headings, and
+// requiring a "." or "[" keeps ordinary prose from being treated as a block
+// boundary. The trailing "supports"/"exports" + ":" signals that a list follows.
+func NestedBlockLeadIn(text string) (string, bool) {
+	s := strings.TrimSpace(strings.ReplaceAll(text, "`", ""))
+	if !strings.HasSuffix(s, ":") {
+		return "", false
+	}
+	fields := strings.Fields(s)
+	if len(fields) < 3 || !strings.EqualFold(fields[0], "the") || !strings.EqualFold(fields[2], "block") {
+		return "", false
+	}
+	lower := strings.ToLower(s)
+	if !strings.Contains(lower, "support") && !strings.Contains(lower, "export") {
+		return "", false
+	}
+	token := fields[1]
+	if !strings.ContainsAny(token, ".[") {
+		return "", false
+	}
+	return normalizeDotPath(token)
 }
 
 // parseNestedRef detects list items whose name is a dot-notation reference
