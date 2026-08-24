@@ -26,6 +26,7 @@ import (
 // spans, and URLs so real configuration and identifiers are left alone.
 type GlossRule struct {
 	entries         []glossEntry
+	gate            *regexp.Regexp
 	skipFrontmatter bool
 	severity        Severity
 }
@@ -42,6 +43,7 @@ type glossEntry struct {
 // severity of the findings it emits.
 func NewGlossRule(glosses map[string]string, skipFrontmatter bool, severity Severity) *GlossRule {
 	r := &GlossRule{skipFrontmatter: skipFrontmatter, severity: severity}
+	var phrases []string
 	for _, phrase := range slices.Sorted(maps.Keys(glosses)) {
 		abb := strings.TrimSpace(glosses[phrase])
 		p := strings.TrimSpace(phrase)
@@ -49,8 +51,24 @@ func NewGlossRule(glosses map[string]string, skipFrontmatter bool, severity Seve
 			continue
 		}
 		r.entries = append(r.entries, glossEntry{re: glossRegexp(p, abb), abb: abb})
+		phrases = append(phrases, regexp.QuoteMeta(p))
+	}
+	if len(phrases) > 0 {
+		r.gate = glossGateRegexp(phrases)
 	}
 	return r
+}
+
+// glossGateRegexp builds a single combined pre-filter that matches the
+// phrase-portion of any configured entry (case-insensitively, with the same
+// optional leading "Amazon "/"AWS " and trailing plural "s"). A line that
+// fails this gate cannot match any entry regex, so the per-entry scan — and
+// the masking that precedes it — can be skipped entirely. Because masking only
+// blanks text (never introduces it), running the gate against the raw line is a
+// sound superset of running each entry against the masked line: no match is
+// ever missed. The phrases are already regexp.QuoteMeta-escaped.
+func glossGateRegexp(quotedPhrases []string) *regexp.Regexp {
+	return regexp.MustCompile(`(?i)\b(?:amazon |aws )?(?:` + strings.Join(quotedPhrases, "|") + `)s?\b`)
 }
 
 func (r *GlossRule) Name() string { return "banned_glosses" }
@@ -87,6 +105,14 @@ func (r *GlossRule) CheckFile(ctx FileCheckContext) []Result {
 			continue
 		}
 		if inFence {
+			continue
+		}
+
+		// Fast reject: if no configured phrase can appear on this line, skip
+		// the masking and per-entry scan. Gating on the raw line is safe
+		// because masking only blanks characters — it never creates a match
+		// that the raw line lacked.
+		if !r.gate.MatchString(raw) {
 			continue
 		}
 
