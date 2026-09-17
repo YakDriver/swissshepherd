@@ -201,6 +201,198 @@ func TestLabels_MisplacementReportsHeadingLine(t *testing.T) {
 	t.Fatal("expected a misplacement finding")
 }
 
+// Point 1: a child block whose only field is Optional+Computed is not a
+// configurable argument block (the placement rule excludes Optional+Computed),
+// so a parent bullet referencing it must NOT be flagged as misplaced. Guards
+// against reusing the coverage helper (hasConfigurableAttributes), which counts
+// Optional+Computed.
+func TestLabels_ChildBlockOptionalComputedOnlyNotMisplaced(t *testing.T) {
+	t.Parallel()
+
+	src := `# Resource: aws_thing
+
+## Argument Reference
+
+* ` + "`name`" + ` - (Required) Name.
+
+## Attribute Reference
+
+### ` + "`wrapper`" + ` Block
+
+* ` + "`settings`" + ` - (Optional) Settings. See [` + "`settings`" + ` Block](#settings-block).
+`
+	rs := &schema.ResourceSchema{Blocks: map[string]*schema.Block{
+		"":        {Attributes: []schema.Attribute{{Name: "name", Required: true}}, ChildBlocks: []string{"wrapper"}},
+		"wrapper": {Path: "wrapper", ChildBlocks: []string{"settings"}},
+		// settings' only field is Optional+Computed — not a pure-config arg.
+		"wrapper.settings": {Path: "wrapper.settings", Attributes: []schema.Attribute{{Name: "mode", Optional: true, Computed: true}}},
+	}}
+
+	results := labelResults(t, src, rs)
+	if hasMsg(results, "move this subsection to Argument Reference") {
+		t.Errorf("child block with only Optional+Computed field must not be flagged misplaced: %+v", results)
+	}
+}
+
+// Point 2: a structural child block with no direct configurable attributes but
+// a configurable descendant IS a configurable reference. When that subsection
+// is moved, the parent reference bullet must be suppressed (no redundant
+// strip-label alongside the move error).
+func TestLabels_StructuralChildWithConfigurableDescendantSuppressed(t *testing.T) {
+	t.Parallel()
+
+	src := `# Resource: aws_thing
+
+## Argument Reference
+
+* ` + "`name`" + ` - (Required) Name.
+
+## Attribute Reference
+
+* ` + "`notification`" + ` - (Optional) Notif. See [` + "`notification`" + ` Block](#notification-block).
+
+### ` + "`notification`" + ` Block
+
+* ` + "`setting`" + ` - (Optional) Setting. See [` + "`setting`" + ` Block](#setting-block).
+`
+	rs := &schema.ResourceSchema{Blocks: map[string]*schema.Block{
+		"": {Attributes: []schema.Attribute{{Name: "name", Required: true}}, ChildBlocks: []string{"notification"}},
+		// notification has NO direct attributes; its config lives in a descendant.
+		"notification":         {Path: "notification", ChildBlocks: []string{"setting"}},
+		"notification.setting": {Path: "notification.setting", Attributes: []schema.Attribute{{Name: "threshold", Required: true}}},
+	}}
+
+	results := labelResults(t, src, rs)
+	if !hasMsg(results, `block "notification" is documented under Attribute Reference but is a configurable argument block`) {
+		t.Errorf("structural block with configurable descendant must be flagged misplaced: %+v", results)
+	}
+	if hasMsg(results, `attribute "notification" in block "(root)" should not have`) {
+		t.Errorf("parent reference bullet to the moved block must be suppressed, not double-reported: %+v", results)
+	}
+}
+
+// Point 3: a moved block that mixes a pure-config field with a Computed field
+// carrying an erroneous label must emit the move error AND retain the
+// strip-label guidance for the Computed field — the move only accounts for the
+// configurable fields.
+func TestLabels_MovedBlockRetainsStripLabelForComputedField(t *testing.T) {
+	t.Parallel()
+
+	src := `# Resource: aws_thing
+
+## Argument Reference
+
+* ` + "`name`" + ` - (Required) Name.
+
+## Attribute Reference
+
+### ` + "`notification`" + ` Block
+
+* ` + "`comparison_operator`" + ` - (Required) Operator.
+* ` + "`state`" + ` - (Optional) State.
+`
+	rs := &schema.ResourceSchema{Blocks: map[string]*schema.Block{
+		"": {Attributes: []schema.Attribute{{Name: "name", Required: true}}, ChildBlocks: []string{"notification"}},
+		"notification": {Path: "notification", Attributes: []schema.Attribute{
+			{Name: "comparison_operator", Required: true}, // pure-config → covered by move
+			{Name: "state", Computed: true},               // computed-only, erroneously labeled
+		}},
+	}}
+
+	results := labelResults(t, src, rs)
+	if !hasMsg(results, `block "notification" is documented under Attribute Reference but is a configurable argument block`) {
+		t.Errorf("expected move error for notification block: %+v", results)
+	}
+	if !hasMsg(results, `attribute "state" in block "notification" should not have (Optional) label`) {
+		t.Errorf("computed field's strip-label guidance must be retained inside a moved block: %+v", results)
+	}
+	if hasMsg(results, `attribute "comparison_operator"`) {
+		t.Errorf("pure-config field must not get a strip-label (the move covers it): %+v", results)
+	}
+}
+
+// Point 4: a moved outer.notification must not suppress an unrelated
+// configurable notification child at the root — suppression matches the full
+// resolved schema path, not the leaf name.
+func TestLabels_MovedPathDoesNotSuppressUnrelatedLeaf(t *testing.T) {
+	t.Parallel()
+
+	templates := doc.HeadingTemplates{"`{Path}` Block", "`{Block}` Block", "{Block} Block", "{Block}", "{Title}"}
+
+	src := `# Resource: aws_thing
+
+## Argument Reference
+
+* ` + "`name`" + ` - (Required) Name.
+
+## Attribute Reference
+
+* ` + "`notification`" + ` - (Optional) Root notif. See [` + "`notification`" + ` Block](#notification-block).
+
+### ` + "`outer.notification`" + ` Block
+
+* ` + "`comparison_operator`" + ` - (Required) Operator.
+`
+	rs := &schema.ResourceSchema{Blocks: map[string]*schema.Block{
+		"": {Attributes: []schema.Attribute{{Name: "name", Required: true}}, ChildBlocks: []string{"notification", "outer"}},
+		// root's own notification child is configurable but NOT documented as a
+		// subsection here, so it is never marked moved.
+		"notification": {Path: "notification", Attributes: []schema.Attribute{{Name: "threshold", Required: true}}},
+		"outer":        {Path: "outer", ChildBlocks: []string{"notification"}},
+		// The moved block is outer.notification — same leaf, different path.
+		"outer.notification": {Path: "outer.notification", Attributes: []schema.Attribute{{Name: "comparison_operator", Required: true}}},
+	}}
+
+	d, err := doc.ParseWithTemplates([]byte(src), "aws_thing", templates)
+	if err != nil {
+		t.Fatal(err)
+	}
+	results := (&check.SchemaDocsRule{IgnoreDeprecated: true}).Check(
+		check.CheckContext{Resource: "aws_thing", Schema: rs, Doc: d})
+
+	if !hasMsg(results, `block "outer.notification" is documented under Attribute Reference but is a configurable argument block`) {
+		t.Errorf("expected outer.notification to be flagged misplaced: %+v", results)
+	}
+	if !hasMsg(results, `attribute "notification" in block "(root)" should not have (Optional) label`) {
+		t.Errorf("unrelated root notification reference must not be suppressed by a moved same-leaf path: %+v", results)
+	}
+}
+
+// Point 5: a child block reference is resolved relative to the parent's schema
+// path, not by a global leaf lookup. With a same-leaf block elsewhere in the
+// tree (which makes a global leaf lookup ambiguous and would previously miss
+// the misplacement), the nested block must still be detected as configurable.
+func TestLabels_ChildResolvedRelativeToParent(t *testing.T) {
+	t.Parallel()
+
+	src := `# Resource: aws_thing
+
+## Argument Reference
+
+* ` + "`name`" + ` - (Required) Name.
+
+## Attribute Reference
+
+### ` + "`outer`" + ` Block
+
+* ` + "`notification`" + ` - (Optional) Notif. See [` + "`notification`" + ` Block](#notification-block).
+`
+	rs := &schema.ResourceSchema{Blocks: map[string]*schema.Block{
+		"":      {Attributes: []schema.Attribute{{Name: "name", Required: true}}, ChildBlocks: []string{"outer", "notification"}},
+		"outer": {Path: "outer", ChildBlocks: []string{"notification"}},
+		// outer.notification is configurable...
+		"outer.notification": {Path: "outer.notification", Attributes: []schema.Attribute{{Name: "comparison_operator", Required: true}}},
+		// ...and a same-leaf root-level notification also exists, making a
+		// global leaf lookup ambiguous.
+		"notification": {Path: "notification", Attributes: []schema.Attribute{{Name: "foo", Computed: true}}},
+	}}
+
+	results := labelResults(t, src, rs)
+	if !hasMsg(results, `block "outer" is documented under Attribute Reference but is a configurable argument block`) {
+		t.Errorf("nested child must be resolved relative to parent path despite same-leaf ambiguity: %+v", results)
+	}
+}
+
 // A configurable *scalar* attribute that shares its leaf name with a moved
 // child block (but is itself an ordinary field, not a reference to that block)
 // must not be suppressed. This exercises the root block, which is never marked

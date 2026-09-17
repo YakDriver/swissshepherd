@@ -1024,7 +1024,7 @@ func (r *SchemaDocsRule) checkLabels(ctx CheckContext) []Result {
 	// Pass 1: find misplaced nested block subsections — a block whose own
 	// labeled attributes are configurable arguments in the schema.
 	movedBlocks := make(map[string]bool)
-	movedLeaves := make(map[string]bool)
+	movedSchemaPaths := make(map[string]bool)
 	misplacedLine := make(map[string]int)
 	for blockName, block := range ctx.Doc.AttributeBlocks {
 		if blockName == "" {
@@ -1033,7 +1033,13 @@ func (r *SchemaDocsRule) checkLabels(ctx CheckContext) []Result {
 		for _, attr := range block.Attributes {
 			if (attr.Required || attr.Optional) && configurableInSchema(ctx.Schema, blockName, attr.Name) {
 				movedBlocks[blockName] = true
-				movedLeaves[leafName(blockName)] = true
+				// Record the resolved schema path so a parent reference
+				// bullet can be matched to THIS block precisely, rather than
+				// by leaf name (which collapses foo.notification,
+				// bar.notification, and a root notification together).
+				if sb, ok := resolveSchemaBlock(ctx.Schema, blockName); ok {
+					movedSchemaPaths[sb.Path] = true
+				}
 				// Point at the subsection heading when known so the
 				// "move this subsection" message lands on the line the
 				// author needs to act on; fall back to the first
@@ -1048,12 +1054,15 @@ func (r *SchemaDocsRule) checkLabels(ctx CheckContext) []Result {
 		}
 	}
 
-	// Pass 2: emit one "move this subsection" finding per misplaced block, and
-	// for every other labeled attribute keep the original strip-label guidance
-	// — except a reference bullet that points at a block we are already moving,
-	// which would be redundant. Suppression is keyed by leaf so a parent bullet
-	// (`notification`) is matched to a subsection that may be keyed by a full
-	// dot-path (`parent.notification`).
+	// Pass 2: emit one "move this subsection" finding per misplaced block. For
+	// a moved block, still keep the strip-label guidance for any labeled field
+	// that is NOT a pure-config argument (e.g. a Computed field carrying an
+	// erroneous label) — the move only accounts for the genuinely configurable
+	// fields, so dropping the rest would lose the read-only-label guidance. For
+	// non-moved blocks, keep the original strip-label guidance for every
+	// labeled attribute, except a reference bullet that points at a block we
+	// are already moving (matched by resolved schema path), which would be
+	// redundant.
 	for blockName, block := range ctx.Doc.AttributeBlocks {
 		if movedBlocks[blockName] {
 			results = append(results, Result{
@@ -1062,35 +1071,52 @@ func (r *SchemaDocsRule) checkLabels(ctx CheckContext) []Result {
 				Block:   blockName,
 				Line:    misplacedLine[blockName],
 			})
+			for _, attr := range block.Attributes {
+				if !(attr.Required || attr.Optional) {
+					continue
+				}
+				// The move accounts for pure-config args; retain strip-label
+				// guidance only for labeled fields that are not configurable
+				// (e.g. a Computed field with an erroneous label).
+				if configurableInSchema(ctx.Schema, blockName, attr.Name) {
+					continue
+				}
+				results = append(results, stripLabelResult(r, ctx, blockName, attr))
+			}
 			continue
 		}
 		for _, attr := range block.Attributes {
 			if !(attr.Required || attr.Optional) {
 				continue
 			}
-			if movedLeaves[leafName(attr.Name)] && referencesConfigurableChildBlock(ctx.Schema, blockName, attr.Name) {
-				// Redundant reference bullet for a block already reported as
-				// misplaced: it names a moved block AND is itself a
-				// configurable child-block reference here. A scalar attribute
-				// (computed-only, or a configurable scalar that merely shares
-				// the leaf name) is NOT a block reference, so it is not
-				// suppressed and keeps its own finding.
+			// Suppress a redundant reference bullet only when it names an
+			// immediate child block whose resolved schema path is one we are
+			// already moving. Matching the full path (not the leaf) ensures a
+			// moved foo.notification does not silence an unrelated
+			// notification child elsewhere.
+			if cp, ok := childBlockSchemaPath(ctx.Schema, blockName, attr.Name); ok && movedSchemaPaths[cp] {
 				continue
 			}
-			label := "(Optional)"
-			if attr.Required {
-				label = "(Required)"
-			}
-			results = append(results, Result{
-				Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityWarning,
-				Message: fmt.Sprintf("attribute %q in block %q should not have %s label", attr.Name, displayPath(blockName), label),
-				Block:   blockName,
-				Line:    attr.Line,
-			})
+			results = append(results, stripLabelResult(r, ctx, blockName, attr))
 		}
 	}
 
 	return results
+}
+
+// stripLabelResult builds the "attribute should not have (Required)/(Optional)
+// label" warning for a labeled attribute documented under Attribute Reference.
+func stripLabelResult(r *SchemaDocsRule, ctx CheckContext, blockName string, attr doc.DocAttribute) Result {
+	label := "(Optional)"
+	if attr.Required {
+		label = "(Required)"
+	}
+	return Result{
+		Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityWarning,
+		Message: fmt.Sprintf("attribute %q in block %q should not have %s label", attr.Name, displayPath(blockName), label),
+		Block:   blockName,
+		Line:    attr.Line,
+	}
 }
 
 // --- Shared helpers ---
@@ -1154,24 +1180,75 @@ func configurableInSchema(rs *schema.ResourceSchema, docBlockName, attrName stri
 	return referencesConfigurableChildBlock(rs, docBlockName, attrName)
 }
 
-// referencesConfigurableChildBlock reports whether attrName names a nested
-// child block of docBlockName's schema block that is itself a configurable
-// argument block. This is stricter than configurableInSchema: it excludes
-// scalar attributes. Reference-bullet suppression uses it so that a scalar
-// attribute merely sharing a moved block's leaf name (e.g. a configurable
-// `notification` flag in a different block) is not mistaken for the moved
-// block's reference bullet and silently stripped of its own finding.
+// referencesConfigurableChildBlock reports whether attrName names an immediate
+// child block of docBlockName's schema block that is a configurable argument
+// block — itself, or via any descendant block, carrying a purely configurable
+// (Required or Optional and NOT Computed) attribute. It excludes scalar
+// attributes, so reference-bullet handling never mistakes a scalar sharing a
+// block's leaf name for a block reference.
+//
+// The child is resolved relative to the parent's schema path — schema child
+// block names are immediate/short (schema.Block.ChildBlocks), so a global leaf
+// lookup could wrongly select a same-named block elsewhere in the tree. The
+// pure-configurable predicate (not the coverage-oriented
+// hasConfigurableAttributes, which counts Optional+Computed) matches the
+// placement rule's own guard, and the descendant traversal catches structural
+// blocks whose only configurable content lives in nested blocks. ConfigUnknown
+// blocks are treated as non-configurable so an ERROR never fires on a guess.
 func referencesConfigurableChildBlock(rs *schema.ResourceSchema, docBlockName, attrName string) bool {
-	sb, ok := resolveSchemaBlock(rs, docBlockName)
-	if !ok || sb.ConfigUnknown {
+	childPath, ok := childBlockSchemaPath(rs, docBlockName, attrName)
+	if !ok {
 		return false
 	}
+	return blockTreeHasPureConfigurable(rs, childPath, make(map[string]bool))
+}
+
+// childBlockSchemaPath resolves the full schema dot-path of the immediate child
+// block named attrName under docBlockName's schema block, resolving relative to
+// the parent's path rather than by a global leaf lookup. Returns false when the
+// parent cannot be resolved, is ConfigUnknown, or has no such immediate child.
+func childBlockSchemaPath(rs *schema.ResourceSchema, docBlockName, attrName string) (string, bool) {
+	sb, ok := resolveSchemaBlock(rs, docBlockName)
+	if !ok || sb.ConfigUnknown {
+		return "", false
+	}
 	for _, child := range sb.ChildBlocks {
-		if leafName(child) == attrName {
-			if cb, ok := resolveSchemaBlock(rs, child); ok && !cb.ConfigUnknown {
-				return hasConfigurableAttributes(cb)
+		if child == attrName {
+			if sb.Path == "" {
+				return child, true
 			}
-			return false
+			return sb.Path + "." + child, true
+		}
+	}
+	return "", false
+}
+
+// blockTreeHasPureConfigurable reports whether the schema block at path, or any
+// descendant block, has a purely configurable (Required or Optional and NOT
+// Computed) attribute. Blocks are looked up by exact full path (unambiguous),
+// ConfigUnknown blocks are skipped, and visited guards against pathological
+// cycles.
+func blockTreeHasPureConfigurable(rs *schema.ResourceSchema, path string, visited map[string]bool) bool {
+	if rs == nil || visited[path] {
+		return false
+	}
+	visited[path] = true
+	b, ok := rs.Blocks[path]
+	if !ok || b.ConfigUnknown {
+		return false
+	}
+	for _, a := range b.Attributes {
+		if (a.Required || a.Optional) && !a.Computed {
+			return true
+		}
+	}
+	for _, child := range b.ChildBlocks {
+		childPath := child
+		if path != "" {
+			childPath = path + "." + child
+		}
+		if blockTreeHasPureConfigurable(rs, childPath, visited) {
+			return true
 		}
 	}
 	return false
