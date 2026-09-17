@@ -1068,8 +1068,13 @@ func (r *SchemaDocsRule) checkLabels(ctx CheckContext) []Result {
 			if !(attr.Required || attr.Optional) {
 				continue
 			}
-			if movedLeaves[leafName(attr.Name)] {
-				// Reference bullet for a block already reported as misplaced.
+			if movedLeaves[leafName(attr.Name)] && configurableInSchema(ctx.Schema, blockName, attr.Name) {
+				// Redundant reference bullet for a block already reported as
+				// misplaced: it names a moved block AND is itself a
+				// configurable argument here (a child-block reference). A
+				// computed-only scalar that merely shares the leaf name is not
+				// configurable, so it is NOT suppressed and still earns its
+				// "should not have label" warning.
 				continue
 			}
 			label := "(Optional)"

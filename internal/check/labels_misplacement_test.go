@@ -201,46 +201,43 @@ func TestLabels_MisplacementReportsHeadingLine(t *testing.T) {
 	t.Fatal("expected a misplacement finding")
 }
 
-// When a misplaced subsection is keyed by a full dot-path, the redundant parent
-// reference bullet (keyed by leaf name) must still be suppressed — verifying the
-// leaf-normalized suppression rather than an exact-key match.
-func TestLabels_DotPathKeyedSuppressesLeafReference(t *testing.T) {
+// A computed-only scalar attribute that merely shares its leaf name with a
+// moved block must still receive its "should not have label" warning — the
+// reference-bullet suppression is gated on the attribute actually being a
+// configurable reference, not on the name alone.
+func TestLabels_SharedLeafComputedScalarNotSuppressed(t *testing.T) {
 	t.Parallel()
-
-	templates := doc.HeadingTemplates{"`{Path}` Block", "`{Block}` Block", "{Block} Block", "{Block}", "{Title}"}
 
 	src := `# Resource: aws_thing
 
 ## Argument Reference
 
-* ` + "`setting`" + ` - (Required) Setting. See [` + "`setting`" + ` Block](#setting-block).
+* ` + "`name`" + ` - (Required) Name.
 
 ## Attribute Reference
 
-* ` + "`notification`" + ` - (Optional) Notification. See below.
-
-### ` + "`setting.notification`" + ` Block
+### ` + "`notification`" + ` Block
 
 * ` + "`comparison_operator`" + ` - (Required) Operator.
+
+### ` + "`other`" + ` Block
+
+* ` + "`notification`" + ` - (Optional) Whether notifications are enabled.
 `
 	rs := &schema.ResourceSchema{Blocks: map[string]*schema.Block{
-		"":                     {Attributes: []schema.Attribute{{Name: "name", Required: true}}, ChildBlocks: []string{"setting"}},
-		"setting":              {Path: "setting", ChildBlocks: []string{"notification"}},
-		"setting.notification": {Path: "setting.notification", Attributes: []schema.Attribute{{Name: "comparison_operator", Required: true}}},
+		"":             {Attributes: []schema.Attribute{{Name: "name", Required: true}}, ChildBlocks: []string{"notification", "other"}},
+		"notification": {Path: "notification", Attributes: []schema.Attribute{{Name: "comparison_operator", Required: true}}},
+		// "other" is not misplaced itself; its "notification" is a computed-only
+		// scalar that shares the leaf name of the moved block.
+		"other": {Path: "other", Attributes: []schema.Attribute{{Name: "notification", Computed: true}}},
 	}}
 
-	d, err := doc.ParseWithTemplates([]byte(src), "aws_thing", templates)
-	if err != nil {
-		t.Fatal(err)
+	results := labelResults(t, src, rs)
+	if !hasMsg(results, `block "notification" is documented under Attribute Reference but is a configurable argument block`) {
+		t.Errorf("expected notification block to be reported as misplaced; got: %+v", results)
 	}
-	results := (&check.SchemaDocsRule{IgnoreDeprecated: true}).Check(
-		check.CheckContext{Resource: "aws_thing", Schema: rs, Doc: d})
-
-	if !hasMsg(results, "move this subsection to Argument Reference") {
-		t.Fatalf("expected a misplacement finding; got: %+v", results)
-	}
-	if hasMsg(results, "should not have") {
-		t.Errorf("leaf reference bullet must be suppressed, no stray strip-label warning; got: %+v", results)
+	if !hasMsg(results, `attribute "notification" in block "other" should not have (Optional) label`) {
+		t.Errorf("computed-only scalar sharing the moved block's leaf name must still be flagged; got: %+v", results)
 	}
 }
 
