@@ -132,3 +132,59 @@ func TestParse_HeadingAnchorsPreserveUnderscores(t *testing.T) {
 		t.Errorf("HeadingAnchors missing duplicate-suffixed slug; got %v", d.HeadingAnchors)
 	}
 }
+
+// TestParse_HeadingAnchorCollisionAvoidance guards GitHub's collision handling:
+// a suffixed candidate that clashes with an explicit heading is bumped again,
+// so "foo", "foo", "foo-1" yield "foo", "foo-1", "foo-1-1".
+func TestParse_HeadingAnchorCollisionAvoidance(t *testing.T) {
+	t.Parallel()
+
+	md := "# Resource: aws_thing\n\n" +
+		"## Argument Reference\n\n" +
+		"* `x` - (Optional) X.\n\n" +
+		"### `foo` Block\n\n* `a` - (Optional) A.\n\n" +
+		"### `foo` Block\n\n* `b` - (Optional) B.\n\n" +
+		"### `foo-1` Block\n\n* `c` - (Optional) C.\n"
+
+	d, err := doc.ParseWithTemplates([]byte(md), "aws_thing", doc.DefaultHeadingTemplates())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"foo-block", "foo-block-1", "foo-1-block"} {
+		if !d.HeadingAnchors[want] {
+			t.Errorf("HeadingAnchors missing %q; got %v", want, d.HeadingAnchors)
+		}
+	}
+}
+
+// TestParse_InPageLinksSkipCode confirms that link-looking text inside inline
+// code spans and fenced code blocks is NOT collected as an in-page link. The
+// anchors rule is enabled by default, so a regression here (e.g. a Goldmark or
+// extension change) would turn literal example content into false dead-anchor
+// errors — this test locks in the current behavior.
+func TestParse_InPageLinksSkipCode(t *testing.T) {
+	t.Parallel()
+
+	md := "# Resource: aws_thing\n\n" +
+		"## Argument Reference\n\n" +
+		"* `a` - (Optional) Real link [ok](#argument-reference) and inline `[x](#missing-inline)`.\n\n" +
+		"```\n[y](#missing-fenced)\n```\n\n" +
+		"~~~markdown\n[z](#missing-tilde)\n~~~\n"
+
+	d, err := doc.ParseWithTemplates([]byte(md), "aws_thing", doc.DefaultHeadingTemplates())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, l := range d.InPageLinks {
+		got[l.Fragment] = true
+	}
+	if !got["argument-reference"] {
+		t.Errorf("expected the real prose link to be collected; got %v", d.InPageLinks)
+	}
+	for _, bad := range []string{"missing-inline", "missing-fenced", "missing-tilde"} {
+		if got[bad] {
+			t.Errorf("link inside code must not be collected: %q present in %v", bad, d.InPageLinks)
+		}
+	}
+}

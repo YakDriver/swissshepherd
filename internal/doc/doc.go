@@ -1124,22 +1124,22 @@ func headingAnchorSlug(s string) string {
 }
 
 // dedupAnchorSet turns heading slugs (in document order) into the set of
-// anchors GitHub actually renders. GitHub appends "-1", "-2", ... to the second
-// and later occurrences of a repeated slug, so the same suffixing is applied
-// here to keep link validation faithful to the rendered page. Empty slugs
-// (headings with no slug-able characters) are skipped.
+// anchors GitHub actually renders. GitHub guarantees uniqueness against every
+// anchor already emitted — not merely repetitions of the same base slug — by
+// appending "-1", "-2", ... and incrementing until the candidate is unused.
+// For headings "foo", "foo", "foo-1" this yields "foo", "foo-1", "foo-1-1".
+// Reproducing the exact algorithm keeps link validation faithful and, because
+// the result is a superset of any simpler scheme, avoids false "dead anchor"
+// reports. Empty slugs (headings with no slug-able characters) are skipped.
 func dedupAnchorSet(slugs []string) map[string]bool {
 	set := make(map[string]bool, len(slugs))
-	counts := make(map[string]int)
 	for _, s := range slugs {
 		if s == "" {
 			continue
 		}
-		n := counts[s]
-		counts[s]++
 		anchor := s
-		if n > 0 {
-			anchor = fmt.Sprintf("%s-%d", s, n)
+		for i := 1; set[anchor]; i++ {
+			anchor = fmt.Sprintf("%s-%d", s, i)
 		}
 		set[anchor] = true
 	}
