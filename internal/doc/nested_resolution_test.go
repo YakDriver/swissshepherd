@@ -134,23 +134,27 @@ func TestParse_HeadingAnchorsPreserveUnderscores(t *testing.T) {
 }
 
 // TestParse_HeadingAnchorCollisionAvoidance guards GitHub's collision handling:
-// a suffixed candidate that clashes with an explicit heading is bumped again,
-// so "foo", "foo", "foo-1" yield "foo", "foo-1", "foo-1-1".
+// a suffixed candidate that clashes with an explicit heading is bumped again.
+// Bare headings are used so the slugs are exactly "foo", "foo", "foo-1" (no
+// "-block" suffix), which forces the collision: the second "foo" becomes
+// "foo-1", so the third heading — whose base slug is already "foo-1" — must
+// become "foo-1-1". A per-base counter would instead emit "foo-1" twice and
+// never produce "foo-1-1", so this fixture fails without collision avoidance.
 func TestParse_HeadingAnchorCollisionAvoidance(t *testing.T) {
 	t.Parallel()
 
 	md := "# Resource: aws_thing\n\n" +
 		"## Argument Reference\n\n" +
 		"* `x` - (Optional) X.\n\n" +
-		"### `foo` Block\n\n* `a` - (Optional) A.\n\n" +
-		"### `foo` Block\n\n* `b` - (Optional) B.\n\n" +
-		"### `foo-1` Block\n\n* `c` - (Optional) C.\n"
+		"### foo\n\n* `a` - (Optional) A.\n\n" +
+		"### foo\n\n* `b` - (Optional) B.\n\n" +
+		"### foo-1\n\n* `c` - (Optional) C.\n"
 
 	d, err := doc.ParseWithTemplates([]byte(md), "aws_thing", doc.DefaultHeadingTemplates())
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"foo-block", "foo-block-1", "foo-1-block"} {
+	for _, want := range []string{"foo", "foo-1", "foo-1-1"} {
 		if !d.HeadingAnchors[want] {
 			t.Errorf("HeadingAnchors missing %q; got %v", want, d.HeadingAnchors)
 		}
