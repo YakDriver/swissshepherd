@@ -105,3 +105,30 @@ func TestParse_BlockAnchorsAndLinks(t *testing.T) {
 		}
 	}
 }
+
+// TestParse_HeadingAnchorsPreserveUnderscores guards that generated anchor
+// slugs keep underscores (matching GitHub), so snake_case block headings like
+// "`ec2_configuration` Block" produce "ec2_configuration-block" rather than
+// dropping the underscore. Duplicate headings receive GitHub's -1/-2 suffixes.
+func TestParse_HeadingAnchorsPreserveUnderscores(t *testing.T) {
+	t.Parallel()
+
+	md := "# Resource: aws_thing\n\n" +
+		"## Argument Reference\n\n" +
+		"* `x` - (Optional) X.\n\n" +
+		"### `ec2_configuration` Block\n\n" +
+		"* `image_type` - (Optional) Type.\n\n" +
+		"### `ec2_configuration` Block\n\n" +
+		"* `image_id` - (Optional) ID.\n"
+
+	d, err := doc.ParseWithTemplates([]byte(md), "aws_thing", doc.DefaultHeadingTemplates())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !d.HeadingAnchors["ec2_configuration-block"] {
+		t.Errorf("HeadingAnchors missing underscore-preserving slug; got %v", d.HeadingAnchors)
+	}
+	if !d.HeadingAnchors["ec2_configuration-block-1"] {
+		t.Errorf("HeadingAnchors missing duplicate-suffixed slug; got %v", d.HeadingAnchors)
+	}
+}
