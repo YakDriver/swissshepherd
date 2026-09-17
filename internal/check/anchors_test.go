@@ -241,6 +241,43 @@ func TestAnchors_LinkToHeadingInsideListResolves(t *testing.T) {
 	}
 }
 
+// A percent-encoded fragment targeting a non-ASCII heading resolves after
+// decoding (the heading anchor is decoded Unicode text).
+func TestAnchors_PercentEncodedUnicodeLinkResolves(t *testing.T) {
+	t.Parallel()
+
+	src := `# Resource: aws_thing
+
+## Über Configuration
+
+See the [encoded](#%C3%BCber-configuration) reference.
+
+## Argument Reference
+
+* ` + "`name`" + ` - (Required) Name.
+`
+	if results := anchorResults(t, src); len(results) != 0 {
+		t.Errorf("percent-encoded link to Unicode heading must resolve: %+v", results)
+	}
+}
+
+// A malformed percent-escape can't be decoded; the raw fragment is kept, so a
+// link that still doesn't resolve is reported (not silently dropped).
+func TestAnchors_MalformedPercentEscapeStillFlagged(t *testing.T) {
+	t.Parallel()
+
+	src := `# Resource: aws_thing
+
+## Argument Reference
+
+* ` + "`a`" + ` - (Optional) See [bad](#%zz-missing).
+`
+	results := anchorResults(t, src)
+	if len(results) != 1 {
+		t.Fatalf("malformed unresolved fragment must be reported; got %d: %+v", len(results), results)
+	}
+}
+
 // External and cross-file links are out of scope (only "#..." fragments count).
 func TestAnchors_ExternalAndCrossFileLinksIgnored(t *testing.T) {
 	t.Parallel()

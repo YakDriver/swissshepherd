@@ -5,6 +5,7 @@ package check
 
 import (
 	"fmt"
+	"net/url"
 	"sort"
 )
 
@@ -44,11 +45,20 @@ func (r *AnchorsRule) Check(ctx CheckContext) []Result {
 	// is deterministic.
 	dangling := make(map[string]int)
 	for _, link := range d.InPageLinks {
-		if link.Fragment == "" || anchors[link.Fragment] {
+		// Heading anchors are decoded Unicode text, but a link fragment may be
+		// percent-encoded (e.g. "%C3%BCber-configuration" for
+		// "über-configuration"). Decode before comparing so a valid encoded
+		// link resolves. If decoding fails, keep the raw fragment so a
+		// genuinely malformed link is still reported.
+		frag := link.Fragment
+		if decoded, err := url.PathUnescape(frag); err == nil {
+			frag = decoded
+		}
+		if frag == "" || anchors[frag] {
 			continue
 		}
-		if ln, ok := dangling[link.Fragment]; !ok || link.Line < ln {
-			dangling[link.Fragment] = link.Line
+		if ln, ok := dangling[frag]; !ok || link.Line < ln {
+			dangling[frag] = link.Line
 		}
 	}
 
