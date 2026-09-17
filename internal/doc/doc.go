@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"unicode"
 
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/ast"
@@ -437,8 +438,28 @@ func ParseWithOptions(source []byte, name string, templates HeadingTemplates, op
 	}
 
 	extractBlocks(tree, source, doc, templates, opts.CaptureNestedAttributes)
+	doc.HeadingAnchors = dedupAnchorSet(collectHeadingSlugs(tree, source))
 	doc.InPageLinks = collectInPageLinks(tree, source)
 	return doc, nil
+}
+
+// collectHeadingSlugs walks the whole AST and returns the GitHub anchor slug of
+// every heading, in document order. It is a full-tree pass (not folded into
+// extractBlocks, which skips list subtrees) so a heading nested inside a list
+// item — whose anchor GitHub still generates — is included; otherwise a valid
+// link to it would be reported as a dead anchor.
+func collectHeadingSlugs(tree ast.Node, source []byte) []string {
+	var slugs []string
+	_ = ast.Walk(tree, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
+		if !entering {
+			return ast.WalkContinue, nil
+		}
+		if h, ok := n.(*ast.Heading); ok {
+			slugs = append(slugs, headingAnchorSlug(string(h.Text(source))))
+		}
+		return ast.WalkContinue, nil
+	})
+	return slugs
 }
 
 // collectInPageLinks walks the parsed AST and returns every in-page link (a
@@ -586,11 +607,6 @@ func extractBlocks(tree ast.Node, source []byte, doc *Document, templates Headin
 	// that subsection's documented attributes.
 	blockAnchors := map[string]string{}
 
-	// headingSlugs accumulates the GitHub anchor slug of every heading in
-	// document order so duplicate-slug suffixing (foo, foo-1, ...) can be
-	// reproduced exactly when the set is finalized.
-	var headingSlugs []string
-
 	// closeSection finalizes the current section's EndOffset.
 	closeSection := func(endOffset int) {
 		if currentSection != nil && currentSection.EndOffset == 0 {
@@ -634,7 +650,6 @@ func extractBlocks(tree ast.Node, source []byte, doc *Document, templates Headin
 		switch n := node.(type) {
 		case *ast.Heading:
 			headingText := string(n.Text(source))
-			headingSlugs = append(headingSlugs, headingAnchorSlug(headingText))
 
 			if n.Level == 1 {
 				assignSection(&doc.Sections.Title, n, headingText)
@@ -851,7 +866,6 @@ func extractBlocks(tree ast.Node, source []byte, doc *Document, templates Headin
 	// Expose the heading anchor map so coverage can resolve sibling bullets
 	// that point at a shared subsection (see Document.BlockAnchors).
 	doc.BlockAnchors = blockAnchors
-	doc.HeadingAnchors = dedupAnchorSet(headingSlugs)
 }
 
 // parseSectionListItem extracts a name/value pair from a list item in a
@@ -1105,16 +1119,18 @@ func firstAnchorLink(li *ast.ListItem) string {
 	return anchor
 }
 
-// headingAnchorSlug computes the GitHub-style anchor slug for a heading's text
-// (lowercase; spaces become hyphens; other punctuation dropped, but hyphens and
-// underscores are preserved). Backticks are already stripped by goldmark's
-// Text(). For example "Endpoint" -> "endpoint", "endpoints Block" ->
-// "endpoints-block", "`ec2_configuration` Block" -> "ec2_configuration-block".
+// headingAnchorSlug computes the GitHub-style anchor slug for a heading's text:
+// lowercase; spaces become hyphens; hyphens and underscores are kept; all other
+// punctuation is dropped. Letters and digits are kept for any script, not just
+// ASCII, so a non-ASCII heading like "Über" yields "über" (matching GitHub)
+// rather than "ber". Backticks are already stripped by goldmark's Text(). For
+// example "Endpoint" -> "endpoint", "endpoints Block" -> "endpoints-block",
+// "`ec2_configuration` Block" -> "ec2_configuration-block".
 func headingAnchorSlug(s string) string {
 	var b strings.Builder
 	for _, r := range strings.ToLower(s) {
 		switch {
-		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '-', r == '_':
+		case unicode.IsLetter(r), unicode.IsNumber(r), r == '-', r == '_':
 			b.WriteRune(r)
 		case r == ' ':
 			b.WriteRune('-')

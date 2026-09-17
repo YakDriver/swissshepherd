@@ -135,29 +135,66 @@ func TestParse_HeadingAnchorsPreserveUnderscores(t *testing.T) {
 
 // TestParse_HeadingAnchorCollisionAvoidance guards GitHub's collision handling:
 // a suffixed candidate that clashes with an explicit heading is bumped again.
-// Bare headings are used so the slugs are exactly "foo", "foo", "foo-1" (no
-// "-block" suffix), which forces the collision: the second "foo" becomes
-// "foo-1", so the third heading — whose base slug is already "foo-1" — must
-// become "foo-1-1". A per-base counter would instead emit "foo-1" twice and
-// never produce "foo-1-1", so this fixture fails without collision avoidance.
+// Headings "foo Block", "foo Block", "foo Block-1" slug to "foo-block",
+// "foo-block", "foo-block-1"; the second duplicate becomes "foo-block-1", which
+// then collides with the third heading's own slug, so the third must become
+// "foo-block-1-1". A per-base counter would emit "foo-block-1" twice and never
+// produce "foo-block-1-1", so this fixture fails without collision avoidance.
 func TestParse_HeadingAnchorCollisionAvoidance(t *testing.T) {
 	t.Parallel()
 
 	md := "# Resource: aws_thing\n\n" +
 		"## Argument Reference\n\n" +
 		"* `x` - (Optional) X.\n\n" +
-		"### foo\n\n* `a` - (Optional) A.\n\n" +
-		"### foo\n\n* `b` - (Optional) B.\n\n" +
-		"### foo-1\n\n* `c` - (Optional) C.\n"
+		"### foo Block\n\n* `a` - (Optional) A.\n\n" +
+		"### foo Block\n\n* `b` - (Optional) B.\n\n" +
+		"### foo Block-1\n\n* `c` - (Optional) C.\n"
 
 	d, err := doc.ParseWithTemplates([]byte(md), "aws_thing", doc.DefaultHeadingTemplates())
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"foo", "foo-1", "foo-1-1"} {
+	for _, want := range []string{"foo-block", "foo-block-1", "foo-block-1-1"} {
 		if !d.HeadingAnchors[want] {
 			t.Errorf("HeadingAnchors missing %q; got %v", want, d.HeadingAnchors)
 		}
+	}
+}
+
+// TestParse_HeadingAnchorsUnicode guards that non-ASCII heading text keeps its
+// letters in the slug (matching GitHub), so a link to "#über" resolves.
+func TestParse_HeadingAnchorsUnicode(t *testing.T) {
+	t.Parallel()
+
+	md := "# Resource: aws_thing\n\n## Über Configuration\n\nbody.\n"
+	d, err := doc.ParseWithTemplates([]byte(md), "aws_thing", doc.DefaultHeadingTemplates())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !d.HeadingAnchors["über-configuration"] {
+		t.Errorf("expected Unicode-preserving slug %q; got %v", "über-configuration", d.HeadingAnchors)
+	}
+	if d.HeadingAnchors["ber-configuration"] {
+		t.Errorf("ASCII-stripped slug must not be produced; got %v", d.HeadingAnchors)
+	}
+}
+
+// TestParse_HeadingAnchorsInsideList guards that a heading nested inside a list
+// item is still collected (heading slugs are gathered by a full-tree walk, not
+// the block extractor which skips list subtrees). Otherwise a link to such a
+// heading would be a false dead anchor.
+func TestParse_HeadingAnchorsInsideList(t *testing.T) {
+	t.Parallel()
+
+	md := "# Resource: aws_thing\n\n" +
+		"## Argument Reference\n\n" +
+		"* top\n\n    ### Nested Heading\n\n    detail\n"
+	d, err := doc.ParseWithTemplates([]byte(md), "aws_thing", doc.DefaultHeadingTemplates())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !d.HeadingAnchors["nested-heading"] {
+		t.Errorf("heading nested in a list item must be collected; got %v", d.HeadingAnchors)
 	}
 }
 

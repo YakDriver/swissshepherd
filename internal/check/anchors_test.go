@@ -209,6 +209,38 @@ func TestAnchors_MultipleLinksPerBulletAllChecked(t *testing.T) {
 	}
 }
 
+// A link to a non-ASCII heading anchor resolves (Unicode-aware slug).
+func TestAnchors_UnicodeHeadingLinkResolves(t *testing.T) {
+	t.Parallel()
+
+	src := `# Resource: aws_thing
+
+## Über Configuration
+
+See the [über section](#über-configuration).
+
+## Argument Reference
+
+* ` + "`name`" + ` - (Required) Name.
+`
+	if results := anchorResults(t, src); len(results) != 0 {
+		t.Errorf("link to Unicode heading must resolve: %+v", results)
+	}
+}
+
+// A link to a heading nested inside a list item resolves (heading slugs are
+// gathered by a full-tree walk).
+func TestAnchors_LinkToHeadingInsideListResolves(t *testing.T) {
+	t.Parallel()
+
+	src := "# Resource: aws_thing\n\n" +
+		"## Argument Reference\n\n" +
+		"* see [nested](#nested-heading)\n\n    ### Nested Heading\n\n    detail\n"
+	if results := anchorResults(t, src); len(results) != 0 {
+		t.Errorf("link to heading nested in a list must resolve: %+v", results)
+	}
+}
+
 // External and cross-file links are out of scope (only "#..." fragments count).
 func TestAnchors_ExternalAndCrossFileLinksIgnored(t *testing.T) {
 	t.Parallel()
