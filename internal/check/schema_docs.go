@@ -1068,13 +1068,13 @@ func (r *SchemaDocsRule) checkLabels(ctx CheckContext) []Result {
 			if !(attr.Required || attr.Optional) {
 				continue
 			}
-			if movedLeaves[leafName(attr.Name)] && configurableInSchema(ctx.Schema, blockName, attr.Name) {
+			if movedLeaves[leafName(attr.Name)] && referencesConfigurableChildBlock(ctx.Schema, blockName, attr.Name) {
 				// Redundant reference bullet for a block already reported as
 				// misplaced: it names a moved block AND is itself a
-				// configurable argument here (a child-block reference). A
-				// computed-only scalar that merely shares the leaf name is not
-				// configurable, so it is NOT suppressed and still earns its
-				// "should not have label" warning.
+				// configurable child-block reference here. A scalar attribute
+				// (computed-only, or a configurable scalar that merely shares
+				// the leaf name) is NOT a block reference, so it is not
+				// suppressed and keeps its own finding.
 				continue
 			}
 			label := "(Optional)"
@@ -1150,6 +1150,21 @@ func configurableInSchema(rs *schema.ResourceSchema, docBlockName, attrName stri
 			// attribute signals a misplaced argument.
 			return (a.Required || a.Optional) && !a.Computed
 		}
+	}
+	return referencesConfigurableChildBlock(rs, docBlockName, attrName)
+}
+
+// referencesConfigurableChildBlock reports whether attrName names a nested
+// child block of docBlockName's schema block that is itself a configurable
+// argument block. This is stricter than configurableInSchema: it excludes
+// scalar attributes. Reference-bullet suppression uses it so that a scalar
+// attribute merely sharing a moved block's leaf name (e.g. a configurable
+// `notification` flag in a different block) is not mistaken for the moved
+// block's reference bullet and silently stripped of its own finding.
+func referencesConfigurableChildBlock(rs *schema.ResourceSchema, docBlockName, attrName string) bool {
+	sb, ok := resolveSchemaBlock(rs, docBlockName)
+	if !ok || sb.ConfigUnknown {
+		return false
 	}
 	for _, child := range sb.ChildBlocks {
 		if leafName(child) == attrName {

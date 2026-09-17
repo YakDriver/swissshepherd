@@ -201,6 +201,54 @@ func TestLabels_MisplacementReportsHeadingLine(t *testing.T) {
 	t.Fatal("expected a misplacement finding")
 }
 
+// A configurable *scalar* attribute that shares its leaf name with a moved
+// child block (but is itself an ordinary field, not a reference to that block)
+// must not be suppressed. This exercises the root block, which is never marked
+// "moved", so its labeled attributes reach the per-attribute path. Suppression
+// is gated on the entry being a configurable child block, so the scalar keeps
+// its own "should not have label" warning.
+func TestLabels_SharedLeafConfigurableScalarNotSuppressed(t *testing.T) {
+	t.Parallel()
+
+	templates := doc.HeadingTemplates{"`{Path}` Block", "`{Block}` Block", "{Block} Block", "{Block}", "{Title}"}
+
+	src := `# Resource: aws_thing
+
+## Argument Reference
+
+* ` + "`name`" + ` - (Required) Name.
+
+## Attribute Reference
+
+* ` + "`notification`" + ` - (Optional) Whether notifications are enabled.
+
+### ` + "`outer.notification`" + ` Block
+
+* ` + "`comparison_operator`" + ` - (Required) Operator.
+`
+	rs := &schema.ResourceSchema{Blocks: map[string]*schema.Block{
+		// root has a configurable scalar "notification" and an "outer" child block.
+		"":      {Attributes: []schema.Attribute{{Name: "name", Required: true}, {Name: "notification", Optional: true}}, ChildBlocks: []string{"outer"}},
+		"outer": {Path: "outer", ChildBlocks: []string{"notification"}},
+		// The moved block is outer.notification — a different block that shares the leaf.
+		"outer.notification": {Path: "outer.notification", Attributes: []schema.Attribute{{Name: "comparison_operator", Required: true}}},
+	}}
+
+	d, err := doc.ParseWithTemplates([]byte(src), "aws_thing", templates)
+	if err != nil {
+		t.Fatal(err)
+	}
+	results := (&check.SchemaDocsRule{IgnoreDeprecated: true}).Check(
+		check.CheckContext{Resource: "aws_thing", Schema: rs, Doc: d})
+
+	if !hasMsg(results, `block "outer.notification" is documented under Attribute Reference but is a configurable argument block`) {
+		t.Errorf("expected outer.notification to be reported as misplaced; got: %+v", results)
+	}
+	if !hasMsg(results, `attribute "notification" in block "(root)" should not have (Optional) label`) {
+		t.Errorf("root configurable scalar sharing the moved block's leaf must still be flagged; got: %+v", results)
+	}
+}
+
 // A computed-only scalar attribute that merely shares its leaf name with a
 // moved block must still receive its "should not have label" warning — the
 // reference-bullet suppression is gated on the attribute actually being a
