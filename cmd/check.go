@@ -204,6 +204,7 @@ func runCheck(cmd *cobra.Command, args []string) error {
 			Labels:                    cc.Labels,
 			Byline:                    cc.Byline,
 			Deprecated:                cc.Deprecated,
+			Anchors:                   cc.Anchors,
 			BadPrefixes:               cc.BadPrefixes,
 			Preferred:                 preferredHeadingTemplates(cfg),
 			NoCodeBlocks:              cc.NoCodeBlocks,

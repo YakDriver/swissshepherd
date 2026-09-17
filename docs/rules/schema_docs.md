@@ -10,6 +10,7 @@ All enabled by default; disable individually via the rule's config block.
 
 | Sub-check     | What it validates                                                                                                                 |
 |---------------|-----------------------------------------------------------------------------------------------------------------------------------|
+| `anchors`     | In-page links (`](#anchor)`) resolve to a heading that exists in the file — catches dead "See below" links after a heading rename |
 | `byline`      | First paragraph after section heading matches expected byline text (from type)                                                    |
 | `coverage`    | Every schema attr is documented; every documented attr exists in schema; every block heading in Argument Reference matches a schema block |
 | `deprecated`  | Deprecation status matches between schema and docs (both directions)                                                              |
@@ -24,6 +25,7 @@ All enabled by default; disable individually via the rule's config block.
 ```hcl
 check "schema_docs" {
   # Sub-check toggles
+  anchors     = true
   byline      = true
   coverage    = true
   deprecated  = true

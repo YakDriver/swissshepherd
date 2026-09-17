@@ -64,6 +64,7 @@ type SchemaDocsRule struct {
 	Labels      *bool
 	Byline      *bool
 	Deprecated  *bool
+	Anchors     *bool
 
 	// Description options
 	BadPrefixes []string
@@ -143,6 +144,9 @@ func (r *SchemaDocsRule) Check(ctx CheckContext) []Result {
 	}
 	if enabled(r.Deprecated) {
 		results = append(results, r.checkDeprecated(ctx)...)
+	}
+	if enabled(r.Anchors) {
+		results = append(results, r.checkAnchors(ctx)...)
 	}
 
 	return results
@@ -1380,6 +1384,55 @@ func (r *SchemaDocsRule) checkDeprecated(ctx CheckContext) []Result {
 				})
 			}
 		}
+	}
+	return results
+}
+
+// --- Anchors ---
+
+// checkAnchors verifies that every in-page link fragment (`](#anchor)`)
+// captured on a documented bullet resolves to a heading anchor that actually
+// exists in the file. When a block heading is renamed to the required
+// "`name` Block" style (slug "name-block"), "See below" links elsewhere in the
+// file are often left pointing at the old slug ("#name"); the resulting link is
+// dead on the rendered page but otherwise passes silently. Only pure "#..."
+// fragments are validated — external URLs and cross-file links are out of
+// scope (the parser records only in-page fragments in LinkAnchor).
+func (r *SchemaDocsRule) checkAnchors(ctx CheckContext) []Result {
+	anchors := ctx.Doc.HeadingAnchors
+	if len(anchors) == 0 {
+		return nil
+	}
+
+	// Collect each unresolved fragment once, at its earliest line, so a
+	// fragment reused across bullets is reported a single time and output is
+	// deterministic regardless of block map iteration order.
+	dangling := make(map[string]int)
+	for _, block := range ctx.Doc.Blocks() {
+		for _, attr := range block.Attributes {
+			frag := attr.LinkAnchor
+			if frag == "" || anchors[frag] {
+				continue
+			}
+			if ln, ok := dangling[frag]; !ok || attr.Line < ln {
+				dangling[frag] = attr.Line
+			}
+		}
+	}
+
+	frags := make([]string, 0, len(dangling))
+	for frag := range dangling {
+		frags = append(frags, frag)
+	}
+	sort.Strings(frags)
+
+	var results []Result
+	for _, frag := range frags {
+		results = append(results, Result{
+			Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityWarning,
+			Message: fmt.Sprintf("in-page link %q does not resolve to any heading in the document (dead anchor)", "#"+frag),
+			Line:    dangling[frag],
+		})
 	}
 	return results
 }
