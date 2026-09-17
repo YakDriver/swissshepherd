@@ -1383,5 +1383,3 @@ func (r *SchemaDocsRule) checkDeprecated(ctx CheckContext) []Result {
 	}
 	return results
 }
-
-// --- Deprecated ---
