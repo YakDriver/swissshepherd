@@ -6,6 +6,7 @@ package doc
 import (
 	"bytes"
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 	"unicode"
@@ -13,6 +14,7 @@ import (
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/ast"
 	"github.com/yuin/goldmark/text"
+	"github.com/yuin/goldmark/util"
 	"gopkg.in/yaml.v3"
 )
 
@@ -484,7 +486,7 @@ func collectInPageLinks(tree ast.Node, source []byte) []LinkRef {
 		if link, ok := n.(*ast.Link); ok {
 			if dest := string(link.Destination); strings.HasPrefix(dest, "#") {
 				links = append(links, LinkRef{
-					Fragment: strings.TrimPrefix(dest, "#"),
+					Fragment: normalizeLinkFragment(strings.TrimPrefix(dest, "#")),
 					Line:     currentLine,
 				})
 			}
@@ -492,6 +494,26 @@ func collectInPageLinks(tree ast.Node, source []byte) []LinkRef {
 		return ast.WalkContinue, nil
 	})
 	return links
+}
+
+// normalizeLinkFragment turns a raw Markdown link fragment into the anchor a
+// browser actually resolves, matching how Goldmark's renderer produces the
+// href and how the target ID is generated. Goldmark stores the destination
+// verbatim, so Markdown backslash escapes ("foo\_bar"), HTML entities
+// ("foo&amp;bar"), and percent-encoding ("%C3%BCber-configuration") are all
+// still present. Resolve entities and backslash escapes, then percent-decode;
+// on a malformed percent-escape keep the (already entity/escape-normalized)
+// value so a genuinely broken link is still reported rather than silently
+// dropped.
+func normalizeLinkFragment(raw string) string {
+	b := util.ResolveEntityNames([]byte(raw))
+	b = util.ResolveNumericReferences(b)
+	b = util.UnescapePunctuations(b)
+	s := string(b)
+	if decoded, err := url.PathUnescape(s); err == nil {
+		s = decoded
+	}
+	return s
 }
 
 // stripFrontmatter returns a copy of source where any leading YAML

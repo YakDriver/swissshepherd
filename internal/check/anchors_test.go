@@ -278,6 +278,38 @@ func TestAnchors_MalformedPercentEscapeStillFlagged(t *testing.T) {
 	}
 }
 
+// A Markdown backslash-escaped fragment (`#foo\_bar`) resolves to the heading
+// whose slug is `foo_bar` — Goldmark stores the escape verbatim, so it must be
+// normalized before comparison.
+func TestAnchors_BackslashEscapedFragmentResolves(t *testing.T) {
+	t.Parallel()
+
+	src := "# Resource: aws_thing\n\n" +
+		"## Argument Reference\n\n" +
+		"* `a` - (Optional) See [x](#foo\\_bar).\n\n" +
+		"### foo_bar\n\n* `b` - (Optional) B.\n"
+	if results := anchorResults(t, src); len(results) != 0 {
+		t.Errorf("backslash-escaped fragment must resolve: %+v", results)
+	}
+}
+
+// An HTML entity in a fragment (`#a&amp;b`) resolves like the rendered text.
+func TestAnchors_EntityFragmentResolves(t *testing.T) {
+	t.Parallel()
+
+	// Heading "a&b" slugs to "ab" (ampersand dropped); the link "#a&amp;b"
+	// must resolve to the same after entity resolution + slug rules. Use a
+	// heading whose slug is stable: "a b" -> "a-b", link "#a&amp;b"? Simpler:
+	// heading "x_y" (slug x_y), link "#x&#95;y" (numeric underscore entity).
+	src := "# Resource: aws_thing\n\n" +
+		"## Argument Reference\n\n" +
+		"* `a` - (Optional) See [x](#x&#95;y).\n\n" +
+		"### x_y\n\n* `b` - (Optional) B.\n"
+	if results := anchorResults(t, src); len(results) != 0 {
+		t.Errorf("numeric-entity fragment must resolve: %+v", results)
+	}
+}
+
 // External and cross-file links are out of scope (only "#..." fragments count).
 func TestAnchors_ExternalAndCrossFileLinksIgnored(t *testing.T) {
 	t.Parallel()

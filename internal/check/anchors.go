@@ -5,7 +5,6 @@ package check
 
 import (
 	"fmt"
-	"net/url"
 	"sort"
 )
 
@@ -42,23 +41,16 @@ func (r *AnchorsRule) Check(ctx CheckContext) []Result {
 
 	// Report each unresolved fragment once, at its earliest line, so a
 	// fragment reused across the document is flagged a single time and output
-	// is deterministic.
+	// is deterministic. Fragments are already normalized to their
+	// browser-resolved form (entities/backslash escapes resolved,
+	// percent-decoded) by the parser.
 	dangling := make(map[string]int)
 	for _, link := range d.InPageLinks {
-		// Heading anchors are decoded Unicode text, but a link fragment may be
-		// percent-encoded (e.g. "%C3%BCber-configuration" for
-		// "über-configuration"). Decode before comparing so a valid encoded
-		// link resolves. If decoding fails, keep the raw fragment so a
-		// genuinely malformed link is still reported.
-		frag := link.Fragment
-		if decoded, err := url.PathUnescape(frag); err == nil {
-			frag = decoded
-		}
-		if frag == "" || anchors[frag] {
+		if link.Fragment == "" || anchors[link.Fragment] {
 			continue
 		}
-		if ln, ok := dangling[frag]; !ok || link.Line < ln {
-			dangling[frag] = link.Line
+		if ln, ok := dangling[link.Fragment]; !ok || link.Line < ln {
+			dangling[link.Fragment] = link.Line
 		}
 	}
 

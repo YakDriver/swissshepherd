@@ -440,7 +440,7 @@ func logEnabledChecks(logger *slog.Logger, cfg *config.Config, rules []check.Rul
 	}
 
 	// Log disabled checks
-	allChecks := []string{"schema_docs", "title_section",
+	allChecks := []string{"schema_docs", "anchors", "title_section",
 		"section_presence", "timeouts_section", "import_section",
 		"example_section", "signature_section",
 		"format_style", "frontmatter"}
