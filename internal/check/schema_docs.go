@@ -1010,21 +1010,66 @@ func (r *SchemaDocsRule) checkLabels(ctx CheckContext) []Result {
 		}
 	}
 
-	// Attributes must NOT have (Required) or (Optional)
+	// Attributes must NOT have (Required) or (Optional) — unless a documented
+	// attribute both carries a label AND is genuinely a configurable argument
+	// in the schema. That combination means the labels are correct and the
+	// real defect is section placement: a configurable argument block was put
+	// under Attribute Reference. Emitting a single actionable "move it" finding
+	// is better than pushing the author to strip accurate labels, which makes
+	// the docs less precise (issue #60). A bullet that merely references a
+	// computed field by dot-path (e.g. `network[*].private_ip` with no label)
+	// does not trigger this — such bullets legitimately live under Attribute
+	// Reference.
+	//
+	// Pass 1: find misplaced nested block subsections — a block whose own
+	// labeled attributes are configurable arguments in the schema.
+	movedBlocks := make(map[string]bool)
+	misplacedLine := make(map[string]int)
 	for blockName, block := range ctx.Doc.AttributeBlocks {
+		if blockName == "" {
+			continue
+		}
 		for _, attr := range block.Attributes {
-			if attr.Required || attr.Optional {
-				label := "(Optional)"
-				if attr.Required {
-					label = "(Required)"
-				}
-				results = append(results, Result{
-					Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityWarning,
-					Message: fmt.Sprintf("attribute %q in block %q should not have %s label", attr.Name, displayPath(blockName), label),
-					Block:   blockName,
-					Line:    attr.Line,
-				})
+			if (attr.Required || attr.Optional) && configurableInSchema(ctx.Schema, blockName, attr.Name) {
+				movedBlocks[blockName] = true
+				misplacedLine[blockName] = attr.Line
+				break
 			}
+		}
+	}
+
+	// Pass 2: emit one "move this subsection" finding per misplaced block, and
+	// for every other labeled attribute keep the original strip-label guidance
+	// — except a reference bullet that points at a block we are already moving,
+	// which would be redundant.
+	for blockName, block := range ctx.Doc.AttributeBlocks {
+		if movedBlocks[blockName] {
+			results = append(results, Result{
+				Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityError,
+				Message: fmt.Sprintf("block %q is documented under Attribute Reference but is a configurable argument block in the schema; move this subsection to Argument Reference", displayPath(blockName)),
+				Block:   blockName,
+				Line:    misplacedLine[blockName],
+			})
+			continue
+		}
+		for _, attr := range block.Attributes {
+			if !(attr.Required || attr.Optional) {
+				continue
+			}
+			if movedBlocks[attr.Name] {
+				// Reference bullet for a block already reported as misplaced.
+				continue
+			}
+			label := "(Optional)"
+			if attr.Required {
+				label = "(Required)"
+			}
+			results = append(results, Result{
+				Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityWarning,
+				Message: fmt.Sprintf("attribute %q in block %q should not have %s label", attr.Name, displayPath(blockName), label),
+				Block:   blockName,
+				Line:    attr.Line,
+			})
 		}
 	}
 
@@ -1037,6 +1082,64 @@ func hasConfigurableAttributes(block *schema.Block) bool {
 	for _, attr := range block.Attributes {
 		if attr.Required || attr.Optional {
 			return true
+		}
+	}
+	return false
+}
+
+// resolveSchemaBlock finds the schema block that a documented block name refers
+// to. It prefers an exact dot-path match; failing that it matches by leaf name,
+// but only when the leaf is unambiguous (exactly one schema block carries it).
+// The conservative leaf handling ensures an ERROR-severity misplacement finding
+// is never emitted on an ambiguous guess.
+func resolveSchemaBlock(rs *schema.ResourceSchema, docBlockName string) (*schema.Block, bool) {
+	if rs == nil {
+		return nil, false
+	}
+	if b, ok := rs.Blocks[docBlockName]; ok {
+		return b, true
+	}
+	leaf := leafName(docBlockName)
+	var found *schema.Block
+	for path, b := range rs.Blocks {
+		if leafName(path) == leaf {
+			if found != nil {
+				return nil, false // ambiguous leaf; refuse to guess
+			}
+			found = b
+		}
+	}
+	return found, found != nil
+}
+
+// configurableInSchema reports whether the named attribute of the given doc
+// block is a configurable argument (Required or Optional) in the schema. It
+// resolves the schema block conservatively, considers both scalar attributes
+// and nested child blocks (a documented block reference is configurable when
+// the child block itself has configurable attributes), and returns false when
+// the block cannot be resolved or its field configurability is unknowable
+// (ConfigUnknown — object-typed attributes whose per-field metadata is lost).
+// Returning false in the uncertain cases keeps the ERROR-severity misplacement
+// finding from firing on a guess.
+func configurableInSchema(rs *schema.ResourceSchema, docBlockName, attrName string) bool {
+	sb, ok := resolveSchemaBlock(rs, docBlockName)
+	if !ok || sb.ConfigUnknown {
+		return false
+	}
+	for _, a := range sb.Attributes {
+		if a.Name == attrName {
+			// Optional+Computed attributes may legitimately appear under
+			// either section, so only a purely configurable (non-computed)
+			// attribute signals a misplaced argument.
+			return (a.Required || a.Optional) && !a.Computed
+		}
+	}
+	for _, child := range sb.ChildBlocks {
+		if leafName(child) == attrName {
+			if cb, ok := resolveSchemaBlock(rs, child); ok && !cb.ConfigUnknown {
+				return hasConfigurableAttributes(cb)
+			}
+			return false
 		}
 	}
 	return false
