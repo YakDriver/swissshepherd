@@ -1024,6 +1024,7 @@ func (r *SchemaDocsRule) checkLabels(ctx CheckContext) []Result {
 	// Pass 1: find misplaced nested block subsections — a block whose own
 	// labeled attributes are configurable arguments in the schema.
 	movedBlocks := make(map[string]bool)
+	movedLeaves := make(map[string]bool)
 	misplacedLine := make(map[string]int)
 	for blockName, block := range ctx.Doc.AttributeBlocks {
 		if blockName == "" {
@@ -1032,7 +1033,16 @@ func (r *SchemaDocsRule) checkLabels(ctx CheckContext) []Result {
 		for _, attr := range block.Attributes {
 			if (attr.Required || attr.Optional) && configurableInSchema(ctx.Schema, blockName, attr.Name) {
 				movedBlocks[blockName] = true
-				misplacedLine[blockName] = attr.Line
+				movedLeaves[leafName(blockName)] = true
+				// Point at the subsection heading when known so the
+				// "move this subsection" message lands on the line the
+				// author needs to act on; fall back to the first
+				// offending attribute otherwise.
+				if block.HeadingLine > 0 {
+					misplacedLine[blockName] = block.HeadingLine
+				} else {
+					misplacedLine[blockName] = attr.Line
+				}
 				break
 			}
 		}
@@ -1041,7 +1051,9 @@ func (r *SchemaDocsRule) checkLabels(ctx CheckContext) []Result {
 	// Pass 2: emit one "move this subsection" finding per misplaced block, and
 	// for every other labeled attribute keep the original strip-label guidance
 	// — except a reference bullet that points at a block we are already moving,
-	// which would be redundant.
+	// which would be redundant. Suppression is keyed by leaf so a parent bullet
+	// (`notification`) is matched to a subsection that may be keyed by a full
+	// dot-path (`parent.notification`).
 	for blockName, block := range ctx.Doc.AttributeBlocks {
 		if movedBlocks[blockName] {
 			results = append(results, Result{
@@ -1056,7 +1068,7 @@ func (r *SchemaDocsRule) checkLabels(ctx CheckContext) []Result {
 			if !(attr.Required || attr.Optional) {
 				continue
 			}
-			if movedBlocks[attr.Name] {
+			if movedLeaves[leafName(attr.Name)] {
 				// Reference bullet for a block already reported as misplaced.
 				continue
 			}

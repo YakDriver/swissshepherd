@@ -157,6 +157,93 @@ func TestLabels_ComputedOnlyAttrKeepsStripGuidance(t *testing.T) {
 	}
 }
 
+// The misplacement error should point at the subsection heading line (the line
+// the author must move), not at an attribute inside the block.
+func TestLabels_MisplacementReportsHeadingLine(t *testing.T) {
+	t.Parallel()
+
+	src := `# Resource: aws_thing
+
+## Argument Reference
+
+* ` + "`name`" + ` - (Required) Name.
+
+## Attribute Reference
+
+* ` + "`notification`" + ` - (Optional) Notification. See [` + "`notification`" + ` Block](#notification-block).
+
+### ` + "`notification`" + ` Block
+
+* ` + "`comparison_operator`" + ` - (Required) Operator.
+`
+	rs := &schema.ResourceSchema{Blocks: map[string]*schema.Block{
+		"":             {Attributes: []schema.Attribute{{Name: "name", Required: true}}, ChildBlocks: []string{"notification"}},
+		"notification": {Path: "notification", Attributes: []schema.Attribute{{Name: "comparison_operator", Required: true}}},
+	}}
+
+	// Heading line is where "### `notification` Block" sits in src (1-based).
+	wantLine := 0
+	for i, line := range strings.Split(src, "\n") {
+		if strings.HasPrefix(line, "### ") && strings.Contains(line, "notification") {
+			wantLine = i + 1
+			break
+		}
+	}
+
+	for _, r := range labelResults(t, src, rs) {
+		if strings.Contains(r.Message, "move this subsection to Argument Reference") {
+			if r.Line != wantLine {
+				t.Errorf("misplacement finding Line = %d, want heading line %d", r.Line, wantLine)
+			}
+			return
+		}
+	}
+	t.Fatal("expected a misplacement finding")
+}
+
+// When a misplaced subsection is keyed by a full dot-path, the redundant parent
+// reference bullet (keyed by leaf name) must still be suppressed — verifying the
+// leaf-normalized suppression rather than an exact-key match.
+func TestLabels_DotPathKeyedSuppressesLeafReference(t *testing.T) {
+	t.Parallel()
+
+	templates := doc.HeadingTemplates{"`{Path}` Block", "`{Block}` Block", "{Block} Block", "{Block}", "{Title}"}
+
+	src := `# Resource: aws_thing
+
+## Argument Reference
+
+* ` + "`setting`" + ` - (Required) Setting. See [` + "`setting`" + ` Block](#setting-block).
+
+## Attribute Reference
+
+* ` + "`notification`" + ` - (Optional) Notification. See below.
+
+### ` + "`setting.notification`" + ` Block
+
+* ` + "`comparison_operator`" + ` - (Required) Operator.
+`
+	rs := &schema.ResourceSchema{Blocks: map[string]*schema.Block{
+		"":                     {Attributes: []schema.Attribute{{Name: "name", Required: true}}, ChildBlocks: []string{"setting"}},
+		"setting":              {Path: "setting", ChildBlocks: []string{"notification"}},
+		"setting.notification": {Path: "setting.notification", Attributes: []schema.Attribute{{Name: "comparison_operator", Required: true}}},
+	}}
+
+	d, err := doc.ParseWithTemplates([]byte(src), "aws_thing", templates)
+	if err != nil {
+		t.Fatal(err)
+	}
+	results := (&check.SchemaDocsRule{IgnoreDeprecated: true}).Check(
+		check.CheckContext{Resource: "aws_thing", Schema: rs, Doc: d})
+
+	if !hasMsg(results, "move this subsection to Argument Reference") {
+		t.Fatalf("expected a misplacement finding; got: %+v", results)
+	}
+	if hasMsg(results, "should not have") {
+		t.Errorf("leaf reference bullet must be suppressed, no stray strip-label warning; got: %+v", results)
+	}
+}
+
 // Optional+Computed attributes may legitimately be documented under either
 // section, so a labeled Optional+Computed attribute under Attribute Reference
 // must not be reported as a misplaced argument.
