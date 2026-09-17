@@ -184,6 +184,31 @@ func TestAnchors_SeverityConfigurable(t *testing.T) {
 	}
 }
 
+// Multiple in-page links in a single bullet are each validated — the whole-AST
+// collection is not limited to the first link per bullet.
+func TestAnchors_MultipleLinksPerBulletAllChecked(t *testing.T) {
+	t.Parallel()
+
+	src := `# Resource: aws_thing
+
+## Argument Reference
+
+* ` + "`a`" + ` - (Optional) See [A](#missing-a) and [B](#missing-b).
+`
+	results := anchorResults(t, src)
+	got := map[string]bool{}
+	for _, r := range results {
+		for _, f := range []string{"#missing-a", "#missing-b"} {
+			if strings.Contains(r.Message, f) {
+				got[f] = true
+			}
+		}
+	}
+	if !got["#missing-a"] || !got["#missing-b"] {
+		t.Errorf("both dead fragments in one bullet must be reported; got: %+v", results)
+	}
+}
+
 // External and cross-file links are out of scope (only "#..." fragments count).
 func TestAnchors_ExternalAndCrossFileLinksIgnored(t *testing.T) {
 	t.Parallel()
