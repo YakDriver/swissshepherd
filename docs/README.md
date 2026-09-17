@@ -185,6 +185,7 @@ Options ending in `_file` (`ignore_targets_file`, `allow_subcategories_file`, `i
 
 | Rule | Kind | Description |
 |------|------|-------------|
+| `anchors` | per-target | In-page links (`](#fragment)`) resolve to a heading that exists in the file |
 | `banned_glosses` | per-file | Flags configured abbreviation glosses/spell-outs (opt-in) |
 | `example_section` | per-target | Example code block validation |
 | `file_check` | per-file | File size, extension, and link style validation |
@@ -256,6 +257,21 @@ check "file_match" {
 ```
 
 The `ignore_missing` and `ignore_extra` lists suppress findings for specific targets. Use `ignore_missing_file` / `ignore_extra_file` for file-based lists.
+
+---
+
+### `anchors`
+
+Verifies that every in-page link (`](#fragment)`) resolves to a heading that actually exists in the same document. Renaming a block heading to the required `` `name` Block `` style changes its anchor slug (to `name-block`), and "See below" links left pointing at the old slug (`#name`) become dead links that render silently on the Terraform Registry.
+
+```hcl
+check "anchors" {
+  enabled  = true
+  severity = "error" # optional; "error" (default) or "warning"
+}
+```
+
+The rule validates link fragments found **anywhere** in the document — Argument/Attribute bullets, Example Usage prose, callouts, any section — against the set of heading anchors the page generates. It reproduces GitHub's slug algorithm, including underscore preservation (`` `ec2_configuration` Block `` → `#ec2_configuration-block`) and the numeric suffixes appended to duplicate headings (`#grpc-block`, `#grpc-block-1`). Only in-page `#` fragments are checked; external URLs and cross-file links are ignored. Each unresolved fragment is reported once, at its earliest line. Findings default to **error**; set `severity = "warning"` to soften. Like every check, it honors the standard scoping options.
 
 ---
 

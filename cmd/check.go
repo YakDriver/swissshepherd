@@ -204,7 +204,6 @@ func runCheck(cmd *cobra.Command, args []string) error {
 			Labels:                    cc.Labels,
 			Byline:                    cc.Byline,
 			Deprecated:                cc.Deprecated,
-			Anchors:                   cc.Anchors,
 			BadPrefixes:               cc.BadPrefixes,
 			Preferred:                 preferredHeadingTemplates(cfg),
 			NoCodeBlocks:              cc.NoCodeBlocks,
@@ -212,6 +211,10 @@ func runCheck(cmd *cobra.Command, args []string) error {
 			UninterruptedLists:        cc.UninterruptedLists,
 			AllowAttributeIndentation: cc.AllowAttributeIndentation,
 		})
+	}
+	if cfg.IsCheckEnabled("anchors") {
+		sev := check.ParseSeverity(cfg.GetCheck("anchors").Severity, check.SeverityError)
+		rules = append(rules, check.NewAnchorsRule(sev))
 	}
 	if cfg.IsCheckEnabled("title_section") {
 		rules = append(rules, &check.TitleSectionRule{

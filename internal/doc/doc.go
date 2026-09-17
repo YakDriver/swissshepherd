@@ -33,6 +33,14 @@ type MalformedAttr struct {
 	Line int
 }
 
+// LinkRef records an in-page Markdown link (destination beginning with "#")
+// found anywhere in the document, with the fragment (sans "#") and the 1-based
+// source line of the block that contains it.
+type LinkRef struct {
+	Fragment string
+	Line     int
+}
+
 // DocBlock represents a documented block section.
 type DocBlock struct {
 	Name                string
@@ -342,7 +350,11 @@ type Document struct {
 	// to duplicate slugs (e.g. "grpc-block", "grpc-block-1"). Used to verify
 	// that in-page links (`](#anchor)`) resolve to a real heading.
 	HeadingAnchors map[string]bool
-	source         []byte
+	// InPageLinks lists every in-page link (destination beginning with "#")
+	// found anywhere in the document, used to validate that link fragments
+	// resolve to an existing heading anchor.
+	InPageLinks []LinkRef
+	source      []byte
 }
 
 // Source returns the raw markdown source bytes.
@@ -425,7 +437,40 @@ func ParseWithOptions(source []byte, name string, templates HeadingTemplates, op
 	}
 
 	extractBlocks(tree, source, doc, templates, opts.CaptureNestedAttributes)
+	doc.InPageLinks = collectInPageLinks(tree, source)
 	return doc, nil
+}
+
+// collectInPageLinks walks the parsed AST and returns every in-page link (a
+// Markdown link whose destination begins with "#"), recording the fragment
+// (sans "#") and the source line of the block that contains it. Walking the
+// AST — rather than scanning raw text — captures links in any section (prose,
+// bullets, callouts) while naturally excluding links inside code spans and
+// fenced code blocks, which Goldmark does not parse as links. Inline nodes
+// carry no line information, so the most recently seen block's line is used.
+func collectInPageLinks(tree ast.Node, source []byte) []LinkRef {
+	var links []LinkRef
+	currentLine := 0
+	_ = ast.Walk(tree, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
+		if !entering {
+			return ast.WalkContinue, nil
+		}
+		if n.Type() == ast.TypeBlock {
+			if ln := nodeLineNumber(n, source); ln > 0 {
+				currentLine = ln
+			}
+		}
+		if link, ok := n.(*ast.Link); ok {
+			if dest := string(link.Destination); strings.HasPrefix(dest, "#") {
+				links = append(links, LinkRef{
+					Fragment: strings.TrimPrefix(dest, "#"),
+					Line:     currentLine,
+				})
+			}
+		}
+		return ast.WalkContinue, nil
+	})
+	return links
 }
 
 // stripFrontmatter returns a copy of source where any leading YAML

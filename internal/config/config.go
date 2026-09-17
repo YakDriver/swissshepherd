@@ -150,7 +150,6 @@ type CheckConfig struct {
 	Labels      *bool `hcl:"labels,optional"`
 	Byline      *bool `hcl:"byline,optional"`
 	Deprecated  *bool `hcl:"deprecated,optional"`
-	Anchors     *bool `hcl:"anchors,optional"`
 
 	// NestedObjectAttributes, when true, models object-typed attributes
 	// (list(object({...})), set(object({...})), object({...})) as nested
