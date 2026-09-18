@@ -61,12 +61,12 @@ func TestParse_HeadingAnchorsPreserveMarks(t *testing.T) {
 	}
 }
 
-// TestParse_HeadingAnchorsPreserveMarksAndJoiners covers Indic text (whose
-// clusters rely on combining marks such as the virama) and the zero-width
-// joiner/non-joiner (U+200C/U+200D), which GitHub keeps via the Join_Control
-// property. Stripping them would slug the heading differently and flag valid
-// links as dead anchors.
-func TestParse_HeadingAnchorsPreserveMarksAndJoiners(t *testing.T) {
+// TestParse_HeadingAnchorsMarksKeptJoinersStripped covers Indic text (whose
+// clusters rely on combining marks such as the virama, which are retained) and
+// the zero-width joiner/non-joiner (U+200C/U+200D), which GitHub strips (they
+// fall in github-slugger's removal range). Getting either wrong slugs the
+// heading differently than GitHub and flags valid links as dead anchors.
+func TestParse_HeadingAnchorsMarksKeptJoinersStripped(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
@@ -76,23 +76,23 @@ func TestParse_HeadingAnchorsPreserveMarksAndJoiners(t *testing.T) {
 		absent  string
 	}{
 		{
-			// Devanagari "क्ष" = KA + U+094D VIRAMA (a mark) + SSA.
-			name:    "indic virama",
+			// Devanagari "क्ष" = KA + U+094D VIRAMA (a mark) + SSA: mark kept.
+			name:    "indic virama kept",
 			heading: "\u0915\u094d\u0937",
 			want:    "\u0915\u094d\u0937",
-			absent:  "\u0915\u0937", // virama stripped
+			absent:  "\u0915\u0937", // virama wrongly stripped
 		},
 		{
-			name:    "zero-width joiner",
+			name:    "zero-width joiner stripped",
 			heading: "a\u200db",
-			want:    "a\u200db",
-			absent:  "ab",
+			want:    "ab",
+			absent:  "a\u200db",
 		},
 		{
-			name:    "zero-width non-joiner",
+			name:    "zero-width non-joiner stripped",
 			heading: "a\u200cb",
-			want:    "a\u200cb",
-			absent:  "ab",
+			want:    "ab",
+			absent:  "a\u200cb",
 		},
 	}
 	for _, c := range cases {
@@ -108,7 +108,7 @@ func TestParse_HeadingAnchorsPreserveMarksAndJoiners(t *testing.T) {
 				t.Errorf("expected slug %q; got %v", c.want, d.HeadingAnchors)
 			}
 			if d.HeadingAnchors[c.absent] {
-				t.Errorf("stripped slug %q must not be produced; got %v", c.absent, d.HeadingAnchors)
+				t.Errorf("slug %q must not be produced; got %v", c.absent, d.HeadingAnchors)
 			}
 		})
 	}

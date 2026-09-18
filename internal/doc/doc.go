@@ -484,6 +484,11 @@ func headingSlugText(h *ast.Heading, source []byte) string {
 			case *ast.RawHTML:
 				// Inline HTML tags contribute no text to the rendered
 				// heading; any text between tags is separate Text nodes.
+			case *ast.AutoLink:
+				// An autolink's label is rendered as visible heading text,
+				// but goldmark keeps it in an unexported field rather than a
+				// child node, so it is invisible to the default walk below.
+				b.Write(t.Label(source))
 			case *ast.CodeSpan:
 				b.Write(t.Text(source))
 			case *ast.Text:
@@ -1229,9 +1234,7 @@ func firstAnchorLink(li *ast.ListItem) string {
 // lowercase; spaces become hyphens; hyphens and underscores are kept; all other
 // punctuation is dropped. Letters and digits are kept for any script, not just
 // ASCII, so a non-ASCII heading like "Über" yields "über" (matching GitHub)
-// rather than "ber". GitHub strips everything outside Onigmo's \p{Word} class,
-// which also retains combining marks (\p{M}) and the zero-width joiner/
-// non-joiner (U+200C/U+200D, the Join_Control property); these are essential to
+// rather than "ber". Combining marks (\p{M}) are retained, which is essential to
 // decomposed Latin (e.g. "Café" as "e"+U+0301) and Indic scripts, so dropping
 // them would slug the heading differently than GitHub and flag valid links as
 // dead. Connector punctuation (\p{Pc}) is likewise kept in full — not just
@@ -1239,12 +1242,27 @@ func firstAnchorLink(li *ast.ListItem) string {
 // stripped by goldmark's Text(). For example "Endpoint" -> "endpoint",
 // "endpoints Block" -> "endpoints-block",
 // "`ec2_configuration` Block" -> "ec2_configuration-block".
+//
+// This is a general-category approximation of GitHub's slugger, not an exact
+// match. GitHub (see github-slugger, the canonical reference) lowercases with
+// full Unicode case mapping and removes a specific code-point table rather than
+// whole general categories, so this function diverges on rare edge cases: it
+// keeps Other_Number characters GitHub strips (e.g. "²", "½"), uses Go's simple
+// lowercasing instead of full mapping (e.g. "İ" -> "i" here vs "i"+U+0307 on
+// GitHub), and cannot reproduce GitHub's mixed handling of letterlike/
+// Alphabetic-property symbols. These characters effectively never appear in
+// Terraform provider doc headings, so the approximation is adequate. If exact
+// fidelity ever becomes a priority, port github-slugger's algorithm directly —
+// full-Unicode ToLower plus its generated rune-removal table
+// (https://github.com/Flet/github-slugger, regex.js) translated to Go rune
+// ranges — and drive it from GitHub-rendered fixtures rather than extending the
+// category predicates below.
 func headingAnchorSlug(s string) string {
 	var b strings.Builder
 	for _, r := range strings.ToLower(s) {
 		switch {
 		case unicode.IsLetter(r), unicode.IsNumber(r), unicode.IsMark(r),
-			unicode.Is(unicode.Pc, r), r == '-', r == '\u200c', r == '\u200d':
+			unicode.Is(unicode.Pc, r), r == '-':
 			b.WriteRune(r)
 		case r == ' ':
 			b.WriteRune('-')

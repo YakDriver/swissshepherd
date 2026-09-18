@@ -51,6 +51,15 @@ func TestParse_HeadingSlugRenderedText(t *testing.T) {
 			want:    "ec2_configuration-block",
 			absent:  "",
 		},
+		{
+			// Autolink label text is visible in the rendered heading, but
+			// goldmark keeps it off the child list, so it must be pulled from
+			// the AutoLink node explicitly.
+			name:    "autolink label included",
+			heading: "See <https://example.com>",
+			want:    "see-httpsexamplecom",
+			absent:  "see-",
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
