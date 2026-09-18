@@ -501,14 +501,19 @@ func collectInPageLinks(tree ast.Node, source []byte) []LinkRef {
 // href and how the target ID is generated. Goldmark stores the destination
 // verbatim, so Markdown backslash escapes ("foo\_bar"), HTML entities
 // ("foo&amp;bar"), and percent-encoding ("%C3%BCber-configuration") are all
-// still present. Resolve entities and backslash escapes, then percent-decode;
-// on a malformed percent-escape keep the (already entity/escape-normalized)
-// value so a genuinely broken link is still reported rather than silently
-// dropped.
+// still present. Decode them in the exact order Goldmark's renderer uses when
+// it produces the href — util.URLEscape(dest, true) applies
+// UnescapePunctuations, then ResolveNumericReferences, then ResolveEntityNames
+// — and only then percent-decode. Order matters: resolving named entities
+// first would recursively decode a fragment such as "x&amp;#95;y" to "x_y",
+// whereas Goldmark renders the literal "x&#95;y", so the wrong order can accept
+// a dead link. On a malformed percent-escape keep the (already
+// entity/escape-normalized) value so a genuinely broken link is still reported
+// rather than silently dropped.
 func normalizeLinkFragment(raw string) string {
-	b := util.ResolveEntityNames([]byte(raw))
+	b := util.UnescapePunctuations([]byte(raw))
 	b = util.ResolveNumericReferences(b)
-	b = util.UnescapePunctuations(b)
+	b = util.ResolveEntityNames(b)
 	s := string(b)
 	if decoded, err := url.PathUnescape(s); err == nil {
 		s = decoded
@@ -1145,14 +1150,20 @@ func firstAnchorLink(li *ast.ListItem) string {
 // lowercase; spaces become hyphens; hyphens and underscores are kept; all other
 // punctuation is dropped. Letters and digits are kept for any script, not just
 // ASCII, so a non-ASCII heading like "Über" yields "über" (matching GitHub)
-// rather than "ber". Backticks are already stripped by goldmark's Text(). For
-// example "Endpoint" -> "endpoint", "endpoints Block" -> "endpoints-block",
+// rather than "ber". GitHub strips everything outside Onigmo's \p{Word} class,
+// which also retains combining marks (\p{M}) and the zero-width joiner/
+// non-joiner (U+200C/U+200D, the Join_Control property); these are essential to
+// decomposed Latin (e.g. "Café" as "e"+U+0301) and Indic scripts, so dropping
+// them would slug the heading differently than GitHub and flag valid links as
+// dead. Backticks are already stripped by goldmark's Text(). For example
+// "Endpoint" -> "endpoint", "endpoints Block" -> "endpoints-block",
 // "`ec2_configuration` Block" -> "ec2_configuration-block".
 func headingAnchorSlug(s string) string {
 	var b strings.Builder
 	for _, r := range strings.ToLower(s) {
 		switch {
-		case unicode.IsLetter(r), unicode.IsNumber(r), r == '-', r == '_':
+		case unicode.IsLetter(r), unicode.IsNumber(r), unicode.IsMark(r),
+			r == '-', r == '_', r == '\u200c', r == '\u200d':
 			b.WriteRune(r)
 		case r == ' ':
 			b.WriteRune('-')
