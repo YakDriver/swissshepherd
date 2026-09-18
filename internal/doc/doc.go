@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"unicode"
 
@@ -439,9 +440,10 @@ func ParseWithOptions(source []byte, name string, templates HeadingTemplates, op
 		source:          source,
 	}
 
-	extractBlocks(tree, source, doc, templates, opts.CaptureNestedAttributes)
+	idx := newLineIndex(source)
+	extractBlocks(tree, source, idx, doc, templates, opts.CaptureNestedAttributes)
 	doc.HeadingAnchors = dedupAnchorSet(collectHeadingSlugs(tree, source))
-	doc.InPageLinks = collectInPageLinks(tree, source)
+	doc.InPageLinks = collectInPageLinks(tree, idx)
 	return doc, nil
 }
 
@@ -471,7 +473,7 @@ func collectHeadingSlugs(tree ast.Node, source []byte) []string {
 // bullets, callouts) while naturally excluding links inside code spans and
 // fenced code blocks, which Goldmark does not parse as links. Inline nodes
 // carry no line information, so the most recently seen block's line is used.
-func collectInPageLinks(tree ast.Node, source []byte) []LinkRef {
+func collectInPageLinks(tree ast.Node, idx *lineIndex) []LinkRef {
 	var links []LinkRef
 	currentLine := 0
 	_ = ast.Walk(tree, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
@@ -479,7 +481,7 @@ func collectInPageLinks(tree ast.Node, source []byte) []LinkRef {
 			return ast.WalkContinue, nil
 		}
 		if n.Type() == ast.TypeBlock {
-			if ln := nodeLineNumber(n, source); ln > 0 {
+			if ln := nodeLineNumber(n, idx); ln > 0 {
 				currentLine = ln
 			}
 		}
@@ -621,7 +623,7 @@ func blankFrontmatter(source []byte, end int) []byte {
 	return out
 }
 
-func extractBlocks(tree ast.Node, source []byte, doc *Document, templates HeadingTemplates, captureNested bool) {
+func extractBlocks(tree ast.Node, source []byte, idx *lineIndex, doc *Document, templates HeadingTemplates, captureNested bool) {
 	var currentBlockName string
 	var currentBlockAliases []string
 	var currentSection *Section
@@ -727,7 +729,7 @@ func extractBlocks(tree ast.Node, source []byte, doc *Document, templates Headin
 					doc.Sections.UnknownHeadings = append(doc.Sections.UnknownHeadings, ChildHeading{
 						Level:       2,
 						Text:        headingText,
-						Line:        nodeLineNumber(n, source),
+						Line:        nodeLineNumber(n, idx),
 						StartOffset: unknownStart,
 					})
 					currentSection = nil
@@ -755,7 +757,7 @@ func extractBlocks(tree ast.Node, source []byte, doc *Document, templates Headin
 					currentBlockAliases = blockNames[1:]
 				}
 				if currentSection != nil {
-					currentSection.ChildHeadings = append(currentSection.ChildHeadings, ChildHeading{Level: n.Level, Text: headingText, Line: nodeLineNumber(n, source), StartOffset: headingStartOffset(n)})
+					currentSection.ChildHeadings = append(currentSection.ChildHeadings, ChildHeading{Level: n.Level, Text: headingText, Line: nodeLineNumber(n, idx), StartOffset: headingStartOffset(n)})
 				}
 				return ast.WalkSkipChildren, nil
 			}
@@ -764,7 +766,7 @@ func extractBlocks(tree ast.Node, source []byte, doc *Document, templates Headin
 			// as a child heading of the current section (e.g. ### Basic Usage
 			// inside ## Example Usage).
 			if n.Level >= 3 && currentSection != nil {
-				currentSection.ChildHeadings = append(currentSection.ChildHeadings, ChildHeading{Level: n.Level, Text: headingText, Line: nodeLineNumber(n, source), StartOffset: headingStartOffset(n)})
+				currentSection.ChildHeadings = append(currentSection.ChildHeadings, ChildHeading{Level: n.Level, Text: headingText, Line: nodeLineNumber(n, idx), StartOffset: headingStartOffset(n)})
 			}
 
 			return ast.WalkSkipChildren, nil
@@ -813,7 +815,7 @@ func extractBlocks(tree ast.Node, source []byte, doc *Document, templates Headin
 					for child := n.FirstChild(); child != nil; child = child.NextSibling() {
 						if li, ok := child.(*ast.ListItem); ok {
 							if item := parseSectionListItem(li, source); item.Name != "" {
-								item.Line = nodeLineNumber(li, source)
+								item.Line = nodeLineNumber(li, idx)
 								currentSection.ListItems = append(currentSection.ListItems, item)
 							}
 						}
@@ -840,7 +842,7 @@ func extractBlocks(tree ast.Node, source []byte, doc *Document, templates Headin
 
 			for child := n.FirstChild(); child != nil; child = child.NextSibling() {
 				if li, ok := child.(*ast.ListItem); ok {
-					line := nodeLineNumber(li, source)
+					line := nodeLineNumber(li, idx)
 					attr := parseListItem(li, source)
 					if attr.Name != "" {
 						attr.Line = line
@@ -859,7 +861,7 @@ func extractBlocks(tree ast.Node, source []byte, doc *Document, templates Headin
 						// fields of a list(object({...})) documented as
 						// sub-bullets) into a dot-path keyed block.
 						if captureNested {
-							captureNestedAttrs(li, joinDocPath(currentBlockName, attr.Name), target, source)
+							captureNestedAttrs(li, joinDocPath(currentBlockName, attr.Name), target, source, idx)
 						}
 					} else if ref := parseNestedRef(li, source); ref.Parent != "" {
 						// A dot-notation reference (e.g. `network[*].private_ip`)
@@ -931,18 +933,45 @@ func parseSectionListItem(li *ast.ListItem, source []byte) SectionListItem {
 
 // hasMalformedSeparator checks if the raw source for a list item has a
 // backtick-dash pattern (`name`- ) instead of the correct `name` - format.
+// lineIndex maps byte offsets to 1-based line numbers. It stores the ascending
+// offsets of every newline byte once, so a lookup is an O(log n) binary search
+// rather than an O(offset) prefix rescan. Building it once per parse and
+// reusing it for every node keeps line resolution near-linear over the whole
+// document instead of quadratic in paragraph-heavy files.
+type lineIndex struct {
+	newlines []int // ascending offsets of '\n' bytes in the source
+}
+
+// newLineIndex records the offset of every newline byte in source.
+func newLineIndex(source []byte) *lineIndex {
+	newlines := make([]int, 0, bytes.Count(source, []byte{'\n'}))
+	for i, b := range source {
+		if b == '\n' {
+			newlines = append(newlines, i)
+		}
+	}
+	return &lineIndex{newlines: newlines}
+}
+
+// lineAt returns the 1-based line number containing byte offset. The count of
+// newlines strictly before offset equals the insertion index returned by the
+// binary search (newline offsets are distinct), so the line number is that
+// index plus one — identical to bytes.Count(source[:offset], "\n") + 1.
+func (li *lineIndex) lineAt(offset int) int {
+	i, _ := slices.BinarySearch(li.newlines, offset)
+	return i + 1
+}
+
 // nodeLineNumber returns the 1-based line number of a block node by inspecting
 // its first line segment or recursing into its first child.
-func nodeLineNumber(n ast.Node, source []byte) int {
+func nodeLineNumber(n ast.Node, idx *lineIndex) int {
 	if lines := n.Lines(); lines.Len() > 0 {
-		offset := lines.At(0).Start
-		return bytes.Count(source[:offset], []byte{'\n'}) + 1
+		return idx.lineAt(lines.At(0).Start)
 	}
 	// ListItem often has no direct lines; check first child.
 	if fc := n.FirstChild(); fc != nil {
 		if lines := fc.Lines(); lines.Len() > 0 {
-			offset := lines.At(0).Start
-			return bytes.Count(source[:offset], []byte{'\n'}) + 1
+			return idx.lineAt(lines.At(0).Start)
 		}
 	}
 	return 0
@@ -996,7 +1025,7 @@ func firstChildList(n ast.Node) *ast.List {
 // captureNestedAttrs records a list item's inline-indented sub-attributes into
 // the DocBlock keyed by path, recursing so deeper nesting yields deeper
 // dot-path blocks. It is a no-op for items with no nested list.
-func captureNestedAttrs(li *ast.ListItem, path string, target map[string]*DocBlock, source []byte) {
+func captureNestedAttrs(li *ast.ListItem, path string, target map[string]*DocBlock, source []byte, idx *lineIndex) {
 	sub := firstChildList(li)
 	if sub == nil {
 		return
@@ -1012,9 +1041,9 @@ func captureNestedAttrs(li *ast.ListItem, path string, target map[string]*DocBlo
 		if attr.Name == "" {
 			continue
 		}
-		attr.Line = nodeLineNumber(cli, source)
+		attr.Line = nodeLineNumber(cli, idx)
 		b.Attributes = append(b.Attributes, attr)
-		captureNestedAttrs(cli, joinDocPath(path, attr.Name), target, source)
+		captureNestedAttrs(cli, joinDocPath(path, attr.Name), target, source, idx)
 	}
 }
 
