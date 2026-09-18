@@ -532,9 +532,9 @@ func collectInPageLinks(tree ast.Node, idx *lineIndex) []LinkRef {
 			}
 		}
 		if link, ok := n.(*ast.Link); ok {
-			if dest := string(link.Destination); strings.HasPrefix(dest, "#") {
+			if frag, ok := inPageFragment(link.Destination); ok {
 				links = append(links, LinkRef{
-					Fragment: normalizeLinkFragment(strings.TrimPrefix(dest, "#")),
+					Fragment: frag,
 					Line:     currentLine,
 				})
 			}
@@ -544,29 +544,33 @@ func collectInPageLinks(tree ast.Node, idx *lineIndex) []LinkRef {
 	return links
 }
 
-// normalizeLinkFragment turns a raw Markdown link fragment into the anchor a
-// browser actually resolves, matching how Goldmark's renderer produces the
-// href and how the target ID is generated. Goldmark stores the destination
-// verbatim, so Markdown backslash escapes ("foo\_bar"), HTML entities
-// ("foo&amp;bar"), and percent-encoding ("%C3%BCber-configuration") are all
-// still present. Decode them in the exact order Goldmark's renderer uses when
-// it produces the href — util.URLEscape(dest, true) applies
-// UnescapePunctuations, then ResolveNumericReferences, then ResolveEntityNames
-// — and only then percent-decode. Order matters: resolving named entities
-// first would recursively decode a fragment such as "x&amp;#95;y" to "x_y",
-// whereas Goldmark renders the literal "x&#95;y", so the wrong order can accept
-// a dead link. On a malformed percent-escape keep the (already
-// entity/escape-normalized) value so a genuinely broken link is still reported
-// rather than silently dropped.
-func normalizeLinkFragment(raw string) string {
-	b := util.UnescapePunctuations([]byte(raw))
-	b = util.ResolveNumericReferences(b)
-	b = util.ResolveEntityNames(b)
-	s := string(b)
-	if decoded, err := url.PathUnescape(s); err == nil {
-		s = decoded
+// inPageFragment reports whether a Markdown link destination renders as an
+// in-page anchor (its href begins with "#") and, if so, returns the resolved
+// fragment. Goldmark stores the destination verbatim, so Markdown backslash
+// escapes ("\#foo"), HTML entities ("&#35;foo", "foo&amp;bar"), and
+// percent-encoding ("%C3%BCber") are all still present. The destination is
+// first decoded the way goldmark's renderer produces the href —
+// util.URLEscape(dest, true) applies UnescapePunctuations, then
+// ResolveNumericReferences, then ResolveEntityNames — so an escaped or
+// entity-encoded "#" opener is recognized as an in-page link rather than
+// skipped. Order matters: resolving named entities before numeric references
+// would recursively decode a fragment such as "x&amp;#95;y" to "x_y", whereas
+// goldmark renders the literal "x&#95;y", so the wrong order can accept a dead
+// link. Only after the leading-"#" test is the fragment percent-decoded, so a
+// percent-encoded "#" ("%23foo") stays a non-fragment path and is correctly
+// ignored. On a malformed percent-escape the (entity/escape-normalized)
+// fragment is kept so a genuinely broken link is still reported rather than
+// silently dropped.
+func inPageFragment(dest []byte) (string, bool) {
+	decoded := string(decodeGoldmarkText(dest))
+	frag, ok := strings.CutPrefix(decoded, "#")
+	if !ok {
+		return "", false
 	}
-	return s
+	if unescaped, err := url.PathUnescape(frag); err == nil {
+		frag = unescaped
+	}
+	return frag, true
 }
 
 // stripFrontmatter returns a copy of source where any leading YAML
