@@ -1234,15 +1234,17 @@ func firstAnchorLink(li *ast.ListItem) string {
 // non-joiner (U+200C/U+200D, the Join_Control property); these are essential to
 // decomposed Latin (e.g. "Café" as "e"+U+0301) and Indic scripts, so dropping
 // them would slug the heading differently than GitHub and flag valid links as
-// dead. Backticks are already stripped by goldmark's Text(). For example
-// "Endpoint" -> "endpoint", "endpoints Block" -> "endpoints-block",
+// dead. Connector punctuation (\p{Pc}) is likewise kept in full — not just
+// U+005F "_" but also U+203F, U+2040, U+FF3F, etc. Backticks are already
+// stripped by goldmark's Text(). For example "Endpoint" -> "endpoint",
+// "endpoints Block" -> "endpoints-block",
 // "`ec2_configuration` Block" -> "ec2_configuration-block".
 func headingAnchorSlug(s string) string {
 	var b strings.Builder
 	for _, r := range strings.ToLower(s) {
 		switch {
 		case unicode.IsLetter(r), unicode.IsNumber(r), unicode.IsMark(r),
-			r == '-', r == '_', r == '\u200c', r == '\u200d':
+			unicode.Is(unicode.Pc, r), r == '-', r == '\u200c', r == '\u200d':
 			b.WriteRune(r)
 		case r == ' ':
 			b.WriteRune('-')

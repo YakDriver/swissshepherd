@@ -9,6 +9,37 @@ import (
 	"github.com/YakDriver/swissshepherd/internal/doc"
 )
 
+// TestParse_HeadingAnchorsPreserveConnectors guards that all Unicode connector
+// punctuation (\p{Pc}) survives the slug, matching GitHub's \p{Word} set — not
+// just the ASCII underscore U+005F but also characters like U+203F (‿).
+func TestParse_HeadingAnchorsPreserveConnectors(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		heading string
+		want    string
+	}{
+		{name: "ascii underscore", heading: "a_b", want: "a_b"},
+		{name: "undertie U+203F", heading: "a\u203fb", want: "a\u203fb"},
+		{name: "fullwidth low line U+FF3F", heading: "a\uff3fb", want: "a\uff3fb"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+
+			md := "# Resource: aws_thing\n\n## " + c.heading + "\n\nbody.\n"
+			d, err := doc.ParseWithTemplates([]byte(md), "aws_thing", doc.DefaultHeadingTemplates())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !d.HeadingAnchors[c.want] {
+				t.Errorf("expected connector-preserving slug %q; got %v", c.want, d.HeadingAnchors)
+			}
+		})
+	}
+}
+
 // TestParse_HeadingAnchorsPreserveMarks guards that combining marks survive the
 // slug, matching GitHub (which strips only characters outside Onigmo's \p{Word}
 // class, and \p{Word} includes \p{M}). A decomposed "Café" ("Cafe"+U+0301)
