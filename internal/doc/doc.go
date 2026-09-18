@@ -459,11 +459,57 @@ func collectHeadingSlugs(tree ast.Node, source []byte) []string {
 			return ast.WalkContinue, nil
 		}
 		if h, ok := n.(*ast.Heading); ok {
-			slugs = append(slugs, headingAnchorSlug(string(h.Text(source))))
+			slugs = append(slugs, headingAnchorSlug(headingSlugText(h, source)))
 		}
 		return ast.WalkContinue, nil
 	})
 	return slugs
+}
+
+// headingSlugText returns a heading's visible text as GitHub sees it when
+// generating an anchor id, which differs from goldmark's Node.Text: Node.Text
+// returns raw source segments, so HTML entity spellings ("&amp;") and inline
+// raw-HTML tag bytes ("<em>") would leak into the slug and make a link to the
+// rendered anchor look dead. This walk instead excludes raw-HTML tag nodes,
+// decodes entities and Markdown backslash escapes in ordinary text (in
+// goldmark's rendered-href order), and keeps code-span content verbatim —
+// Markdown does not decode escapes or entities inside code spans, and their
+// text is visible in the heading (e.g. "`ec2_configuration` Block").
+func headingSlugText(h *ast.Heading, source []byte) string {
+	var b bytes.Buffer
+	var walk func(n ast.Node)
+	walk = func(n ast.Node) {
+		for c := n.FirstChild(); c != nil; c = c.NextSibling() {
+			switch t := c.(type) {
+			case *ast.RawHTML:
+				// Inline HTML tags contribute no text to the rendered
+				// heading; any text between tags is separate Text nodes.
+			case *ast.CodeSpan:
+				b.Write(t.Text(source))
+			case *ast.Text:
+				b.Write(decodeGoldmarkText(t.Value(source)))
+				if t.SoftLineBreak() {
+					b.WriteByte('\n')
+				}
+			case *ast.String:
+				b.Write(t.Value)
+			default:
+				walk(c)
+			}
+		}
+	}
+	walk(h)
+	return b.String()
+}
+
+// decodeGoldmarkText resolves Markdown backslash escapes, numeric references,
+// and named HTML entities in the exact order goldmark's renderer applies them
+// (UnescapePunctuations, ResolveNumericReferences, ResolveEntityNames), turning
+// raw source text into the characters a browser actually renders.
+func decodeGoldmarkText(raw []byte) []byte {
+	b := util.UnescapePunctuations(raw)
+	b = util.ResolveNumericReferences(b)
+	return util.ResolveEntityNames(b)
 }
 
 // collectInPageLinks walks the parsed AST and returns every in-page link (a
