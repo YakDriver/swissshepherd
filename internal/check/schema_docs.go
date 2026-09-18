@@ -1049,6 +1049,12 @@ func (r *SchemaDocsRule) checkLabels(ctx CheckContext) []Result {
 		if !ok {
 			continue
 		}
+		// Respect skip_blocks: a block opted out of checks (applied to its
+		// canonical schema path, as in the coverage checks) must not produce a
+		// new misplacement error.
+		if slices.Contains(r.skipBlocks(), schemaPath) {
+			continue
+		}
 		for _, attr := range block.Attributes {
 			if (attr.Required || attr.Optional) && configurableArgAtPath(ctx.Schema, schemaPath, attr.Name) {
 				movedBlocks[blockName] = true

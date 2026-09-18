@@ -574,6 +574,37 @@ func TestLabels_RealHeadingWithoutHeadingLineStillMoved(t *testing.T) {
 	}
 }
 
+// A block listed in skip_blocks (e.g. the default "timeouts") is opted out of
+// checks entirely, so the misplacement classification must not emit a new move
+// error for it even when it is documented under Attribute Reference with
+// configurable labels.
+func TestLabels_SkipBlocksExemptFromMisplacement(t *testing.T) {
+	t.Parallel()
+
+	src := `# Resource: aws_thing
+
+## Argument Reference
+
+* ` + "`name`" + ` - (Required) Name.
+
+## Attribute Reference
+
+### ` + "`timeouts`" + ` Block
+
+* ` + "`create`" + ` - (Optional) Create timeout.
+`
+	rs := &schema.ResourceSchema{Blocks: map[string]*schema.Block{
+		"":         {Attributes: []schema.Attribute{{Name: "name", Required: true}}, ChildBlocks: []string{"timeouts"}},
+		"timeouts": {Path: "timeouts", Attributes: []schema.Attribute{{Name: "create", Optional: true}}},
+	}}
+
+	// Default SkipBlocks includes "timeouts".
+	results := labelResults(t, src, rs)
+	if hasMsg(results, "move this subsection to Argument Reference") {
+		t.Errorf("a skip_blocks entry must not produce a misplacement error: %+v", results)
+	}
+}
+
 // A synthetic, heading-less entry created by an unlabeled dot-path reference
 // (outer.notification) must not steal subsection ownership from a real
 // ### notification heading. Otherwise the real subsection resolves to no schema
