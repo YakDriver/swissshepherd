@@ -1125,12 +1125,8 @@ func (r *SchemaDocsRule) checkLabels(ctx CheckContext) []Result {
 //	    already models.
 func referencesMovedBlock(ctx CheckContext, blockName string, attr doc.DocAttribute, movedBlocks, movedSchemaPaths map[string]bool) bool {
 	if parentPath, ok := resolveDocKeyToSchemaPath(ctx.Schema, ctx.Doc.AttributeBlocks, blockName); ok {
-		if pb, ok := ctx.Schema.Blocks[parentPath]; ok && !pb.ConfigUnknown && slices.Contains(pb.ChildBlocks, attr.Name) {
-			childPath := attr.Name
-			if parentPath != "" {
-				childPath = parentPath + "." + attr.Name
-			}
-			if movedSchemaPaths[childPath] {
+		if pb, ok := ctx.Schema.Blocks[parentPath]; ok && !pb.ConfigUnknown {
+			if childPath, found := childPathForAttr(parentPath, pb, attr.Name); found && movedSchemaPaths[childPath] {
 				return true
 			}
 		}
@@ -1217,14 +1213,38 @@ func configurableArgAtPath(rs *schema.ResourceSchema, path, attrName string) boo
 			return (a.Required || a.Optional) && !a.Computed
 		}
 	}
-	if slices.Contains(b.ChildBlocks, attrName) {
-		childPath := attrName
-		if path != "" {
-			childPath = path + "." + attrName
-		}
+	if childPath, found := childPathForAttr(path, b, attrName); found {
 		return blockTreeHasPureConfigurable(rs, childPath, make(map[string]bool))
 	}
 	return false
+}
+
+// childBlockPath returns the canonical ResourceSchema.Blocks key for a
+// ChildBlocks entry of the block at parentPath. Entries appear in two forms in
+// this codebase — a bare leaf name (from the provider loader) or a full
+// dot-path (common in fixtures and normalized elsewhere via leafName). A
+// full-path entry is used as-is; a bare leaf is joined to the parent path.
+func childBlockPath(parentPath, child string) string {
+	if strings.Contains(child, ".") {
+		return child
+	}
+	if parentPath == "" {
+		return child
+	}
+	return parentPath + "." + child
+}
+
+// childPathForAttr returns the canonical schema path of the immediate child
+// block of pb (at parentPath) whose leaf name is attrName, matching by leaf so
+// both ChildBlocks representations resolve. The second result reports whether
+// such a child exists.
+func childPathForAttr(parentPath string, pb *schema.Block, attrName string) (string, bool) {
+	for _, child := range pb.ChildBlocks {
+		if leafName(child) == attrName {
+			return childBlockPath(parentPath, child), true
+		}
+	}
+	return "", false
 }
 
 // blockTreeHasPureConfigurable reports whether the schema block at path, or any
@@ -1247,11 +1267,7 @@ func blockTreeHasPureConfigurable(rs *schema.ResourceSchema, path string, visite
 		}
 	}
 	for _, child := range b.ChildBlocks {
-		childPath := child
-		if path != "" {
-			childPath = path + "." + child
-		}
-		if blockTreeHasPureConfigurable(rs, childPath, visited) {
+		if blockTreeHasPureConfigurable(rs, childBlockPath(path, child), visited) {
 			return true
 		}
 	}

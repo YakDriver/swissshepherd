@@ -347,6 +347,113 @@ func TestLabels_RealHeadingAfterSyntheticReferenceStillMoved(t *testing.T) {
 	}
 }
 
+// ChildBlocks entries may be stored as full dot-paths (as many fixtures and the
+// coverage checker's leafName normalization assume), not only leaf names. A
+// parent whose child entry is the full path outer.notification must still be
+// detected as configurable (2/3).
+func TestLabels_FullPathChildBlockDetected(t *testing.T) {
+	t.Parallel()
+
+	src := `# Resource: aws_thing
+
+## Argument Reference
+
+* ` + "`name`" + ` - (Required) Name.
+
+## Attribute Reference
+
+### ` + "`outer`" + ` Block
+
+* ` + "`notification`" + ` - (Optional) Notif.
+`
+	rs := &schema.ResourceSchema{Blocks: map[string]*schema.Block{
+		"":                   {Attributes: []schema.Attribute{{Name: "name", Required: true}}, ChildBlocks: []string{"outer"}},
+		"outer":              {Path: "outer", ChildBlocks: []string{"outer.notification"}}, // full-path entry
+		"outer.notification": {Path: "outer.notification", Attributes: []schema.Attribute{{Name: "comparison_operator", Required: true}}},
+	}}
+
+	results := labelResults(t, src, rs)
+	if !hasMsg(results, `block "outer" is documented under Attribute Reference but is a configurable argument block`) {
+		t.Errorf("full-path ChildBlocks entry must still be recognized as a configurable child: %+v", results)
+	}
+}
+
+// The descendant traversal must also handle full-path ChildBlocks entries: a
+// grandchild stored as wrapper.notification.setting must be reached rather than
+// mis-joined into wrapper.notification.wrapper.notification.setting (3/3).
+func TestLabels_FullPathDescendantRecursion(t *testing.T) {
+	t.Parallel()
+
+	src := `# Resource: aws_thing
+
+## Argument Reference
+
+* ` + "`name`" + ` - (Required) Name.
+
+## Attribute Reference
+
+### ` + "`wrapper`" + ` Block
+
+* ` + "`notification`" + ` - (Optional) Notif.
+`
+	rs := &schema.ResourceSchema{Blocks: map[string]*schema.Block{
+		"":        {Attributes: []schema.Attribute{{Name: "name", Required: true}}, ChildBlocks: []string{"wrapper"}},
+		"wrapper": {Path: "wrapper", ChildBlocks: []string{"notification"}}, // leaf entry
+		// structural child whose own child is stored as a full path:
+		"wrapper.notification":         {Path: "wrapper.notification", ChildBlocks: []string{"wrapper.notification.setting"}},
+		"wrapper.notification.setting": {Path: "wrapper.notification.setting", Attributes: []schema.Attribute{{Name: "threshold", Required: true}}},
+	}}
+
+	results := labelResults(t, src, rs)
+	if !hasMsg(results, `block "wrapper" is documented under Attribute Reference but is a configurable argument block`) {
+		t.Errorf("full-path grandchild must be reached by the descendant traversal: %+v", results)
+	}
+}
+
+// With a full-path ChildBlocks entry, a parent reference bullet to a moved child
+// must still be recognized so no redundant strip-label is emitted alongside the
+// move error (1/3, exercising both detection and suppression).
+func TestLabels_FullPathChildNoDoubleReport(t *testing.T) {
+	t.Parallel()
+
+	templates := doc.HeadingTemplates{"`{Path}` Block", "`{Block}` Block", "{Block} Block", "{Block}", "{Title}"}
+
+	src := `# Resource: aws_thing
+
+## Argument Reference
+
+* ` + "`name`" + ` - (Required) Name.
+
+## Attribute Reference
+
+### ` + "`outer`" + ` Block
+
+* ` + "`notification`" + ` - (Optional) Notif.
+
+### ` + "`outer.notification`" + ` Block
+
+* ` + "`comparison_operator`" + ` - (Required) Operator.
+`
+	rs := &schema.ResourceSchema{Blocks: map[string]*schema.Block{
+		"":                   {Attributes: []schema.Attribute{{Name: "name", Required: true}}, ChildBlocks: []string{"outer"}},
+		"outer":              {Path: "outer", ChildBlocks: []string{"outer.notification"}}, // full-path entry
+		"outer.notification": {Path: "outer.notification", Attributes: []schema.Attribute{{Name: "comparison_operator", Required: true}}},
+	}}
+
+	d, err := doc.ParseWithTemplates([]byte(src), "aws_thing", templates)
+	if err != nil {
+		t.Fatal(err)
+	}
+	results := (&check.SchemaDocsRule{IgnoreDeprecated: true}).Check(
+		check.CheckContext{Resource: "aws_thing", Schema: rs, Doc: d})
+	if !hasMsg(results, `block "outer.notification" is documented under Attribute Reference but is a configurable argument block`) {
+		t.Errorf("expected outer.notification move error: %+v", results)
+	}
+	if hasMsg(results, "should not have") {
+		t.Errorf("full-path child must be recognized so no redundant strip-label is emitted: %+v", results)
+	}
+}
+
 // 1/4: a partial {Parent}-style dotted heading key whose leaf is shared by
 // several schema paths (an exact header.match alongside a deeper
 // foo.header.match) is ambiguous. The classifier must use most-specific
