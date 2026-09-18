@@ -33,6 +33,18 @@ func hasMsg(results []check.Result, sub string) bool {
 	return false
 }
 
+// findSeverity returns the severity of the first result whose Message contains
+// sub, and whether such a result exists. Severity is the load-bearing §9
+// decision, so tests pin it explicitly rather than relying on hasMsg alone.
+func findSeverity(results []check.Result, sub string) (check.Severity, bool) {
+	for _, r := range results {
+		if strings.Contains(r.Message, sub) {
+			return r.Severity, true
+		}
+	}
+	return 0, false
+}
+
 // A configurable nested block mistakenly documented under Attribute Reference
 // with accurate (Required)/(Optional) labels must yield ONE misplacement error
 // (move to Argument Reference) and must NOT push the author to strip the
@@ -243,10 +255,10 @@ func TestLabels_DottedKeyExactMissDoesNotLeafGuess(t *testing.T) {
 }
 
 // A labeled dot-notation reference (network[*].subnet_id - (Required)) creates a
-// synthetic, heading-less AttributeBlocks entry. It must not be treated as a
-// misplaced subsection (there is no subsection to move); the per-attribute
-// strip-label finding must be retained.
-func TestLabels_SyntheticDotRefKeepsStripLabel(t *testing.T) {
+// synthetic, heading-less AttributeBlocks entry. It has no subsection to move,
+// so it yields a per-attribute move for the configurable argument (§8 case 5) —
+// not a "move this subsection" collapse, and not the misleading strip-label.
+func TestLabels_LabeledDotRefBulletMoved(t *testing.T) {
 	t.Parallel()
 
 	src := `# Resource: aws_thing
@@ -266,18 +278,20 @@ func TestLabels_SyntheticDotRefKeepsStripLabel(t *testing.T) {
 
 	results := labelResults(t, src, rs)
 	if hasMsg(results, "move this subsection to Argument Reference") {
-		t.Errorf("synthetic dot-notation reference has no subsection to move: %+v", results)
+		t.Errorf("a heading-less synthetic reference has no subsection to collapse: %+v", results)
 	}
-	if !hasMsg(results, `attribute "subnet_id" in block "network" should not have (Required) label`) {
-		t.Errorf("strip-label guidance for a labeled dot-notation reference must be retained: %+v", results)
+	if !hasMsg(results, `argument "subnet_id" in block "network" is documented under Attribute Reference but is a configurable argument in the schema; move it to Argument Reference`) {
+		t.Errorf("labeled dot-notation reference to a configurable arg must yield a per-attribute move: %+v", results)
+	}
+	if hasMsg(results, "should not have") {
+		t.Errorf("must not push the author to strip the accurate label: %+v", results)
 	}
 }
 
-// A bare subsection heading whose leaf is shared by both a root schema block
-// and a nested block (notification vs outer.notification) is ambiguous. The
-// conservative resolver must refuse to guess, so no ERROR-severity misplacement
-// finding is emitted from the root block on an ambiguous bare key.
-func TestLabels_AmbiguousBareHeadingNotResolvedToRoot(t *testing.T) {
+// A bare heading resolves to an exact root-level schema block when one exists
+// (§4): `### notification` maps to the root `notification` block (not the nested
+// outer.notification), and that configurable block is flagged as misplaced.
+func TestLabels_BareHeadingResolvesToExactRootBlock(t *testing.T) {
 	t.Parallel()
 
 	src := `# Resource: aws_thing
@@ -303,8 +317,8 @@ func TestLabels_AmbiguousBareHeadingNotResolvedToRoot(t *testing.T) {
 	}}
 
 	results := labelResults(t, src, rs)
-	if hasMsg(results, "move this subsection to Argument Reference") {
-		t.Errorf("ambiguous bare heading must not resolve to the root block and emit an ERROR: %+v", results)
+	if !hasMsg(results, `block "notification" is documented under Attribute Reference but is a configurable argument block`) {
+		t.Errorf("bare heading must resolve to the exact root-level block and be flagged: %+v", results)
 	}
 }
 
@@ -454,11 +468,11 @@ func TestLabels_FullPathChildNoDoubleReport(t *testing.T) {
 	}
 }
 
-// 1/4: a partial {Parent}-style dotted heading key whose leaf is shared by
-// several schema paths (an exact header.match alongside a deeper
-// foo.header.match) is ambiguous. The classifier must use most-specific
-// ownership and refuse to guess, so no ERROR is emitted from the exact block.
-func TestLabels_AmbiguousDottedKeyNotClassified(t *testing.T) {
+// A dotted heading claims an exact schema path (§4): `### header.match` resolves
+// to header.match itself even though a deeper foo.header.match shares the leaf,
+// and it is flagged as the misplaced configurable block. (The pre-redesign
+// ownership resolver treated this as ambiguous and stayed silent.)
+func TestLabels_DottedKeyExactResolves(t *testing.T) {
 	t.Parallel()
 
 	templates := doc.HeadingTemplates{"`{Path}` Block", "`{Block}` Block", "{Block} Block", "{Block}", "{Title}"}
@@ -493,8 +507,8 @@ func TestLabels_AmbiguousDottedKeyNotClassified(t *testing.T) {
 	}
 	results := (&check.SchemaDocsRule{IgnoreDeprecated: true}).Check(
 		check.CheckContext{Resource: "aws_thing", Schema: rs, Doc: d})
-	if hasMsg(results, "move this subsection to Argument Reference") {
-		t.Errorf("ambiguous partial dotted key must not be classified via an exact match: %+v", results)
+	if !hasMsg(results, `block "header.match" is documented under Attribute Reference but is a configurable argument block`) {
+		t.Errorf("dotted heading must resolve to its exact schema path and be flagged: %+v", results)
 	}
 }
 
@@ -741,10 +755,10 @@ func TestLabels_SyntheticEntryDoesNotStealOwnership(t *testing.T) {
 	}
 }
 
-// A scalar attribute that carries an invalid label and merely links to a moved
-// subsection for context is a defect of its own; moving the subsection does not
-// fix it, so its strip-label warning must remain (not be suppressed by the link).
-func TestLabels_ScalarLinkingToMovedSubsectionNotSuppressed(t *testing.T) {
+// A configurable root scalar that merely links to a moved subsection for context
+// is judged on its own: it is a misplaced root argument (#62) and gets its own
+// per-attribute move (WARN), independent of the linked subsection's collapse.
+func TestLabels_ScalarLinkingToMovedSubsectionStillFlagged(t *testing.T) {
 	t.Parallel()
 
 	src := `# Resource: aws_thing
@@ -771,8 +785,8 @@ func TestLabels_ScalarLinkingToMovedSubsectionNotSuppressed(t *testing.T) {
 	if !hasMsg(results, `block "notification" is documented under Attribute Reference but is a configurable argument block`) {
 		t.Errorf("expected notification move error: %+v", results)
 	}
-	if !hasMsg(results, `attribute "extra" in block "(root)" should not have (Optional) label`) {
-		t.Errorf("a scalar linking to the moved subsection for context must keep its own strip-label: %+v", results)
+	if !hasMsg(results, `argument "extra" is documented under Attribute Reference but is a configurable argument in the schema; move it to Argument Reference`) {
+		t.Errorf("a configurable root scalar must get its own move (#62), independent of the linked subsection: %+v", results)
 	}
 }
 
@@ -846,11 +860,12 @@ func TestLabels_StructuralChildWithConfigurableDescendantSuppressed(t *testing.T
 	}
 }
 
-// Point 3: a moved block that mixes a pure-config field with a Computed field
-// carrying an erroneous label must emit the move error AND retain the
-// strip-label guidance for the Computed field — the move only accounts for the
-// configurable fields.
-func TestLabels_MovedBlockRetainsStripLabelForComputedField(t *testing.T) {
+// A mixed block (a pure-config field plus a computed-only field documented in
+// the same subsection) must NOT collapse (§5): it emits a per-attribute move for
+// the configurable field and leaves the computed-only field under Attribute
+// Reference with its strip-label guidance. This is the 3/3 fix — a wholesale
+// "move this subsection" would drag the computed field to the wrong section.
+func TestLabels_MixedBlockPerAttributeMoveKeepsComputedStrip(t *testing.T) {
 	t.Parallel()
 
 	src := `# Resource: aws_thing
@@ -875,20 +890,21 @@ func TestLabels_MovedBlockRetainsStripLabelForComputedField(t *testing.T) {
 	}}
 
 	results := labelResults(t, src, rs)
-	if !hasMsg(results, `block "notification" is documented under Attribute Reference but is a configurable argument block`) {
-		t.Errorf("expected move error for notification block: %+v", results)
+	if hasMsg(results, "move this subsection to Argument Reference") {
+		t.Errorf("a mixed block must not collapse to a wholesale subsection move: %+v", results)
+	}
+	if !hasMsg(results, `argument "comparison_operator" in block "notification" is documented under Attribute Reference but is a configurable argument in the schema; move it to Argument Reference`) {
+		t.Errorf("the configurable field must get a per-attribute move: %+v", results)
 	}
 	if !hasMsg(results, `attribute "state" in block "notification" should not have (Optional) label`) {
-		t.Errorf("computed field's strip-label guidance must be retained inside a moved block: %+v", results)
-	}
-	if hasMsg(results, `attribute "comparison_operator"`) {
-		t.Errorf("pure-config field must not get a strip-label (the move covers it): %+v", results)
+		t.Errorf("the computed-only field must keep its strip-label guidance: %+v", results)
 	}
 }
 
-// Point 4: a moved outer.notification must not suppress an unrelated
-// configurable notification child at the root — suppression matches the full
-// resolved schema path, not the leaf name.
+// A moved outer.notification must not swallow an unrelated configurable
+// notification child at the root: dedup is path-based, not leaf-based (2/3). The
+// root's own notification reference is a distinct misplaced configurable block
+// and gets its own move.
 func TestLabels_MovedPathDoesNotSuppressUnrelatedLeaf(t *testing.T) {
 	t.Parallel()
 
@@ -928,8 +944,8 @@ func TestLabels_MovedPathDoesNotSuppressUnrelatedLeaf(t *testing.T) {
 	if !hasMsg(results, `block "outer.notification" is documented under Attribute Reference but is a configurable argument block`) {
 		t.Errorf("expected outer.notification to be flagged misplaced: %+v", results)
 	}
-	if !hasMsg(results, `attribute "notification" in block "(root)" should not have (Optional) label`) {
-		t.Errorf("unrelated root notification reference must not be suppressed by a moved same-leaf path: %+v", results)
+	if !hasMsg(results, `argument "notification" is documented under Attribute Reference but is a configurable argument in the schema; move it to Argument Reference`) {
+		t.Errorf("unrelated root notification reference must get its own move, not be suppressed by a same-leaf path: %+v", results)
 	}
 }
 
@@ -968,13 +984,12 @@ func TestLabels_ChildResolvedRelativeToParent(t *testing.T) {
 	}
 }
 
-// A configurable *scalar* attribute that shares its leaf name with a moved
-// child block (but is itself an ordinary field, not a reference to that block)
-// must not be suppressed. This exercises the root block, which is never marked
-// "moved", so its labeled attributes reach the per-attribute path. Suppression
-// is gated on the entry being a configurable child block, so the scalar keeps
-// its own "should not have label" warning.
-func TestLabels_SharedLeafConfigurableScalarNotSuppressed(t *testing.T) {
+// A configurable root *scalar* that shares its leaf name with a moved nested
+// block (outer.notification) is judged independently: it is itself a misplaced
+// root argument (#62) and gets its own per-attribute move (WARN), never
+// suppressed by the nested block's move. Detection is per attribute, so a shared
+// leaf name causes no cross-talk.
+func TestLabels_SharedLeafConfigurableScalarStillFlagged(t *testing.T) {
 	t.Parallel()
 
 	templates := doc.HeadingTemplates{"`{Path}` Block", "`{Block}` Block", "{Block} Block", "{Block}", "{Title}"}
@@ -1011,8 +1026,8 @@ func TestLabels_SharedLeafConfigurableScalarNotSuppressed(t *testing.T) {
 	if !hasMsg(results, `block "outer.notification" is documented under Attribute Reference but is a configurable argument block`) {
 		t.Errorf("expected outer.notification to be reported as misplaced; got: %+v", results)
 	}
-	if !hasMsg(results, `attribute "notification" in block "(root)" should not have (Optional) label`) {
-		t.Errorf("root configurable scalar sharing the moved block's leaf must still be flagged; got: %+v", results)
+	if !hasMsg(results, `argument "notification" is documented under Attribute Reference but is a configurable argument in the schema; move it to Argument Reference`) {
+		t.Errorf("root configurable scalar sharing the moved block's leaf must get its own move (#62); got: %+v", results)
 	}
 }
 
@@ -1117,5 +1132,94 @@ func TestLabels_ConfigUnknownBlockNotMisplaced(t *testing.T) {
 	results := labelResults(t, src, rs)
 	if hasMsg(results, "move this subsection to Argument Reference") {
 		t.Errorf("ConfigUnknown block must not produce a misplacement error: %+v", results)
+	}
+}
+
+// Severity is the load-bearing, gated §9 decision. Pin all three classes so a
+// regression that flips one silently (e.g. root → ERROR, exactly the #62 FP
+// risk being gated) is caught: collapse and nested per-attribute moves are
+// ERROR, and a root-scalar move (#62) is WARN with no block clause.
+func TestLabels_MoveSeverities(t *testing.T) {
+	t.Parallel()
+
+	src := `# Resource: aws_thing
+
+## Argument Reference
+
+* ` + "`name`" + ` - (Required) Name.
+
+## Attribute Reference
+
+* ` + "`instance_type`" + ` - (Optional) Instance type.
+
+### ` + "`cost_filter`" + ` Block
+
+* ` + "`values`" + ` - (Required) Values.
+
+### ` + "`auto_adjust_data`" + ` Block
+
+* ` + "`auto_adjust_type`" + ` - (Required) Type.
+* ` + "`last_auto_adjust_time`" + ` - (Optional) Last time.
+`
+	rs := &schema.ResourceSchema{Blocks: map[string]*schema.Block{
+		"": {Attributes: []schema.Attribute{
+			{Name: "name", Required: true},
+			{Name: "instance_type", Optional: true},
+		}, ChildBlocks: []string{"cost_filter", "auto_adjust_data"}},
+		"cost_filter": {Path: "cost_filter", Attributes: []schema.Attribute{{Name: "values", Required: true}}},
+		"auto_adjust_data": {Path: "auto_adjust_data", Attributes: []schema.Attribute{
+			{Name: "auto_adjust_type", Required: true},
+			{Name: "last_auto_adjust_time", Computed: true}, // computed-only → block is mixed
+		}},
+	}}
+	results := labelResults(t, src, rs)
+
+	// Collapse (pure-config nested block) → ERROR.
+	if sev, ok := findSeverity(results, `block "cost_filter" is documented under Attribute Reference but is a configurable argument block`); !ok || sev != check.SeverityError {
+		t.Errorf("collapse severity: ok=%v sev=%v, want ERROR; results=%+v", ok, sev, results)
+	}
+	// Nested per-attribute move (mixed block) → ERROR.
+	if sev, ok := findSeverity(results, `argument "auto_adjust_type" in block "auto_adjust_data"`); !ok || sev != check.SeverityError {
+		t.Errorf("nested per-attribute severity: ok=%v sev=%v, want ERROR; results=%+v", ok, sev, results)
+	}
+	// Root scalar move (#62) → WARN, gated per §9.
+	if sev, ok := findSeverity(results, `argument "instance_type" is documented under Attribute Reference`); !ok || sev != check.SeverityWarning {
+		t.Errorf("root move severity: ok=%v sev=%v, want WARN; results=%+v", ok, sev, results)
+	}
+	// The root move must carry no block clause.
+	if hasMsg(results, `in block "(root)"`) {
+		t.Errorf("root move must not carry a block clause: %+v", results)
+	}
+}
+
+// §8 case 3b — the negative twin for the sole inference step (§4): a bare
+// heading whose unique-leaf match is an Optional+Computed attribute must NOT be
+// flagged as misplaced. configurableArgAtPath excludes Optional+Computed, so
+// unique-leaf resolution can never promote it to a move.
+func TestLabels_UniqueLeafOptionalComputedNotMoved(t *testing.T) {
+	t.Parallel()
+
+	src := `# Resource: aws_thing
+
+## Argument Reference
+
+* ` + "`name`" + ` - (Required) Name.
+
+## Attribute Reference
+
+### ` + "`endpoint`" + ` Block
+
+* ` + "`address`" + ` - (Optional) Address.
+`
+	rs := &schema.ResourceSchema{Blocks: map[string]*schema.Block{
+		"":        {Attributes: []schema.Attribute{{Name: "name", Required: true}}, ChildBlocks: []string{"cluster"}},
+		"cluster": {Path: "cluster", ChildBlocks: []string{"endpoint"}},
+		// Sole path carrying leaf "endpoint"; its address is Optional+Computed.
+		"cluster.endpoint": {Path: "cluster.endpoint", Attributes: []schema.Attribute{{Name: "address", Optional: true, Computed: true}}},
+	}}
+
+	results := labelResults(t, src, rs)
+	if hasMsg(results, "move it to Argument Reference") || hasMsg(results, "move this subsection to Argument Reference") {
+		t.Errorf("unique-leaf resolution to an Optional+Computed attr must not produce a move: %+v", results)
 	}
 }
