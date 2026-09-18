@@ -308,6 +308,160 @@ func TestLabels_AmbiguousBareHeadingNotResolvedToRoot(t *testing.T) {
 	}
 }
 
+// 1/4: a partial {Parent}-style dotted heading key whose leaf is shared by
+// several schema paths (an exact header.match alongside a deeper
+// foo.header.match) is ambiguous. The classifier must use most-specific
+// ownership and refuse to guess, so no ERROR is emitted from the exact block.
+func TestLabels_AmbiguousDottedKeyNotClassified(t *testing.T) {
+	t.Parallel()
+
+	templates := doc.HeadingTemplates{"`{Path}` Block", "`{Block}` Block", "{Block} Block", "{Block}", "{Title}"}
+
+	src := `# Resource: aws_thing
+
+## Argument Reference
+
+* ` + "`name`" + ` - (Required) Name.
+
+## Attribute Reference
+
+### ` + "`header.match`" + ` Block
+
+* ` + "`prefix`" + ` - (Required) Prefix.
+`
+	rs := &schema.ResourceSchema{Blocks: map[string]*schema.Block{
+		"":             {Attributes: []schema.Attribute{{Name: "name", Required: true}}, ChildBlocks: []string{"header", "foo"}},
+		"header":       {Path: "header", ChildBlocks: []string{"match"}},
+		"header.match": {Path: "header.match", Attributes: []schema.Attribute{{Name: "prefix", Required: true}}},
+		"foo":          {Path: "foo", ChildBlocks: []string{"header"}},
+		"foo.header":   {Path: "foo.header", ChildBlocks: []string{"match"}},
+		// A second block shares the leaf "match"; with only a partial
+		// header.match heading, the composite matcher makes header.match the
+		// most-specific owner of BOTH, so the key is ambiguous.
+		"foo.header.match": {Path: "foo.header.match", Attributes: []schema.Attribute{{Name: "prefix", Required: true}}},
+	}}
+
+	d, err := doc.ParseWithTemplates([]byte(src), "aws_thing", templates)
+	if err != nil {
+		t.Fatal(err)
+	}
+	results := (&check.SchemaDocsRule{IgnoreDeprecated: true}).Check(
+		check.CheckContext{Resource: "aws_thing", Schema: rs, Doc: d})
+	if hasMsg(results, "move this subsection to Argument Reference") {
+		t.Errorf("ambiguous partial dotted key must not be classified via an exact match: %+v", results)
+	}
+}
+
+// 2/4: resolution must carry the canonical map key, not schema.Block.Path.
+// With Path left unset (as many manually assembled schemas / fixtures do), a
+// nested moved block and a parent reference bullet must still match by full
+// path, so the bullet is suppressed rather than double-reported.
+func TestLabels_ResolutionUsesMapKeyNotBlockPath(t *testing.T) {
+	t.Parallel()
+
+	templates := doc.HeadingTemplates{"`{Path}` Block", "`{Block}` Block", "{Block} Block", "{Block}", "{Title}"}
+
+	src := `# Resource: aws_thing
+
+## Argument Reference
+
+* ` + "`name`" + ` - (Required) Name.
+
+## Attribute Reference
+
+### ` + "`outer`" + ` Block
+
+* ` + "`notification`" + ` - (Optional) Notif.
+
+### ` + "`outer.notification`" + ` Block
+
+* ` + "`comparison_operator`" + ` - (Required) Operator.
+`
+	// Path fields deliberately omitted — only the map keys are canonical.
+	rs := &schema.ResourceSchema{Blocks: map[string]*schema.Block{
+		"":                   {Attributes: []schema.Attribute{{Name: "name", Required: true}}, ChildBlocks: []string{"outer"}},
+		"outer":              {ChildBlocks: []string{"notification"}},
+		"outer.notification": {Attributes: []schema.Attribute{{Name: "comparison_operator", Required: true}}},
+	}}
+
+	d, err := doc.ParseWithTemplates([]byte(src), "aws_thing", templates)
+	if err != nil {
+		t.Fatal(err)
+	}
+	results := (&check.SchemaDocsRule{IgnoreDeprecated: true}).Check(
+		check.CheckContext{Resource: "aws_thing", Schema: rs, Doc: d})
+	if !hasMsg(results, `block "outer.notification" is documented under Attribute Reference but is a configurable argument block`) {
+		t.Errorf("expected outer.notification to be flagged misplaced: %+v", results)
+	}
+	if hasMsg(results, `attribute "notification" in block "outer" should not have`) {
+		t.Errorf("parent reference bullet must be suppressed via the map-key path even when Block.Path is unset: %+v", results)
+	}
+}
+
+// 3/4: a real subsection distinguished by non-empty Heading (with HeadingLine
+// unset, as an exported-API caller may construct) must still be classified;
+// HeadingLine is only the reported location, not the synthetic marker.
+func TestLabels_RealHeadingWithoutHeadingLineStillMoved(t *testing.T) {
+	t.Parallel()
+
+	d := &doc.Document{
+		ArgumentBlocks: map[string]*doc.DocBlock{},
+		AttributeBlocks: map[string]*doc.DocBlock{
+			"notification": {
+				Name:    "notification",
+				Heading: "`notification` Block", // real heading text, but HeadingLine left 0
+				Attributes: []doc.DocAttribute{
+					{Name: "comparison_operator", Required: true, Line: 5},
+				},
+			},
+		},
+	}
+	rs := &schema.ResourceSchema{Blocks: map[string]*schema.Block{
+		"":             {ChildBlocks: []string{"notification"}},
+		"notification": {Path: "notification", Attributes: []schema.Attribute{{Name: "comparison_operator", Required: true}}},
+	}}
+
+	results := (&check.SchemaDocsRule{IgnoreDeprecated: true}).Check(
+		check.CheckContext{Resource: "aws_thing", Schema: rs, Doc: d})
+	if !hasMsg(results, `block "notification" is documented under Attribute Reference but is a configurable argument block`) {
+		t.Errorf("a real heading (non-empty Heading) with unset HeadingLine must still be classified: %+v", results)
+	}
+}
+
+// 4/4: a renamed reference bullet that links to a moved subsection via an anchor
+// (available_labels -> ### Labels) must be suppressed; the LinkAnchor/BlockAnchors
+// relationship, not just an immediate child-name match, resolves the target.
+func TestLabels_AnchoredRenamedReferenceSuppressed(t *testing.T) {
+	t.Parallel()
+
+	src := `# Resource: aws_thing
+
+## Argument Reference
+
+* ` + "`name`" + ` - (Required) Name.
+
+## Attribute Reference
+
+* ` + "`available_labels`" + ` - (Optional) Labels. See [Labels](#labels).
+
+### Labels
+
+* ` + "`key`" + ` - (Required) Key.
+`
+	rs := &schema.ResourceSchema{Blocks: map[string]*schema.Block{
+		"":       {Attributes: []schema.Attribute{{Name: "name", Required: true}}, ChildBlocks: []string{"labels"}},
+		"labels": {Path: "labels", Attributes: []schema.Attribute{{Name: "key", Required: true}}},
+	}}
+
+	results := labelResults(t, src, rs)
+	if !hasMsg(results, `block "labels" is documented under Attribute Reference but is a configurable argument block`) {
+		t.Errorf("expected Labels subsection to be flagged misplaced: %+v", results)
+	}
+	if hasMsg(results, `attribute "available_labels" in block "(root)" should not have`) {
+		t.Errorf("anchored renamed reference to the moved subsection must be suppressed: %+v", results)
+	}
+}
+
 // Point 1: a child block whose only field is Optional+Computed is not a
 // configurable argument block (the placement rule excludes Optional+Computed),
 // so a parent bullet referencing it must NOT be flagged as misplaced. Guards
