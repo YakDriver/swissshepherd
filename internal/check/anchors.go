@@ -5,7 +5,8 @@ package check
 
 import (
 	"fmt"
-	"sort"
+	"maps"
+	"slices"
 )
 
 // AnchorsRule verifies that every in-page link (`](#fragment)`) in a document
@@ -54,14 +55,8 @@ func (r *AnchorsRule) Check(ctx CheckContext) []Result {
 		}
 	}
 
-	frags := make([]string, 0, len(dangling))
-	for frag := range dangling {
-		frags = append(frags, frag)
-	}
-	sort.Strings(frags)
-
 	var results []Result
-	for _, frag := range frags {
+	for _, frag := range slices.Sorted(maps.Keys(dangling)) {
 		results = append(results, Result{
 			Rule:     r.Name(),
 			Resource: ctx.Resource,
