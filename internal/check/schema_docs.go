@@ -1332,6 +1332,50 @@ func headedDocBlocks(docBlocks map[string]*doc.DocBlock) map[string]*doc.DocBloc
 	return out
 }
 
+// placement is the per-attribute verdict for an attribute documented under
+// Attribute Reference (docs/rules/argument-attribute-misplacement.md §3).
+type placement int
+
+const (
+	// placementOK: no finding. The attribute carries no (Required)/(Optional)
+	// label, so it is a proper computed output living under Attribute Reference.
+	placementOK placement = iota
+	// placementStripLabel: the attribute is labeled but is not a purely
+	// configurable argument at the resolved path (computed-only, Optional+
+	// Computed, ConfigUnknown, or the subsection did not resolve) — the legacy
+	// strip-label guidance, never a move.
+	placementStripLabel
+	// placementMisplaced: the attribute is labeled AND a purely configurable
+	// argument at the resolved path — the section is wrong; move it to Argument
+	// Reference rather than stripping its (correct) label (#60, #62).
+	placementMisplaced
+)
+
+// classifyAttrPlacement judges a single attribute documented under Attribute
+// Reference in a subsection resolved to schema path P, implementing the §3
+// classification table by composing label state with configurableArgAtPath:
+//
+//   - unlabeled                          -> placementOK (proper computed output)
+//   - labeled, pure-config arg at P       -> placementMisplaced (move it)
+//   - labeled, not pure-config / unresolved -> placementStripLabel (legacy)
+//
+// resolved is the ok result from resolveSubsectionPath and must gate the
+// misplacement branch: it distinguishes a genuine root subsection (path == ""
+// with resolved == true, for #62 top-level scalars) from an *unresolved*
+// subsection that also carries an empty path — without it, an attribute whose
+// name happened to match a configurable root argument would be spuriously
+// flagged as misplaced. Optional+Computed and ConfigUnknown are non-misplacement
+// by construction (configurableArgAtPath returns false), honoring the #62 guard.
+func classifyAttrPlacement(rs *schema.ResourceSchema, path string, resolved bool, attr doc.DocAttribute) placement {
+	if !attr.Required && !attr.Optional {
+		return placementOK
+	}
+	if resolved && configurableArgAtPath(rs, path, attr.Name) {
+		return placementMisplaced
+	}
+	return placementStripLabel
+}
+
 // configurableArgAtPath reports whether attrName is a purely configurable
 // argument ((Required || Optional) && !Computed) of the schema block at the
 // given canonical map-key path — either as a scalar attribute, or as an
