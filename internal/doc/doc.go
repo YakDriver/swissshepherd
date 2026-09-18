@@ -652,11 +652,17 @@ func extractBlocks(tree ast.Node, source []byte, doc *Document, templates Headin
 					for _, bn := range blockNames {
 						if inArguments {
 							ensureBlock(doc.ArgumentBlocks, bn, headingText)
+							if doc.ArgumentBlocks[bn].Heading == "" {
+								doc.ArgumentBlocks[bn].Heading = headingText
+							}
 							if doc.ArgumentBlocks[bn].HeadingLine == 0 {
 								doc.ArgumentBlocks[bn].HeadingLine = headingLine
 							}
 						} else {
 							ensureBlock(doc.AttributeBlocks, bn, headingText)
+							if doc.AttributeBlocks[bn].Heading == "" {
+								doc.AttributeBlocks[bn].Heading = headingText
+							}
 							if doc.AttributeBlocks[bn].HeadingLine == 0 {
 								doc.AttributeBlocks[bn].HeadingLine = headingLine
 							}

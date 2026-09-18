@@ -308,6 +308,45 @@ func TestLabels_AmbiguousBareHeadingNotResolvedToRoot(t *testing.T) {
 	}
 }
 
+// A real subsection heading that is PRECEDED by a dot-notation reference to the
+// same block (which first creates the map entry with an empty Heading) must
+// still be classified. The parser must backfill Heading on the pre-existing
+// synthetic entry, otherwise checkLabels skips the block and emits misleading
+// strip-label warnings instead of the move error.
+func TestLabels_RealHeadingAfterSyntheticReferenceStillMoved(t *testing.T) {
+	t.Parallel()
+
+	src := `# Resource: aws_thing
+
+## Argument Reference
+
+* ` + "`name`" + ` - (Required) Name.
+
+## Attribute Reference
+
+* ` + "`notification[*].comparison_operator`" + ` - (Required) Operator.
+
+### ` + "`notification`" + ` Block
+
+* ` + "`threshold`" + ` - (Optional) Threshold.
+`
+	rs := &schema.ResourceSchema{Blocks: map[string]*schema.Block{
+		"": {Attributes: []schema.Attribute{{Name: "name", Required: true}}, ChildBlocks: []string{"notification"}},
+		"notification": {Path: "notification", Attributes: []schema.Attribute{
+			{Name: "comparison_operator", Required: true},
+			{Name: "threshold", Optional: true},
+		}},
+	}}
+
+	results := labelResults(t, src, rs)
+	if !hasMsg(results, `block "notification" is documented under Attribute Reference but is a configurable argument block`) {
+		t.Errorf("a real heading preceded by a synthetic dot-notation reference must still be classified: %+v", results)
+	}
+	if hasMsg(results, "should not have") {
+		t.Errorf("must not emit strip-label warnings for the moved block's configurable args: %+v", results)
+	}
+}
+
 // 1/4: a partial {Parent}-style dotted heading key whose leaf is shared by
 // several schema paths (an exact header.match alongside a deeper
 // foo.header.match) is ambiguous. The classifier must use most-specific
