@@ -117,6 +117,8 @@ The `coverage` sub-check enforces presence of every schema attribute at every de
 - **Optional** — may be set in configuration. Documented in `## Argument Reference` with `(Optional)`. Includes attributes that are both Optional and Computed (configurable, so still `(Optional)`).
 - **Read-Only** — never set in configuration; always populated by the provider. Documented in `## Attribute Reference`, or — when `allow_inline_read_only = true` — inline in `## Argument Reference` with `(Read-Only)`.
 
+When a genuinely configurable argument (`Required`/`Optional` and not `Computed`) is instead documented under `## Attribute Reference`, the `labels` sub-check reports a *misplacement* — directing the author to move it to Argument Reference rather than to strip its (correct) label (issues #60, #62). For the design and rationale behind that detection — attribute-granular classification, heading→schema-path resolution, severity by resolution class, and the measured corpus evidence — see [Argument/Attribute-Reference Misplacement](argument-attribute-misplacement.md).
+
 For nested blocks, Read-Only attributes can be documented in any of the following equivalent forms:
 
 - Under a nested-block heading inside `## Attribute Reference`:
