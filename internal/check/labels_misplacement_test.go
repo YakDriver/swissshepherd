@@ -574,10 +574,11 @@ func TestLabels_RealHeadingWithoutHeadingLineStillMoved(t *testing.T) {
 	}
 }
 
-// 4/4: a renamed reference bullet that links to a moved subsection via an anchor
-// (available_labels -> ### Labels) must be suppressed; the LinkAnchor/BlockAnchors
-// relationship, not just an immediate child-name match, resolves the target.
-func TestLabels_AnchoredRenamedReferenceSuppressed(t *testing.T) {
+// A synthetic, heading-less entry created by an unlabeled dot-path reference
+// (outer.notification) must not steal subsection ownership from a real
+// ### notification heading. Otherwise the real subsection resolves to no schema
+// owner and its configurable labels wrongly receive strip-label warnings.
+func TestLabels_SyntheticEntryDoesNotStealOwnership(t *testing.T) {
 	t.Parallel()
 
 	src := `# Resource: aws_thing
@@ -588,23 +589,59 @@ func TestLabels_AnchoredRenamedReferenceSuppressed(t *testing.T) {
 
 ## Attribute Reference
 
-* ` + "`available_labels`" + ` - (Optional) Labels. See [Labels](#labels).
+* ` + "`outer.notification[*].foo`" + ` - Foo attribute.
 
-### Labels
+### ` + "`notification`" + ` Block
 
-* ` + "`key`" + ` - (Required) Key.
+* ` + "`comparison_operator`" + ` - (Required) Operator.
 `
 	rs := &schema.ResourceSchema{Blocks: map[string]*schema.Block{
-		"":       {Attributes: []schema.Attribute{{Name: "name", Required: true}}, ChildBlocks: []string{"labels"}},
-		"labels": {Path: "labels", Attributes: []schema.Attribute{{Name: "key", Required: true}}},
+		"":                   {Attributes: []schema.Attribute{{Name: "name", Required: true}}, ChildBlocks: []string{"outer"}},
+		"outer":              {Path: "outer", ChildBlocks: []string{"notification"}},
+		"outer.notification": {Path: "outer.notification", Attributes: []schema.Attribute{{Name: "comparison_operator", Required: true}, {Name: "foo", Computed: true}}},
 	}}
 
 	results := labelResults(t, src, rs)
-	if !hasMsg(results, `block "labels" is documented under Attribute Reference but is a configurable argument block`) {
-		t.Errorf("expected Labels subsection to be flagged misplaced: %+v", results)
+	if !hasMsg(results, `block "notification" is documented under Attribute Reference but is a configurable argument block`) {
+		t.Errorf("real subsection must resolve despite a synthetic same-path dot-reference entry: %+v", results)
 	}
-	if hasMsg(results, `attribute "available_labels" in block "(root)" should not have`) {
-		t.Errorf("anchored renamed reference to the moved subsection must be suppressed: %+v", results)
+	if hasMsg(results, `should not have (Required)`) {
+		t.Errorf("real subsection's configurable label must not receive a strip-label warning: %+v", results)
+	}
+}
+
+// A scalar attribute that carries an invalid label and merely links to a moved
+// subsection for context is a defect of its own; moving the subsection does not
+// fix it, so its strip-label warning must remain (not be suppressed by the link).
+func TestLabels_ScalarLinkingToMovedSubsectionNotSuppressed(t *testing.T) {
+	t.Parallel()
+
+	src := `# Resource: aws_thing
+
+## Argument Reference
+
+* ` + "`name`" + ` - (Required) Name.
+
+## Attribute Reference
+
+* ` + "`extra`" + ` - (Optional) Extra. See [notification](#notification-block).
+
+### ` + "`notification`" + ` Block
+
+* ` + "`comparison_operator`" + ` - (Required) Operator.
+`
+	rs := &schema.ResourceSchema{Blocks: map[string]*schema.Block{
+		// extra is a real scalar attribute of the root, not the notification block.
+		"":             {Attributes: []schema.Attribute{{Name: "name", Required: true}, {Name: "extra", Optional: true}}, ChildBlocks: []string{"notification"}},
+		"notification": {Path: "notification", Attributes: []schema.Attribute{{Name: "comparison_operator", Required: true}}},
+	}}
+
+	results := labelResults(t, src, rs)
+	if !hasMsg(results, `block "notification" is documented under Attribute Reference but is a configurable argument block`) {
+		t.Errorf("expected notification move error: %+v", results)
+	}
+	if !hasMsg(results, `attribute "extra" in block "(root)" should not have (Optional) label`) {
+		t.Errorf("a scalar linking to the moved subsection for context must keep its own strip-label: %+v", results)
 	}
 }
 

@@ -1102,7 +1102,7 @@ func (r *SchemaDocsRule) checkLabels(ctx CheckContext) []Result {
 			if !(attr.Required || attr.Optional) {
 				continue
 			}
-			if referencesMovedBlock(ctx, blockName, attr, movedBlocks, movedSchemaPaths) {
+			if referencesMovedBlock(ctx, blockName, attr, movedSchemaPaths) {
 				continue
 			}
 			results = append(results, stripLabelResult(r, ctx, blockName, attr))
@@ -1112,31 +1112,35 @@ func (r *SchemaDocsRule) checkLabels(ctx CheckContext) []Result {
 	return results
 }
 
-// referencesMovedBlock reports whether a labeled reference bullet points at a
-// block already reported as misplaced, so its strip-label warning would be
-// redundant alongside the move error. Two forms are recognized:
+// referencesMovedBlock reports whether a labeled reference bullet points at an
+// immediate child block already reported as misplaced, so its strip-label
+// warning would be redundant alongside the move error. Matching is by full
+// resolved schema path (not leaf), so a moved foo.notification does not silence
+// an unrelated notification elsewhere.
 //
-//	(a) the bullet names an immediate child block whose canonical schema path
-//	    is being moved (matched by full path, not leaf, so a moved
-//	    foo.notification does not silence an unrelated notification elsewhere);
-//	(b) the bullet links (`See [..](#anchor)`) to a moved subsection — covering
-//	    shared or renamed references such as an `available_labels` bullet that
-//	    links to a moved `### Labels` subsection, a relationship BlockAnchors
-//	    already models.
-func referencesMovedBlock(ctx CheckContext, blockName string, attr doc.DocAttribute, movedBlocks, movedSchemaPaths map[string]bool) bool {
-	if parentPath, ok := resolveDocKeyToSchemaPath(ctx.Schema, ctx.Doc.AttributeBlocks, blockName); ok {
-		if pb, ok := ctx.Schema.Blocks[parentPath]; ok && !pb.ConfigUnknown {
-			if childPath, found := childPathForAttr(parentPath, pb, attr.Name); found && movedSchemaPaths[childPath] {
-				return true
-			}
+// A bullet whose name is a scalar attribute of the resolved parent is never
+// suppressed: a scalar's erroneous label is its own defect, unaffected by
+// moving any block it happens to reference. (Renamed/shared subsection
+// references — e.g. available_labels linking to a shared `### Labels` — are
+// root-argument-level misplacements tracked separately in #62, not handled
+// here, so a link alone does not drive suppression.)
+func referencesMovedBlock(ctx CheckContext, blockName string, attr doc.DocAttribute, movedSchemaPaths map[string]bool) bool {
+	parentPath, ok := resolveDocKeyToSchemaPath(ctx.Schema, ctx.Doc.AttributeBlocks, blockName)
+	if !ok {
+		return false
+	}
+	pb, ok := ctx.Schema.Blocks[parentPath]
+	if !ok || pb.ConfigUnknown {
+		return false
+	}
+	// A same-named scalar attribute keeps its own strip-label warning.
+	for _, a := range pb.Attributes {
+		if a.Name == attr.Name {
+			return false
 		}
 	}
-	if attr.LinkAnchor != "" && ctx.Doc.BlockAnchors != nil {
-		if target, ok := ctx.Doc.BlockAnchors[attr.LinkAnchor]; ok && movedBlocks[target] {
-			return true
-		}
-	}
-	return false
+	childPath, found := childPathForAttr(parentPath, pb, attr.Name)
+	return found && movedSchemaPaths[childPath]
 }
 
 // stripLabelResult builds the "attribute should not have (Required)/(Optional)
@@ -1186,11 +1190,29 @@ func resolveDocKeyToSchemaPath(rs *schema.ResourceSchema, docBlocks map[string]*
 		}
 		return "", false
 	}
-	owners := schemaPathsResolvedByDocKey(rs, docBlocks, docKey)
+	owners := schemaPathsResolvedByDocKey(rs, headedDocBlocks(docBlocks), docKey)
 	if len(owners) != 1 {
 		return "", false
 	}
 	return owners[0], true
+}
+
+// headedDocBlocks returns the subset of docBlocks that carry a real heading.
+// Ownership resolution for misplacement classification must ignore synthetic,
+// heading-less entries (created for unlabeled dot-notation references or prose
+// lead-ins): findAllDocBlocksIn prioritizes an exact key, so a synthetic
+// outer.notification entry would otherwise steal ownership of that schema path
+// from a real ### notification heading, leaving the real subsection unresolved.
+// A synthetic entry that later receives a real heading is retained (its Heading
+// is backfilled when the heading is parsed).
+func headedDocBlocks(docBlocks map[string]*doc.DocBlock) map[string]*doc.DocBlock {
+	out := make(map[string]*doc.DocBlock, len(docBlocks))
+	for k, b := range docBlocks {
+		if b != nil && b.Heading != "" {
+			out[k] = b
+		}
+	}
+	return out
 }
 
 // configurableArgAtPath reports whether attrName is a purely configurable
