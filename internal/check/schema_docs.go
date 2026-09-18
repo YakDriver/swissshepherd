@@ -1131,16 +1131,23 @@ func hasConfigurableAttributes(block *schema.Block) bool {
 }
 
 // resolveSchemaBlock finds the schema block that a documented block name refers
-// to. It prefers an exact dot-path match; failing that it matches by leaf name,
-// but only when the leaf is unambiguous (exactly one schema block carries it).
-// The conservative leaf handling ensures an ERROR-severity misplacement finding
-// is never emitted on an ambiguous guess.
+// to. A dot-qualified documentation key (e.g. "outer.notification") is precise,
+// so an exact path match is trusted. A bare, single-segment key is NOT accepted
+// as an exact root-path match: its leaf may also be shared by nested blocks
+// (e.g. "notification" vs "outer.notification"), and Terraform docs routinely
+// title a nested block with just its leaf name, so such a heading is ambiguous.
+// Bare keys therefore go through the uniqueness check and resolve only when
+// exactly one schema block carries the leaf. This conservative handling ensures
+// an ERROR-severity misplacement finding is never emitted, nor a parent warning
+// suppressed, on an ambiguous guess.
 func resolveSchemaBlock(rs *schema.ResourceSchema, docBlockName string) (*schema.Block, bool) {
 	if rs == nil {
 		return nil, false
 	}
-	if b, ok := rs.Blocks[docBlockName]; ok {
-		return b, true
+	if strings.Contains(docBlockName, ".") {
+		if b, ok := rs.Blocks[docBlockName]; ok {
+			return b, true
+		}
 	}
 	leaf := leafName(docBlockName)
 	var found *schema.Block

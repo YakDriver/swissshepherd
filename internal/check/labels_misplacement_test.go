@@ -201,6 +201,41 @@ func TestLabels_MisplacementReportsHeadingLine(t *testing.T) {
 	t.Fatal("expected a misplacement finding")
 }
 
+// A bare subsection heading whose leaf is shared by both a root schema block
+// and a nested block (notification vs outer.notification) is ambiguous. The
+// conservative resolver must refuse to guess, so no ERROR-severity misplacement
+// finding is emitted from the root block on an ambiguous bare key.
+func TestLabels_AmbiguousBareHeadingNotResolvedToRoot(t *testing.T) {
+	t.Parallel()
+
+	src := `# Resource: aws_thing
+
+## Argument Reference
+
+* ` + "`name`" + ` - (Required) Name.
+
+## Attribute Reference
+
+### ` + "`notification`" + ` Block
+
+* ` + "`comparison_operator`" + ` - (Required) Operator.
+`
+	rs := &schema.ResourceSchema{Blocks: map[string]*schema.Block{
+		"": {Attributes: []schema.Attribute{{Name: "name", Required: true}}, ChildBlocks: []string{"notification", "outer"}},
+		// Both a root notification block and a nested outer.notification share
+		// the leaf "notification", so the bare "### notification Block" heading
+		// is ambiguous.
+		"notification":       {Path: "notification", Attributes: []schema.Attribute{{Name: "comparison_operator", Required: true}}},
+		"outer":              {Path: "outer", ChildBlocks: []string{"notification"}},
+		"outer.notification": {Path: "outer.notification", Attributes: []schema.Attribute{{Name: "comparison_operator", Required: true}}},
+	}}
+
+	results := labelResults(t, src, rs)
+	if hasMsg(results, "move this subsection to Argument Reference") {
+		t.Errorf("ambiguous bare heading must not resolve to the root block and emit an ERROR: %+v", results)
+	}
+}
+
 // Point 1: a child block whose only field is Optional+Computed is not a
 // configurable argument block (the placement rule excludes Optional+Computed),
 // so a parent bullet referencing it must NOT be flagged as misplaced. Guards
