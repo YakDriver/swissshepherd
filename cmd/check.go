@@ -212,6 +212,10 @@ func runCheck(cmd *cobra.Command, args []string) error {
 			AllowAttributeIndentation: cc.AllowAttributeIndentation,
 		})
 	}
+	if cfg.IsCheckEnabled("anchors") {
+		sev := check.ParseSeverity(cfg.GetCheck("anchors").Severity, check.SeverityError)
+		rules = append(rules, check.NewAnchorsRule(sev))
+	}
 	if cfg.IsCheckEnabled("title_section") {
 		rules = append(rules, &check.TitleSectionRule{
 			AllowPrefixes: cfg.GetCheck("title_section").AllowPrefixes,
@@ -436,7 +440,7 @@ func logEnabledChecks(logger *slog.Logger, cfg *config.Config, rules []check.Rul
 	}
 
 	// Log disabled checks
-	allChecks := []string{"schema_docs", "title_section",
+	allChecks := []string{"schema_docs", "anchors", "title_section",
 		"section_presence", "timeouts_section", "import_section",
 		"example_section", "signature_section",
 		"format_style", "frontmatter"}
