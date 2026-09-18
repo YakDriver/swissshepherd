@@ -1010,25 +1010,168 @@ func (r *SchemaDocsRule) checkLabels(ctx CheckContext) []Result {
 		}
 	}
 
-	// Attributes must NOT have (Required) or (Optional)
+	// Attributes must NOT have (Required) or (Optional) — unless a documented
+	// attribute both carries a label AND is genuinely a configurable argument
+	// in the schema. That combination means the labels are correct and the
+	// real defect is section placement: a configurable argument block was put
+	// under Attribute Reference. Emitting a single actionable "move it" finding
+	// is better than pushing the author to strip accurate labels, which makes
+	// the docs less precise (issue #60). A bullet that merely references a
+	// computed field by dot-path (e.g. `network[*].private_ip` with no label)
+	// does not trigger this — such bullets legitimately live under Attribute
+	// Reference.
+	//
+	// Pass 1: find misplaced nested block subsections — a block whose own
+	// labeled attributes are configurable arguments in the schema.
+	movedBlocks := make(map[string]bool)
+	movedSchemaPaths := make(map[string]bool)
+	movedPath := make(map[string]string) // doc block name -> canonical schema map-key path
+	misplacedLine := make(map[string]int)
 	for blockName, block := range ctx.Doc.AttributeBlocks {
+		if blockName == "" || block.Heading == "" {
+			// Skip the root block and synthetic entries created for
+			// dot-notation references or prose lead-ins (which carry no
+			// heading text). A labeled dot-notation reference like
+			// `network[*].subnet_id - (Required)` has no subsection to move, so
+			// it must keep its per-attribute strip-label finding rather than
+			// producing a bogus "move this subsection" error. HeadingLine is
+			// only a reported-location hint and may be unset on a manually
+			// assembled block, so a real heading is distinguished by non-empty
+			// Heading, not by HeadingLine.
+			continue
+		}
+		// Resolve the subsection to a single canonical schema path using the
+		// same most-specific ownership logic as coverage. A key that maps to
+		// zero or multiple schema blocks (e.g. an ambiguous bare or partial
+		// {Parent} heading) is left unclassified — the ERROR must never fire on
+		// a guess.
+		schemaPath, ok := resolveDocKeyToSchemaPath(ctx.Schema, ctx.Doc.AttributeBlocks, blockName)
+		if !ok {
+			continue
+		}
+		// Respect skip_blocks: a block opted out of checks (applied to its
+		// canonical schema path, as in the coverage checks) must not produce a
+		// new misplacement error.
+		if slices.Contains(r.skipBlocks(), schemaPath) {
+			continue
+		}
 		for _, attr := range block.Attributes {
-			if attr.Required || attr.Optional {
-				label := "(Optional)"
-				if attr.Required {
-					label = "(Required)"
+			if (attr.Required || attr.Optional) && configurableArgAtPath(ctx.Schema, schemaPath, attr.Name) {
+				movedBlocks[blockName] = true
+				movedSchemaPaths[schemaPath] = true
+				movedPath[blockName] = schemaPath
+				// Point at the subsection heading when known so the
+				// "move this subsection" message lands on the line the
+				// author needs to act on; fall back to the first
+				// offending attribute otherwise.
+				if block.HeadingLine > 0 {
+					misplacedLine[blockName] = block.HeadingLine
+				} else {
+					misplacedLine[blockName] = attr.Line
 				}
-				results = append(results, Result{
-					Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityWarning,
-					Message: fmt.Sprintf("attribute %q in block %q should not have %s label", attr.Name, displayPath(blockName), label),
-					Block:   blockName,
-					Line:    attr.Line,
-				})
+				break
 			}
 		}
 	}
 
+	// Pass 2: emit one "move this subsection" finding per misplaced block. For
+	// a moved block, still keep the strip-label guidance for any labeled field
+	// that is NOT a pure-config argument (e.g. a Computed field carrying an
+	// erroneous label) — the move only accounts for the genuinely configurable
+	// fields, so dropping the rest would lose the read-only-label guidance. For
+	// non-moved blocks, keep the original strip-label guidance for every
+	// labeled attribute, except a reference bullet that points at a block we
+	// are already moving, which would be redundant.
+	for blockName, block := range ctx.Doc.AttributeBlocks {
+		if movedBlocks[blockName] {
+			results = append(results, Result{
+				Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityError,
+				Message: fmt.Sprintf("block %q is documented under Attribute Reference but is a configurable argument block in the schema; move this subsection to Argument Reference", displayPath(blockName)),
+				Block:   blockName,
+				Line:    misplacedLine[blockName],
+			})
+			for _, attr := range block.Attributes {
+				if !(attr.Required || attr.Optional) {
+					continue
+				}
+				// The move accounts for pure-config args; retain strip-label
+				// guidance only for labeled fields that are not configurable
+				// (e.g. a Computed field with an erroneous label).
+				if configurableArgAtPath(ctx.Schema, movedPath[blockName], attr.Name) {
+					continue
+				}
+				results = append(results, stripLabelResult(r, ctx, blockName, attr))
+			}
+			continue
+		}
+		for _, attr := range block.Attributes {
+			if !(attr.Required || attr.Optional) {
+				continue
+			}
+			if referencesMovedBlock(ctx, blockName, attr, movedSchemaPaths) {
+				continue
+			}
+			// Alternate heading for a moved block: when this subsection's leaf
+			// maps to a single schema path that is already moved (e.g. a
+			// `### notification` heading alongside the owning
+			// `### outer.notification`), suppress the pure-config labels the
+			// move already covers. Computed fields (configurableArgAtPath false)
+			// keep their strip-label guidance, and a leaf shared by multiple
+			// schema paths is left alone (ambiguity guard).
+			if p, ok := uniqueSchemaPathForLeaf(ctx.Schema, leafName(blockName)); ok && movedSchemaPaths[p] && configurableArgAtPath(ctx.Schema, p, attr.Name) {
+				continue
+			}
+			results = append(results, stripLabelResult(r, ctx, blockName, attr))
+		}
+	}
+
 	return results
+}
+
+// referencesMovedBlock reports whether a labeled reference bullet points at an
+// immediate child block already reported as misplaced, so its strip-label
+// warning would be redundant alongside the move error. Matching is by full
+// resolved schema path (not leaf), so a moved foo.notification does not silence
+// an unrelated notification elsewhere.
+//
+// A bullet whose name is a scalar attribute of the resolved parent is never
+// suppressed: a scalar's erroneous label is its own defect, unaffected by
+// moving any block it happens to reference. (Renamed/shared subsection
+// references — e.g. available_labels linking to a shared `### Labels` — are
+// root-argument-level misplacements tracked separately in #62, not handled
+// here, so a link alone does not drive suppression.)
+func referencesMovedBlock(ctx CheckContext, blockName string, attr doc.DocAttribute, movedSchemaPaths map[string]bool) bool {
+	parentPath, ok := resolveDocKeyToSchemaPath(ctx.Schema, ctx.Doc.AttributeBlocks, blockName)
+	if !ok {
+		return false
+	}
+	pb, ok := ctx.Schema.Blocks[parentPath]
+	if !ok || pb.ConfigUnknown {
+		return false
+	}
+	// A same-named scalar attribute keeps its own strip-label warning.
+	for _, a := range pb.Attributes {
+		if a.Name == attr.Name {
+			return false
+		}
+	}
+	childPath, found := childPathForAttr(parentPath, pb, attr.Name)
+	return found && movedSchemaPaths[childPath]
+}
+
+// stripLabelResult builds the "attribute should not have (Required)/(Optional)
+// label" warning for a labeled attribute documented under Attribute Reference.
+func stripLabelResult(r *SchemaDocsRule, ctx CheckContext, blockName string, attr doc.DocAttribute) Result {
+	label := "(Optional)"
+	if attr.Required {
+		label = "(Required)"
+	}
+	return Result{
+		Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityWarning,
+		Message: fmt.Sprintf("attribute %q in block %q should not have %s label", attr.Name, displayPath(blockName), label),
+		Block:   blockName,
+		Line:    attr.Line,
+	}
 }
 
 // --- Shared helpers ---
@@ -1036,6 +1179,166 @@ func (r *SchemaDocsRule) checkLabels(ctx CheckContext) []Result {
 func hasConfigurableAttributes(block *schema.Block) bool {
 	for _, attr := range block.Attributes {
 		if attr.Required || attr.Optional {
+			return true
+		}
+	}
+	return false
+}
+
+// resolveDocKeyToSchemaPath returns the canonical schema map-key path that a
+// documentation subsection key unambiguously identifies. It uses the same
+// most-specific ownership resolution as coverage (schemaPathsResolvedByDocKey),
+// so bare or partial ({Parent}) headings that could match several schema paths
+// resolve only when exactly one path owns them; 0 or ≥2 owners yield false so a
+// misplacement ERROR — or a suppression — never fires on an ambiguous or
+// unresolvable heading. The root doc key ("") maps to the root schema path.
+//
+// Carrying the returned map key (rather than schema.Block.Path, which is
+// optional on manually assembled schemas) guarantees later joins address real
+// entries in ResourceSchema.Blocks.
+func resolveDocKeyToSchemaPath(rs *schema.ResourceSchema, docBlocks map[string]*doc.DocBlock, docKey string) (string, bool) {
+	if rs == nil {
+		return "", false
+	}
+	if docKey == "" {
+		if _, ok := rs.Blocks[""]; ok {
+			return "", true
+		}
+		return "", false
+	}
+	// A heading-less doc block (a synthetic dot-path reference or prose lead-in)
+	// owns no subsection, so it is excluded from ownership resolution. Resolve
+	// it only by an exact schema-path match, so a reference bullet inside such a
+	// block (e.g. a labeled `outer[*].notification` creating a synthetic `outer`
+	// block) can still be matched to a moved child.
+	if b := docBlocks[docKey]; b != nil && b.Heading == "" {
+		if _, ok := rs.Blocks[docKey]; ok {
+			return docKey, true
+		}
+		return "", false
+	}
+	owners := schemaPathsResolvedByDocKey(rs, headedDocBlocks(docBlocks), docKey)
+	if len(owners) != 1 {
+		return "", false
+	}
+	return owners[0], true
+}
+
+// uniqueSchemaPathForLeaf returns the single non-root schema path whose leaf
+// name equals leaf, reporting false when zero or more than one path carries it.
+// It underpins the alternate-heading suppression: an alternate subsection can be
+// associated with a moved schema path only when the leaf is unambiguous.
+func uniqueSchemaPathForLeaf(rs *schema.ResourceSchema, leaf string) (string, bool) {
+	if rs == nil || leaf == "" {
+		return "", false
+	}
+	var found string
+	n := 0
+	for path := range rs.Blocks {
+		if path != "" && leafName(path) == leaf {
+			found = path
+			n++
+		}
+	}
+	if n == 1 {
+		return found, true
+	}
+	return "", false
+}
+
+// headedDocBlocks returns the subset of docBlocks that carry a real heading.
+// Ownership resolution for misplacement classification must ignore synthetic,
+// heading-less entries (created for unlabeled dot-notation references or prose
+// lead-ins): findAllDocBlocksIn prioritizes an exact key, so a synthetic
+// outer.notification entry would otherwise steal ownership of that schema path
+// from a real ### notification heading, leaving the real subsection unresolved.
+// A synthetic entry that later receives a real heading is retained (its Heading
+// is backfilled when the heading is parsed).
+func headedDocBlocks(docBlocks map[string]*doc.DocBlock) map[string]*doc.DocBlock {
+	out := make(map[string]*doc.DocBlock, len(docBlocks))
+	for k, b := range docBlocks {
+		if b != nil && b.Heading != "" {
+			out[k] = b
+		}
+	}
+	return out
+}
+
+// configurableArgAtPath reports whether attrName is a purely configurable
+// argument ((Required || Optional) && !Computed) of the schema block at the
+// given canonical map-key path — either as a scalar attribute, or as an
+// immediate child block that (itself or via a descendant) carries such an
+// attribute. ConfigUnknown blocks and unresolved paths return false so an
+// ERROR never fires on a guess. Optional+Computed scalars are excluded because
+// they may legitimately appear under either section.
+func configurableArgAtPath(rs *schema.ResourceSchema, path, attrName string) bool {
+	if rs == nil {
+		return false
+	}
+	b, ok := rs.Blocks[path]
+	if !ok || b.ConfigUnknown {
+		return false
+	}
+	for _, a := range b.Attributes {
+		if a.Name == attrName {
+			return (a.Required || a.Optional) && !a.Computed
+		}
+	}
+	if childPath, found := childPathForAttr(path, b, attrName); found {
+		return blockTreeHasPureConfigurable(rs, childPath, make(map[string]bool))
+	}
+	return false
+}
+
+// childBlockPath returns the canonical ResourceSchema.Blocks key for a
+// ChildBlocks entry of the block at parentPath. Entries appear in two forms in
+// this codebase — a bare leaf name (from the provider loader) or a full
+// dot-path (common in fixtures and normalized elsewhere via leafName). A
+// full-path entry is used as-is; a bare leaf is joined to the parent path.
+func childBlockPath(parentPath, child string) string {
+	if strings.Contains(child, ".") {
+		return child
+	}
+	if parentPath == "" {
+		return child
+	}
+	return parentPath + "." + child
+}
+
+// childPathForAttr returns the canonical schema path of the immediate child
+// block of pb (at parentPath) whose leaf name is attrName, matching by leaf so
+// both ChildBlocks representations resolve. The second result reports whether
+// such a child exists.
+func childPathForAttr(parentPath string, pb *schema.Block, attrName string) (string, bool) {
+	for _, child := range pb.ChildBlocks {
+		if leafName(child) == attrName {
+			return childBlockPath(parentPath, child), true
+		}
+	}
+	return "", false
+}
+
+// blockTreeHasPureConfigurable reports whether the schema block at path, or any
+// descendant block, has a purely configurable (Required or Optional and NOT
+// Computed) attribute. Blocks are looked up by exact full path (unambiguous),
+// ConfigUnknown blocks are skipped, and visited guards against pathological
+// cycles.
+func blockTreeHasPureConfigurable(rs *schema.ResourceSchema, path string, visited map[string]bool) bool {
+	if rs == nil || visited[path] {
+		return false
+	}
+	visited[path] = true
+	b, ok := rs.Blocks[path]
+	if !ok || b.ConfigUnknown {
+		return false
+	}
+	for _, a := range b.Attributes {
+		if (a.Required || a.Optional) && !a.Computed {
+			return true
+		}
+	}
+	for _, child := range b.ChildBlocks {
+		if blockTreeHasPureConfigurable(rs, childBlockPath(path, child), visited) {
 			return true
 		}
 	}

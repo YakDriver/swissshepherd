@@ -37,6 +37,7 @@ type MalformedAttr struct {
 type DocBlock struct {
 	Name                string
 	Heading             string
+	HeadingLine         int // 1-based source line of the block's heading (0 if none)
 	Attributes          []DocAttribute
 	MalformedAttributes []MalformedAttr // attributes found but with formatting issues
 	SplitByLabel        bool            // true if the doc explicitly separates required/optional with distinct bylines
@@ -647,11 +648,24 @@ func extractBlocks(tree ast.Node, source []byte, doc *Document, templates Headin
 							blockAnchors[slug] = blockNames[0]
 						}
 					}
+					headingLine := nodeLineNumber(n, source)
 					for _, bn := range blockNames {
 						if inArguments {
 							ensureBlock(doc.ArgumentBlocks, bn, headingText)
+							if doc.ArgumentBlocks[bn].Heading == "" {
+								doc.ArgumentBlocks[bn].Heading = headingText
+							}
+							if doc.ArgumentBlocks[bn].HeadingLine == 0 {
+								doc.ArgumentBlocks[bn].HeadingLine = headingLine
+							}
 						} else {
 							ensureBlock(doc.AttributeBlocks, bn, headingText)
+							if doc.AttributeBlocks[bn].Heading == "" {
+								doc.AttributeBlocks[bn].Heading = headingText
+							}
+							if doc.AttributeBlocks[bn].HeadingLine == 0 {
+								doc.AttributeBlocks[bn].HeadingLine = headingLine
+							}
 						}
 					}
 					currentBlockAliases = blockNames[1:]
