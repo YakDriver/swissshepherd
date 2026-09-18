@@ -803,7 +803,7 @@ func extractBlocks(tree ast.Node, source []byte, idx *lineIndex, doc *Document, 
 							blockAnchors[slug] = blockNames[0]
 						}
 					}
-					headingLine := nodeLineNumber(n, source)
+					headingLine := nodeLineNumber(n, idx)
 					for _, bn := range blockNames {
 						if inArguments {
 							ensureBlock(doc.ArgumentBlocks, bn, headingText)
