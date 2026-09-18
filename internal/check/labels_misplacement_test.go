@@ -201,6 +201,78 @@ func TestLabels_MisplacementReportsHeadingLine(t *testing.T) {
 	t.Fatal("expected a misplacement finding")
 }
 
+// A dotted documentation key that does not exactly match any schema path must
+// NOT fall back to a leaf scan that could resolve it to an unrelated block with
+// the same leaf. outer.notification (absent) must not be driven off
+// other.notification, so no misplacement ERROR is emitted.
+func TestLabels_DottedKeyExactMissDoesNotLeafGuess(t *testing.T) {
+	t.Parallel()
+
+	templates := doc.HeadingTemplates{"`{Path}` Block", "`{Block}` Block", "{Block} Block", "{Block}", "{Title}"}
+
+	src := `# Resource: aws_thing
+
+## Argument Reference
+
+* ` + "`name`" + ` - (Required) Name.
+
+## Attribute Reference
+
+### ` + "`outer.notification`" + ` Block
+
+* ` + "`comparison_operator`" + ` - (Required) Operator.
+`
+	rs := &schema.ResourceSchema{Blocks: map[string]*schema.Block{
+		"":      {Attributes: []schema.Attribute{{Name: "name", Required: true}}, ChildBlocks: []string{"other"}},
+		"other": {Path: "other", ChildBlocks: []string{"notification"}},
+		// Only other.notification exists; outer.notification (the doc key) does
+		// not. The shared leaf "notification" is unique, which would tempt a
+		// leaf guess.
+		"other.notification": {Path: "other.notification", Attributes: []schema.Attribute{{Name: "comparison_operator", Required: true}}},
+	}}
+
+	d, err := doc.ParseWithTemplates([]byte(src), "aws_thing", templates)
+	if err != nil {
+		t.Fatal(err)
+	}
+	results := (&check.SchemaDocsRule{IgnoreDeprecated: true}).Check(
+		check.CheckContext{Resource: "aws_thing", Schema: rs, Doc: d})
+	if hasMsg(results, "move this subsection to Argument Reference") {
+		t.Errorf("absent dotted key must not leaf-guess to an unrelated block and emit an ERROR: %+v", results)
+	}
+}
+
+// A labeled dot-notation reference (network[*].subnet_id - (Required)) creates a
+// synthetic, heading-less AttributeBlocks entry. It must not be treated as a
+// misplaced subsection (there is no subsection to move); the per-attribute
+// strip-label finding must be retained.
+func TestLabels_SyntheticDotRefKeepsStripLabel(t *testing.T) {
+	t.Parallel()
+
+	src := `# Resource: aws_thing
+
+## Argument Reference
+
+* ` + "`name`" + ` - (Required) Name.
+
+## Attribute Reference
+
+* ` + "`network[*].subnet_id`" + ` - (Required) Subnet.
+`
+	rs := &schema.ResourceSchema{Blocks: map[string]*schema.Block{
+		"":        {Attributes: []schema.Attribute{{Name: "name", Required: true}}, ChildBlocks: []string{"network"}},
+		"network": {Path: "network", Attributes: []schema.Attribute{{Name: "subnet_id", Required: true}}},
+	}}
+
+	results := labelResults(t, src, rs)
+	if hasMsg(results, "move this subsection to Argument Reference") {
+		t.Errorf("synthetic dot-notation reference has no subsection to move: %+v", results)
+	}
+	if !hasMsg(results, `attribute "subnet_id" in block "network" should not have (Required) label`) {
+		t.Errorf("strip-label guidance for a labeled dot-notation reference must be retained: %+v", results)
+	}
+}
+
 // A bare subsection heading whose leaf is shared by both a root schema block
 // and a nested block (notification vs outer.notification) is ambiguous. The
 // conservative resolver must refuse to guess, so no ERROR-severity misplacement

@@ -1027,7 +1027,15 @@ func (r *SchemaDocsRule) checkLabels(ctx CheckContext) []Result {
 	movedSchemaPaths := make(map[string]bool)
 	misplacedLine := make(map[string]int)
 	for blockName, block := range ctx.Doc.AttributeBlocks {
-		if blockName == "" {
+		if blockName == "" || block.HeadingLine == 0 {
+			// Skip the root block and synthetic entries created for
+			// dot-notation references or prose lead-ins (no subsection
+			// heading). A labeled dot-notation reference like
+			// `network[*].subnet_id - (Required)` has no subsection to move, so
+			// it must keep its per-attribute strip-label finding rather than
+			// producing a bogus "move this subsection" error. A real heading
+			// preceded by a synthetic reference still qualifies: the heading
+			// pass sets HeadingLine on the pre-existing block.
 			continue
 		}
 		for _, attr := range block.Attributes {
@@ -1145,9 +1153,12 @@ func resolveSchemaBlock(rs *schema.ResourceSchema, docBlockName string) (*schema
 		return nil, false
 	}
 	if strings.Contains(docBlockName, ".") {
-		if b, ok := rs.Blocks[docBlockName]; ok {
-			return b, true
-		}
+		// Dot-qualified keys are precise. If the exact path is absent, do not
+		// fall back to a leaf scan: dropping the parent qualifier could resolve
+		// outer.notification to an unrelated other.notification and drive an
+		// ERROR (or a suppression) off the wrong block.
+		b, ok := rs.Blocks[docBlockName]
+		return b, ok && b != nil
 	}
 	leaf := leafName(docBlockName)
 	var found *schema.Block
