@@ -1111,6 +1111,16 @@ func (r *SchemaDocsRule) checkLabels(ctx CheckContext) []Result {
 			if referencesMovedBlock(ctx, blockName, attr, movedSchemaPaths) {
 				continue
 			}
+			// Alternate heading for a moved block: when this subsection's leaf
+			// maps to a single schema path that is already moved (e.g. a
+			// `### notification` heading alongside the owning
+			// `### outer.notification`), suppress the pure-config labels the
+			// move already covers. Computed fields (configurableArgAtPath false)
+			// keep their strip-label guidance, and a leaf shared by multiple
+			// schema paths is left alone (ambiguity guard).
+			if p, ok := uniqueSchemaPathForLeaf(ctx.Schema, leafName(blockName)); ok && movedSchemaPaths[p] && configurableArgAtPath(ctx.Schema, p, attr.Name) {
+				continue
+			}
 			results = append(results, stripLabelResult(r, ctx, blockName, attr))
 		}
 	}
@@ -1196,11 +1206,44 @@ func resolveDocKeyToSchemaPath(rs *schema.ResourceSchema, docBlocks map[string]*
 		}
 		return "", false
 	}
+	// A heading-less doc block (a synthetic dot-path reference or prose lead-in)
+	// owns no subsection, so it is excluded from ownership resolution. Resolve
+	// it only by an exact schema-path match, so a reference bullet inside such a
+	// block (e.g. a labeled `outer[*].notification` creating a synthetic `outer`
+	// block) can still be matched to a moved child.
+	if b := docBlocks[docKey]; b != nil && b.Heading == "" {
+		if _, ok := rs.Blocks[docKey]; ok {
+			return docKey, true
+		}
+		return "", false
+	}
 	owners := schemaPathsResolvedByDocKey(rs, headedDocBlocks(docBlocks), docKey)
 	if len(owners) != 1 {
 		return "", false
 	}
 	return owners[0], true
+}
+
+// uniqueSchemaPathForLeaf returns the single non-root schema path whose leaf
+// name equals leaf, reporting false when zero or more than one path carries it.
+// It underpins the alternate-heading suppression: an alternate subsection can be
+// associated with a moved schema path only when the leaf is unambiguous.
+func uniqueSchemaPathForLeaf(rs *schema.ResourceSchema, leaf string) (string, bool) {
+	if rs == nil || leaf == "" {
+		return "", false
+	}
+	var found string
+	n := 0
+	for path := range rs.Blocks {
+		if path != "" && leafName(path) == leaf {
+			found = path
+			n++
+		}
+	}
+	if n == 1 {
+		return found, true
+	}
+	return "", false
 }
 
 // headedDocBlocks returns the subset of docBlocks that carry a real heading.

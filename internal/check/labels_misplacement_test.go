@@ -574,6 +574,106 @@ func TestLabels_RealHeadingWithoutHeadingLineStillMoved(t *testing.T) {
 	}
 }
 
+// Comment 1: when two heading forms document the same sole schema path
+// (### outer.notification and ### notification both cover outer.notification),
+// only the most-specific full-path heading owns the path and is marked moved.
+// The alternate leaf heading must not fall through to the misleading strip-label
+// warnings for pure-config fields covered by the move (computed fields still do).
+func TestLabels_AlternateHeadingsSameMovedPath(t *testing.T) {
+	t.Parallel()
+
+	templates := doc.HeadingTemplates{"`{Path}` Block", "`{Block}` Block", "{Block} Block", "{Block}", "{Title}"}
+
+	src := `# Resource: aws_thing
+
+## Argument Reference
+
+* ` + "`name`" + ` - (Required) Name.
+
+## Attribute Reference
+
+### ` + "`outer.notification`" + ` Block
+
+* ` + "`comparison_operator`" + ` - (Required) Operator.
+
+### ` + "`notification`" + ` Block
+
+* ` + "`comparison_operator`" + ` - (Required) Operator.
+* ` + "`state`" + ` - (Optional) State.
+`
+	rs := &schema.ResourceSchema{Blocks: map[string]*schema.Block{
+		"":      {Attributes: []schema.Attribute{{Name: "name", Required: true}}, ChildBlocks: []string{"outer"}},
+		"outer": {Path: "outer", ChildBlocks: []string{"notification"}},
+		// sole schema path with leaf "notification":
+		"outer.notification": {Path: "outer.notification", Attributes: []schema.Attribute{
+			{Name: "comparison_operator", Required: true},
+			{Name: "state", Computed: true},
+		}},
+	}}
+
+	d, err := doc.ParseWithTemplates([]byte(src), "aws_thing", templates)
+	if err != nil {
+		t.Fatal(err)
+	}
+	results := (&check.SchemaDocsRule{IgnoreDeprecated: true}).Check(
+		check.CheckContext{Resource: "aws_thing", Schema: rs, Doc: d})
+
+	if !hasMsg(results, `block "outer.notification" is documented under Attribute Reference but is a configurable argument block`) {
+		t.Errorf("expected the full-path heading to be flagged misplaced: %+v", results)
+	}
+	if hasMsg(results, `attribute "comparison_operator" in block "notification" should not have`) {
+		t.Errorf("alternate leaf heading's pure-config label must be suppressed (covered by the move): %+v", results)
+	}
+	// A computed field carrying an erroneous label in the alternate keeps guidance.
+	if !hasMsg(results, `attribute "state" in block "notification" should not have (Optional) label`) {
+		t.Errorf("computed field in the alternate heading must keep its strip-label: %+v", results)
+	}
+}
+
+// Comment 2: a labeled dot-path reference (outer[*].notification) creates a
+// heading-less synthetic "outer" block. When ### outer.notification is moved,
+// the reference bullet must be suppressed — the heading-less parent resolves by
+// exact schema path.
+func TestLabels_HeadinglessParentReferenceSuppressed(t *testing.T) {
+	t.Parallel()
+
+	templates := doc.HeadingTemplates{"`{Path}` Block", "`{Block}` Block", "{Block} Block", "{Block}", "{Title}"}
+
+	src := `# Resource: aws_thing
+
+## Argument Reference
+
+* ` + "`name`" + ` - (Required) Name.
+
+## Attribute Reference
+
+* ` + "`outer[*].notification`" + ` - (Optional) Notif ref.
+
+### ` + "`outer.notification`" + ` Block
+
+* ` + "`comparison_operator`" + ` - (Required) Operator.
+`
+	rs := &schema.ResourceSchema{Blocks: map[string]*schema.Block{
+		"":                   {Attributes: []schema.Attribute{{Name: "name", Required: true}}, ChildBlocks: []string{"outer"}},
+		"outer":              {Path: "outer", ChildBlocks: []string{"notification"}},
+		"outer.notification": {Path: "outer.notification", Attributes: []schema.Attribute{{Name: "comparison_operator", Required: true}}},
+	}}
+
+	d, err := doc.ParseWithTemplates([]byte(src), "aws_thing", templates)
+	if err != nil {
+		t.Fatal(err)
+	}
+	results := (&check.SchemaDocsRule{IgnoreDeprecated: true}).Check(
+		check.CheckContext{Resource: "aws_thing", Schema: rs, Doc: d})
+
+	if !hasMsg(results, `block "outer.notification" is documented under Attribute Reference but is a configurable argument block`) {
+		t.Errorf("expected outer.notification move error: %+v", results)
+	}
+	if hasMsg(results, "should not have") {
+		t.Errorf("heading-less parent's reference bullet to the moved block must be suppressed: %+v", results)
+	}
+}
+
 // A block listed in skip_blocks (e.g. the default "timeouts") is opted out of
 // checks entirely, so the misplacement classification must not emit a new move
 // error for it even when it is documented under Attribute Reference with
