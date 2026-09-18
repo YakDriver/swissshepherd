@@ -105,3 +105,127 @@ func TestParse_BlockAnchorsAndLinks(t *testing.T) {
 		}
 	}
 }
+
+// TestParse_HeadingAnchorsPreserveUnderscores guards that generated anchor
+// slugs keep underscores (matching GitHub), so snake_case block headings like
+// "`ec2_configuration` Block" produce "ec2_configuration-block" rather than
+// dropping the underscore. Duplicate headings receive GitHub's -1/-2 suffixes.
+func TestParse_HeadingAnchorsPreserveUnderscores(t *testing.T) {
+	t.Parallel()
+
+	md := "# Resource: aws_thing\n\n" +
+		"## Argument Reference\n\n" +
+		"* `x` - (Optional) X.\n\n" +
+		"### `ec2_configuration` Block\n\n" +
+		"* `image_type` - (Optional) Type.\n\n" +
+		"### `ec2_configuration` Block\n\n" +
+		"* `image_id` - (Optional) ID.\n"
+
+	d, err := doc.ParseWithTemplates([]byte(md), "aws_thing", doc.DefaultHeadingTemplates())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !d.HeadingAnchors["ec2_configuration-block"] {
+		t.Errorf("HeadingAnchors missing underscore-preserving slug; got %v", d.HeadingAnchors)
+	}
+	if !d.HeadingAnchors["ec2_configuration-block-1"] {
+		t.Errorf("HeadingAnchors missing duplicate-suffixed slug; got %v", d.HeadingAnchors)
+	}
+}
+
+// TestParse_HeadingAnchorCollisionAvoidance guards GitHub's collision handling:
+// a suffixed candidate that clashes with an explicit heading is bumped again.
+// Headings "foo Block", "foo Block", "foo Block-1" slug to "foo-block",
+// "foo-block", "foo-block-1"; the second duplicate becomes "foo-block-1", which
+// then collides with the third heading's own slug, so the third must become
+// "foo-block-1-1". A per-base counter would emit "foo-block-1" twice and never
+// produce "foo-block-1-1", so this fixture fails without collision avoidance.
+func TestParse_HeadingAnchorCollisionAvoidance(t *testing.T) {
+	t.Parallel()
+
+	md := "# Resource: aws_thing\n\n" +
+		"## Argument Reference\n\n" +
+		"* `x` - (Optional) X.\n\n" +
+		"### foo Block\n\n* `a` - (Optional) A.\n\n" +
+		"### foo Block\n\n* `b` - (Optional) B.\n\n" +
+		"### foo Block-1\n\n* `c` - (Optional) C.\n"
+
+	d, err := doc.ParseWithTemplates([]byte(md), "aws_thing", doc.DefaultHeadingTemplates())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"foo-block", "foo-block-1", "foo-block-1-1"} {
+		if !d.HeadingAnchors[want] {
+			t.Errorf("HeadingAnchors missing %q; got %v", want, d.HeadingAnchors)
+		}
+	}
+}
+
+// TestParse_HeadingAnchorsUnicode guards that non-ASCII heading text keeps its
+// letters in the slug (matching GitHub), so a link to "#über" resolves.
+func TestParse_HeadingAnchorsUnicode(t *testing.T) {
+	t.Parallel()
+
+	md := "# Resource: aws_thing\n\n## Über Configuration\n\nbody.\n"
+	d, err := doc.ParseWithTemplates([]byte(md), "aws_thing", doc.DefaultHeadingTemplates())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !d.HeadingAnchors["über-configuration"] {
+		t.Errorf("expected Unicode-preserving slug %q; got %v", "über-configuration", d.HeadingAnchors)
+	}
+	if d.HeadingAnchors["ber-configuration"] {
+		t.Errorf("ASCII-stripped slug must not be produced; got %v", d.HeadingAnchors)
+	}
+}
+
+// TestParse_HeadingAnchorsInsideList guards that a heading nested inside a list
+// item is still collected (heading slugs are gathered by a full-tree walk, not
+// the block extractor which skips list subtrees). Otherwise a link to such a
+// heading would be a false dead anchor.
+func TestParse_HeadingAnchorsInsideList(t *testing.T) {
+	t.Parallel()
+
+	md := "# Resource: aws_thing\n\n" +
+		"## Argument Reference\n\n" +
+		"* top\n\n    ### Nested Heading\n\n    detail\n"
+	d, err := doc.ParseWithTemplates([]byte(md), "aws_thing", doc.DefaultHeadingTemplates())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !d.HeadingAnchors["nested-heading"] {
+		t.Errorf("heading nested in a list item must be collected; got %v", d.HeadingAnchors)
+	}
+}
+
+// TestParse_InPageLinksSkipCode confirms that link-looking text inside inline
+// code spans and fenced code blocks is NOT collected as an in-page link. The
+// anchors rule is enabled by default, so a regression here (e.g. a Goldmark or
+// extension change) would turn literal example content into false dead-anchor
+// errors — this test locks in the current behavior.
+func TestParse_InPageLinksSkipCode(t *testing.T) {
+	t.Parallel()
+
+	md := "# Resource: aws_thing\n\n" +
+		"## Argument Reference\n\n" +
+		"* `a` - (Optional) Real link [ok](#argument-reference) and inline `[x](#missing-inline)`.\n\n" +
+		"```\n[y](#missing-fenced)\n```\n\n" +
+		"~~~markdown\n[z](#missing-tilde)\n~~~\n"
+
+	d, err := doc.ParseWithTemplates([]byte(md), "aws_thing", doc.DefaultHeadingTemplates())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, l := range d.InPageLinks {
+		got[l.Fragment] = true
+	}
+	if !got["argument-reference"] {
+		t.Errorf("expected the real prose link to be collected; got %v", d.InPageLinks)
+	}
+	for _, bad := range []string{"missing-inline", "missing-fenced", "missing-tilde"} {
+		if got[bad] {
+			t.Errorf("link inside code must not be collected: %q present in %v", bad, d.InPageLinks)
+		}
+	}
+}

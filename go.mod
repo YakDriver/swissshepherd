@@ -3,7 +3,7 @@ module github.com/YakDriver/swissshepherd
 go 1.26.2
 
 require (
-	github.com/hashicorp/hcl/v2 v2.24.0
+	github.com/hashicorp/hcl/v2 v2.25.0
 	github.com/hashicorp/terraform-json v0.28.0
 	github.com/spf13/cobra v1.10.2
 	github.com/yuin/goldmark v1.8.6
