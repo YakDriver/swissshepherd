@@ -1224,6 +1224,74 @@ func resolveDocKeyToSchemaPath(rs *schema.ResourceSchema, docBlocks map[string]*
 	return owners[0], true
 }
 
+// resolutionClass records how an Attribute-Reference subsection heading resolved
+// to a schema path. It is threaded into the emitted finding so severity can be
+// assigned by false-positive risk rather than parsed back out of the message
+// (see docs/rules/argument-attribute-misplacement.md §9, §10 step 2b).
+type resolutionClass int
+
+const (
+	// resolveUnresolved: no schema path could be assigned; the caller falls
+	// back to the legacy strip-label behavior (never a move).
+	resolveUnresolved resolutionClass = iota
+	// resolveRoot: the root block (top-level scalars, #62).
+	resolveRoot
+	// resolveDottedExact: a dotted heading matched an exact schema block.
+	resolveDottedExact
+	// resolveBareExact: a bare heading matched an exact (root-level) schema block.
+	resolveBareExact
+	// resolveUniqueLeaf: a bare heading was inferred to the sole schema path
+	// carrying that leaf. This is the ONLY inference step (see §4).
+	resolveUniqueLeaf
+)
+
+// resolveSubsectionPath maps an Attribute-Reference subsection's doc-block key to
+// a single schema path for misplacement classification, using the strict,
+// ownership-free rules in docs/rules/argument-attribute-misplacement.md §4:
+//
+//   - root (""):   resolves to "" (resolveRoot).
+//   - dotted key:  the exact schema block, else unresolved. A dotted heading
+//     claims an exact path and is never remapped by leaf (fixes 2/3).
+//   - bare key:    the exact root-level block (resolveBareExact); else the sole
+//     schema path carrying that leaf (resolveUniqueLeaf); else unresolved
+//     (fixes 1/3).
+//
+// Unlike coverage's ownership resolver (resolveDocKeyToSchemaPath), this never
+// uses most-specific-owner logic: ownership exists to avoid double-counting
+// coverage and is the wrong tool for "does this documented argument correspond
+// to a configurable schema field." The unique-leaf branch is the only step that
+// infers a path; it fires for real headings only (a heading-less synthetic
+// block is resolved by exact path alone, never inferred) and is double-gated
+// downstream by configurableArgAtPath, so it can never fabricate a move on a
+// non-configurable field.
+func resolveSubsectionPath(rs *schema.ResourceSchema, docBlocks map[string]*doc.DocBlock, key string) (string, resolutionClass, bool) {
+	if rs == nil {
+		return "", resolveUnresolved, false
+	}
+	if key == "" {
+		return "", resolveRoot, true
+	}
+	if strings.Contains(key, ".") {
+		if _, ok := rs.Blocks[key]; ok {
+			return key, resolveDottedExact, true
+		}
+		return "", resolveUnresolved, false
+	}
+	// Bare key: exact root-level block first.
+	if _, ok := rs.Blocks[key]; ok {
+		return key, resolveBareExact, true
+	}
+	// Unique-leaf inference, gated to real headings. A heading-less synthetic
+	// block (dot-path reference bullet or prose lead-in) must never be inferred
+	// by leaf; it resolves only by the exact-path branch above.
+	if b := docBlocks[key]; b != nil && b.Heading != "" {
+		if p, ok := uniqueSchemaPathForLeaf(rs, key); ok {
+			return p, resolveUniqueLeaf, true
+		}
+	}
+	return "", resolveUnresolved, false
+}
+
 // uniqueSchemaPathForLeaf returns the single non-root schema path whose leaf
 // name equals leaf, reporting false when zero or more than one path carries it.
 // It underpins the alternate-heading suppression: an alternate subsection can be
