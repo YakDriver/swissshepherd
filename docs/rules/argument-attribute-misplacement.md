@@ -302,6 +302,44 @@ before/after, zero new FPs" guarantee is **void by design**. Validation is:
 The PR description must be rewritten to present this categorized delta and drop
 the "identical before/after" claim.
 
+### MEASURED corpus diff — two-pass (6c99a00) vs redesign (a0071ac)
+
+Both binaries run over terraform-provider-aws with `.ci/swissshepherd-full.hcl`
+(schema_docs enabled broadly), JSON output, findings keyed on
+`(resource, path, severity, message)`.
+
+- **Nondeterminism floor.** Running either binary twice differs by ~487
+  findings — all `block "…" is not documented` **coverage** findings on
+  many-identical-sibling resources (`aws_quicksight_*`, `aws_wafv2_*`), where the
+  representative sibling path is chosen nondeterministically. This is a
+  pre-existing coverage issue present in *both* binaries, unrelated to
+  misplacement (misplacement findings are fully deterministic: new-vs-new
+  misplacement delta = 0/0). It is tracked separately, not by this PR.
+
+- **Deterministic misplacement delta: exactly one finding, removed.**
+  Restricting to move/collapse/strip-label messages, the only-old vs only-new
+  delta is `only-old = 1, only-new = 0`:
+
+  > `aws_sagemaker_human_task_ui` — `attribute "ui_template" in block "(root)"
+  > should not have (Required) label` (removed)
+
+  `ui_template` is a `list` block with `min_items = 1` (a required, configurable
+  block; `content` is config, `content_sha256`/`url` are computed). The doc
+  splits it across both sections. The two-pass skipped the root, so it stripped
+  the label off a genuinely-required block — the #60 defect. The redesign
+  classifies the root bullet as a configurable child-block reference, dedups it
+  (path-based) against the `### UI Template` subsection, and suppresses the
+  misleading strip-label; the computed fields under Attribute Reference are
+  unlabeled and correctly draw no finding.
+
+- **Collapse findings identical** (10 → 10); no per-attribute or root moves fire
+  on the current (already-cleaned, `ignore_targets`-masked) corpus — consistent
+  with the §9/§12 population measurements.
+
+**Hard invariant satisfied:** zero new false ERROR on a correctly-placed field
+(only-new deterministic delta = 0). The sole change is the removal of one
+misleading strip-label — a correct #60 improvement.
+
 ## 10. Implementation steps
 
 1. Introduce `classifyAttrPlacement(ctx, P, attr) -> {misplaced|stripLabel|ok}`
