@@ -1223,3 +1223,116 @@ func TestLabels_UniqueLeafOptionalComputedNotMoved(t *testing.T) {
 		t.Errorf("unique-leaf resolution to an Optional+Computed attr must not produce a move: %+v", results)
 	}
 }
+
+// Review comment 1/2 (split headings): the dotted heading that owns the schema
+// path documents ONLY an unlabeled computed field, while a bare alternate
+// heading carries the (Required) configurable field. The two-pass classified
+// only the owning heading and emitted a misleading strip-label on the alternate.
+// The redesign judges each heading independently: the bare alternate resolves to
+// the sole matching path via unique-leaf, so the configurable field is flagged as
+// a move — never strip-labeled.
+func TestLabels_SplitHeadingConfigInBareAlternateFlagged(t *testing.T) {
+	t.Parallel()
+
+	templates := doc.HeadingTemplates{"`{Path}` Block", "`{Block}` Block", "{Block} Block", "{Block}", "{Title}"}
+
+	src := `# Resource: aws_thing
+
+## Argument Reference
+
+* ` + "`name`" + ` - (Required) Name.
+
+## Attribute Reference
+
+### ` + "`outer.notification`" + ` Block
+
+* ` + "`last_updated`" + ` - Timestamp of the last update.
+
+### ` + "`notification`" + ` Block
+
+* ` + "`comparison_operator`" + ` - (Required) Operator.
+`
+	rs := &schema.ResourceSchema{Blocks: map[string]*schema.Block{
+		"":      {Attributes: []schema.Attribute{{Name: "name", Required: true}}, ChildBlocks: []string{"outer"}},
+		"outer": {Path: "outer", ChildBlocks: []string{"notification"}},
+		// Sole path with leaf "notification": comparison_operator is config,
+		// last_updated is computed-only.
+		"outer.notification": {Path: "outer.notification", Attributes: []schema.Attribute{
+			{Name: "comparison_operator", Required: true},
+			{Name: "last_updated", Computed: true},
+		}},
+	}}
+
+	d, err := doc.ParseWithTemplates([]byte(src), "aws_thing", templates)
+	if err != nil {
+		t.Fatal(err)
+	}
+	results := (&check.SchemaDocsRule{IgnoreDeprecated: true}).Check(
+		check.CheckContext{Resource: "aws_thing", Schema: rs, Doc: d})
+
+	if !hasMsg(results, "move this subsection to Argument Reference") {
+		t.Errorf("config in the bare alternate heading must be flagged as a move: %+v", results)
+	}
+	if hasMsg(results, `attribute "comparison_operator"`) && hasMsg(results, "should not have") {
+		t.Errorf("must NOT emit the misleading strip-label for the alternate heading's configurable field: %+v", results)
+	}
+}
+
+// Review comment 2/2 (leaf over-match): a real other.notification block is moved,
+// and a phantom ### outer.notification heading (no such schema path) documents a
+// configurable-looking field. The two-pass leaf fallback resolved the phantom's
+// leaf to other.notification and silently dropped its warning. The redesign
+// resolves dotted headings by EXACT path only: the phantom is unresolved, so its
+// labeled field keeps its own strip-label (never silently dropped, never borrows
+// the real block's move).
+func TestLabels_PhantomDottedHeadingNotSuppressedByLeaf(t *testing.T) {
+	t.Parallel()
+
+	templates := doc.HeadingTemplates{"`{Path}` Block", "`{Block}` Block", "{Block} Block", "{Block}", "{Title}"}
+
+	src := `# Resource: aws_thing
+
+## Argument Reference
+
+* ` + "`name`" + ` - (Required) Name.
+
+## Attribute Reference
+
+### ` + "`other.notification`" + ` Block
+
+* ` + "`comparison_operator`" + ` - (Required) Operator.
+
+### ` + "`outer.notification`" + ` Block
+
+* ` + "`comparison_operator`" + ` - (Required) Operator.
+`
+	rs := &schema.ResourceSchema{Blocks: map[string]*schema.Block{
+		"":      {Attributes: []schema.Attribute{{Name: "name", Required: true}}, ChildBlocks: []string{"other"}},
+		"other": {Path: "other", ChildBlocks: []string{"notification"}},
+		// other.notification exists; outer.notification (the phantom heading) does
+		// NOT. The shared leaf "notification" is unique, which tempted the old
+		// leaf fallback.
+		"other.notification": {Path: "other.notification", Attributes: []schema.Attribute{{Name: "comparison_operator", Required: true}}},
+	}}
+
+	d, err := doc.ParseWithTemplates([]byte(src), "aws_thing", templates)
+	if err != nil {
+		t.Fatal(err)
+	}
+	results := (&check.SchemaDocsRule{IgnoreDeprecated: true}).Check(
+		check.CheckContext{Resource: "aws_thing", Schema: rs, Doc: d})
+
+	// The real block is moved.
+	if !hasMsg(results, `block "other.notification" is documented under Attribute Reference but is a configurable argument block`) {
+		t.Errorf("real other.notification must be flagged as a move: %+v", results)
+	}
+	// The phantom heading's warning must NOT be silently dropped — it keeps its
+	// own strip-label because it is unresolved (exact-only dotted resolution).
+	if !hasMsg(results, `attribute "comparison_operator" in block "outer.notification" should not have (Required) label`) {
+		t.Errorf("phantom outer.notification warning must not be silently dropped via leaf over-match: %+v", results)
+	}
+	// And the phantom must not borrow the real block's move.
+	if hasMsg(results, `block "outer.notification" is documented under Attribute Reference but is a configurable argument block`) {
+		t.Errorf("phantom dotted heading must not resolve to a move: %+v", results)
+	}
+}
