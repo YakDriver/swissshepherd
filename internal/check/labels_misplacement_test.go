@@ -1336,3 +1336,186 @@ func TestLabels_PhantomDottedHeadingNotSuppressedByLeaf(t *testing.T) {
 		t.Errorf("phantom dotted heading must not resolve to a move: %+v", results)
 	}
 }
+
+// Review comment 1/4: collapse must cover only the fields documented in the
+// collapsing subsection. The dotted owner documents one configurable field
+// (pure-config → collapses); a bare alternate resolving to the same path
+// documents a DIFFERENT configurable field plus a computed field. Collapsing the
+// owner must not silence the alternate's distinct configurable field — it gets
+// its own per-attribute move.
+func TestLabels_SplitHeadingDistinctConfigInAlternateEmitted(t *testing.T) {
+	t.Parallel()
+
+	templates := doc.HeadingTemplates{"`{Path}` Block", "`{Block}` Block", "{Block} Block", "{Block}", "{Title}"}
+
+	src := `# Resource: aws_thing
+
+## Argument Reference
+
+* ` + "`name`" + ` - (Required) Name.
+
+## Attribute Reference
+
+### ` + "`outer.notification`" + ` Block
+
+* ` + "`x`" + ` - (Required) X.
+
+### ` + "`notification`" + ` Block
+
+* ` + "`y`" + ` - (Required) Y.
+* ` + "`z`" + ` - (Optional) Z.
+`
+	rs := &schema.ResourceSchema{Blocks: map[string]*schema.Block{
+		"":      {Attributes: []schema.Attribute{{Name: "name", Required: true}}, ChildBlocks: []string{"outer"}},
+		"outer": {Path: "outer", ChildBlocks: []string{"notification"}},
+		"outer.notification": {Path: "outer.notification", Attributes: []schema.Attribute{
+			{Name: "x", Required: true},
+			{Name: "y", Required: true},
+			{Name: "z", Computed: true},
+		}},
+	}}
+
+	d, err := doc.ParseWithTemplates([]byte(src), "aws_thing", templates)
+	if err != nil {
+		t.Fatal(err)
+	}
+	results := (&check.SchemaDocsRule{IgnoreDeprecated: true}).Check(
+		check.CheckContext{Resource: "aws_thing", Schema: rs, Doc: d})
+
+	if !hasMsg(results, `block "outer.notification" is documented under Attribute Reference but is a configurable argument block`) {
+		t.Errorf("owner subsection must collapse: %+v", results)
+	}
+	if !hasMsg(results, `argument "y" in block "notification" is documented under Attribute Reference but is a configurable argument in the schema; move it to Argument Reference`) {
+		t.Errorf("distinct configurable field in the alternate heading must not be silenced by the owner's collapse: %+v", results)
+	}
+	if hasMsg(results, `attribute "y"`) && hasMsg(results, "should not have") {
+		t.Errorf("the alternate's configurable field must move, not strip: %+v", results)
+	}
+	if !hasMsg(results, `attribute "z" in block "notification" should not have (Optional) label`) {
+		t.Errorf("computed field in the alternate keeps its strip-label: %+v", results)
+	}
+}
+
+// Review comment 2/4 (+ 3/4 severity): a labeled child-block reference at the
+// root must NOT be suppressed when the child's own subsection documents only
+// computed/unlabeled fields (emits no move) — the parent reference is then the
+// only actionable misplacement. And because it references a nested block, it is
+// ERROR, not the WARN reserved for genuine root scalars.
+func TestLabels_RootChildRefNotSuppressedWhenChildClean(t *testing.T) {
+	t.Parallel()
+
+	src := `# Resource: aws_thing
+
+## Argument Reference
+
+* ` + "`name`" + ` - (Required) Name.
+
+## Attribute Reference
+
+* ` + "`notification`" + ` - (Optional) Notification. See [` + "`notification`" + ` Block](#notification-block).
+
+### ` + "`notification`" + ` Block
+
+* ` + "`last_updated`" + ` - Timestamp of the last update.
+`
+	rs := &schema.ResourceSchema{Blocks: map[string]*schema.Block{
+		"": {Attributes: []schema.Attribute{{Name: "name", Required: true}}, ChildBlocks: []string{"notification"}},
+		// notification is a configurable child block, but its subsection here
+		// documents only the computed last_updated (no move from the subsection).
+		"notification": {Path: "notification", Attributes: []schema.Attribute{
+			{Name: "comparison_operator", Required: true},
+			{Name: "last_updated", Computed: true},
+		}},
+	}}
+
+	results := labelResults(t, src, rs)
+
+	sev, ok := findSeverity(results, `argument "notification" is documented under Attribute Reference but is a configurable argument in the schema; move it to Argument Reference`)
+	if !ok {
+		t.Fatalf("root child-block reference must not be suppressed when the child subsection emits no move: %+v", results)
+	}
+	if sev != check.SeverityError {
+		t.Errorf("a child-block reference is a nested move → ERROR, not WARN; got %v", sev)
+	}
+	if hasMsg(results, `attribute "last_updated" should not have`) {
+		t.Errorf("unlabeled computed field must not be flagged: %+v", results)
+	}
+}
+
+// Review comment 4/4: a subsection documenting a configurable scalar plus a
+// read-only child block must NOT collapse — a wholesale move would drag the
+// read-only child documentation into Argument Reference. The scalar gets a
+// per-attribute move; the read-only child stays put.
+func TestLabels_MixedChildBlockDoesNotCollapse(t *testing.T) {
+	t.Parallel()
+
+	src := `# Resource: aws_thing
+
+## Argument Reference
+
+* ` + "`name`" + ` - (Required) Name.
+
+## Attribute Reference
+
+### ` + "`thing`" + ` Block
+
+* ` + "`mode`" + ` - (Required) Mode.
+* ` + "`readonly`" + ` - Read-only sub-block. See [` + "`readonly`" + ` Block](#readonly-block).
+`
+	rs := &schema.ResourceSchema{Blocks: map[string]*schema.Block{
+		"":      {Attributes: []schema.Attribute{{Name: "name", Required: true}}, ChildBlocks: []string{"thing"}},
+		"thing": {Path: "thing", ChildBlocks: []string{"readonly"}, Attributes: []schema.Attribute{{Name: "mode", Required: true}}},
+		// readonly is a child block whose entire subtree is computed-only.
+		"thing.readonly": {Path: "thing.readonly", Attributes: []schema.Attribute{{Name: "url", Computed: true}}},
+	}}
+
+	results := labelResults(t, src, rs)
+
+	if hasMsg(results, `block "thing" is documented under Attribute Reference but is a configurable argument block`) {
+		t.Errorf("a subsection with a read-only child block must not collapse into a wholesale move: %+v", results)
+	}
+	if !hasMsg(results, `argument "mode" in block "thing" is documented under Attribute Reference but is a configurable argument in the schema; move it to Argument Reference`) {
+		t.Errorf("the configurable scalar must get a per-attribute move: %+v", results)
+	}
+	if hasMsg(results, `"readonly"`) {
+		t.Errorf("the read-only child block must not be moved or stripped: %+v", results)
+	}
+}
+
+// Review comment 4/4 (ConfigUnknown variant): a documented ConfigUnknown child
+// block — whose per-field configurability is unknowable — conservatively blocks
+// collapse, so a subsection mixing it with a configurable scalar emits a
+// per-attribute move rather than a wholesale subsection move.
+func TestLabels_ConfigUnknownChildBlockDoesNotCollapse(t *testing.T) {
+	t.Parallel()
+
+	src := `# Resource: aws_thing
+
+## Argument Reference
+
+* ` + "`name`" + ` - (Required) Name.
+
+## Attribute Reference
+
+### ` + "`thing`" + ` Block
+
+* ` + "`mode`" + ` - (Required) Mode.
+* ` + "`opaque`" + ` - Object-typed sub-block. See [` + "`opaque`" + ` Block](#opaque-block).
+`
+	rs := &schema.ResourceSchema{Blocks: map[string]*schema.Block{
+		"":      {Attributes: []schema.Attribute{{Name: "name", Required: true}}, ChildBlocks: []string{"thing"}},
+		"thing": {Path: "thing", ChildBlocks: []string{"opaque"}, Attributes: []schema.Attribute{{Name: "mode", Required: true}}},
+		// opaque is synthesized from an object-typed attribute: per-field flags
+		// are unreliable, so it must not be swept into a collapse.
+		"thing.opaque": {Path: "thing.opaque", ConfigUnknown: true, Attributes: []schema.Attribute{{Name: "field", Optional: true}}},
+	}}
+
+	results := labelResults(t, src, rs)
+
+	if hasMsg(results, `block "thing" is documented under Attribute Reference but is a configurable argument block`) {
+		t.Errorf("a ConfigUnknown child block must conservatively block collapse: %+v", results)
+	}
+	if !hasMsg(results, `argument "mode" in block "thing" is documented under Attribute Reference but is a configurable argument in the schema; move it to Argument Reference`) {
+		t.Errorf("the configurable scalar must still get a per-attribute move: %+v", results)
+	}
+}

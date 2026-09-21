@@ -1057,16 +1057,19 @@ func (r *SchemaDocsRule) attributeMisplacementFindings(ctx CheckContext) []Resul
 	type subMeta struct {
 		path     string
 		class    resolutionClass
+		resolved bool
 		heading  string
 		line     int
 		hasMis   bool // documents at least one misplaced (labeled pure-config) attribute
-		hasComp  bool // documents at least one computed-only field (blocks collapse)
+		hasComp  bool // documents a field that must stay under Attribute Reference (blocks collapse)
 		eligible bool // collapse-eligible subsection
 	}
 	subs := make(map[string]*subMeta, len(names))
-	// Schema paths documented by a real-heading subsection, used to dedup a
-	// child-block reference bullet against the child's own subsection.
-	subsectionForPath := make(map[string]bool)
+	// pathHasMis[P] is true when a real-heading subsection resolving to P
+	// documents at least one misplaced attribute (i.e. emits a move). Used to
+	// dedup a child-block reference bullet only against a child subsection that
+	// actually produces a finding.
+	pathHasMis := make(map[string]bool)
 
 	type misplacedAttr struct {
 		block  string
@@ -1090,11 +1093,8 @@ func (r *SchemaDocsRule) attributeMisplacementFindings(ctx CheckContext) []Resul
 		// its legacy strip-label guidance without emitting the new error.
 		resolved := ok && !slices.Contains(skip, path)
 
-		sm := &subMeta{path: path, class: class, heading: block.Heading, line: block.HeadingLine}
+		sm := &subMeta{path: path, class: class, resolved: resolved, heading: block.Heading, line: block.HeadingLine}
 		subs[name] = sm
-		if resolved && block.Heading != "" {
-			subsectionForPath[path] = true
-		}
 
 		for _, attr := range block.Attributes {
 			switch classifyAttrPlacement(ctx.Schema, path, resolved, attr) {
@@ -1115,69 +1115,88 @@ func (r *SchemaDocsRule) attributeMisplacementFindings(ctx CheckContext) []Resul
 					sm.line = attr.Line
 				}
 			}
-			if resolved && isComputedOnlyAtPath(ctx.Schema, path, attr.Name) {
+			if resolved && fieldRequiresAttributeReference(ctx.Schema, path, attr.Name) {
 				sm.hasComp = true
 			}
 		}
+		if resolved && block.Heading != "" && sm.hasMis {
+			pathHasMis[path] = true
+		}
 	}
 
-	// Collapse decision, per resolved schema path. The root ("") never
-	// collapses (§5). A path collapses when a real-heading subsection resolving
-	// to it documents at least one misplaced attribute and no computed-only
-	// field. Iterate in sorted name order so the representative subsection (and
-	// its reported line) is deterministic.
-	collapsed := make(map[string]bool)
-	collapseRep := make(map[string]string) // schema path -> representative doc block name
+	// Collapse eligibility is per physical subsection (§5): a resolved,
+	// real-heading, non-root subsection that documents at least one misplaced
+	// attribute and nothing that must stay under Attribute Reference. Judged per
+	// subsection — not per schema path — so a subsection is never silenced by a
+	// *different* subsection that happens to resolve to the same path.
 	for _, name := range names {
 		sm := subs[name]
-		if sm.path == "" || sm.heading == "" || !sm.hasMis || sm.hasComp {
-			continue
-		}
-		sm.eligible = true
-		if !collapsed[sm.path] {
-			collapsed[sm.path] = true
-			collapseRep[sm.path] = name
+		sm.eligible = sm.resolved && sm.heading != "" && sm.path != "" && sm.hasMis && !sm.hasComp
+	}
+
+	// A collapse "move this subsection" covers exactly the fields documented in
+	// that subsection. Mark those fields covered so an alternate subsection does
+	// not re-report the same field — while its *distinct* fields still surface.
+	covered := make(map[string]bool)
+	for _, m := range misplaced {
+		if subs[m.block].eligible {
+			covered[m.target+"\x00"+m.attr.Name] = true
 		}
 	}
 
 	var out []Result
 
-	// Collapse findings: one "move this subsection" per collapsed path.
+	// Collapse findings: one per physical heading. Parser aliases share a
+	// heading line, so dedup on it to avoid re-reporting one subsection under
+	// each alias key; genuinely distinct headings have distinct lines.
+	emittedCollapse := make(map[string]bool)
 	for _, name := range names {
 		sm := subs[name]
-		if sm.eligible && collapseRep[sm.path] == name {
-			out = append(out, Result{
-				Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityError,
-				Message: fmt.Sprintf("block %q is documented under Attribute Reference but is a configurable argument block in the schema; move this subsection to Argument Reference", displayPath(name)),
-				Block:   name,
-				Line:    sm.line,
-			})
+		if !sm.eligible {
+			continue
 		}
+		phys := "name:" + name
+		if sm.line > 0 {
+			phys = fmt.Sprintf("line:%d", sm.line)
+		}
+		if emittedCollapse[phys] {
+			continue
+		}
+		emittedCollapse[phys] = true
+		out = append(out, Result{
+			Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityError,
+			Message: fmt.Sprintf("block %q is documented under Attribute Reference but is a configurable argument block in the schema; move this subsection to Argument Reference", displayPath(name)),
+			Block:   name,
+			Line:    sm.line,
+		})
 	}
 
-	// Per-attribute moves. Suppress those already covered by a subsection
-	// collapse, and dedup a child-block reference bullet against the child's own
-	// subsection (path-based, never leaf-based). Severity is ERROR for nested
-	// moves and WARN for root scalars (#62), which the §9 table gates until a
-	// clean corpus run promotes them.
+	// Per-attribute moves for misplaced attributes not covered by a collapse. A
+	// child-block reference bullet is deduped only against a child subsection
+	// that actually emits a move (pathHasMis), never against the mere existence
+	// of a child heading. Severity is WARN only for a genuine root scalar (path
+	// and target both root, #62); a child-block reference — even one documented
+	// at the root — is a nested-block move at ERROR.
 	seen := make(map[string]bool)
 	for _, m := range misplaced {
-		if collapsed[m.path] {
+		if subs[m.block].eligible {
+			continue // covered by this subsection's own collapse
+		}
+		fk := m.target + "\x00" + m.attr.Name
+		if covered[fk] || seen[fk] {
 			continue
 		}
-		if m.target != m.path && (subsectionForPath[m.target] || collapsed[m.target]) {
-			continue
+		if m.target != m.path && pathHasMis[m.target] {
+			continue // the child subsection carries the finding
 		}
-		key := m.path + "\x00" + m.attr.Name
-		if seen[key] {
-			continue
-		}
-		seen[key] = true
+		seen[fk] = true
 
-		var msg string
 		sev := SeverityError
+		var msg string
 		if m.path == "" {
-			sev = SeverityWarning
+			if m.target == "" {
+				sev = SeverityWarning // genuine root scalar (#62)
+			}
 			msg = fmt.Sprintf("argument %q is documented under Attribute Reference but is a configurable argument in the schema; move it to Argument Reference", m.attr.Name)
 		} else {
 			msg = fmt.Sprintf("argument %q in block %q is documented under Attribute Reference but is a configurable argument in the schema; move it to Argument Reference", m.attr.Name, displayPath(m.block))
@@ -1195,12 +1214,15 @@ func (r *SchemaDocsRule) attributeMisplacementFindings(ctx CheckContext) []Resul
 	return out
 }
 
-// isComputedOnlyAtPath reports whether the schema attribute named attrName at
-// path is computed-only (Computed and neither Required nor Optional) — a field
-// that must remain under Attribute Reference. Optional+Computed is not
-// computed-only. A subsection that documents such a field cannot collapse into
-// a single "move this subsection" finding (§5).
-func isComputedOnlyAtPath(rs *schema.ResourceSchema, path, attrName string) bool {
+// fieldRequiresAttributeReference reports whether a documented attribute must
+// remain under Attribute Reference, which prevents its subsection from
+// collapsing into a wholesale "move this subsection" finding (§5). That holds
+// for a computed-only scalar (Computed and neither Required nor Optional), and
+// for a documented child block that is entirely read-only (no configurable
+// field anywhere in its subtree) or whose per-field configurability is
+// unknowable (ConfigUnknown, handled conservatively so read-only child docs are
+// never dragged into Argument Reference).
+func fieldRequiresAttributeReference(rs *schema.ResourceSchema, path, attrName string) bool {
 	if rs == nil {
 		return false
 	}
@@ -1212,6 +1234,12 @@ func isComputedOnlyAtPath(rs *schema.ResourceSchema, path, attrName string) bool
 		if a.Name == attrName {
 			return a.Computed && !a.Required && !a.Optional
 		}
+	}
+	if cp, isChild := childPathForAttr(path, b, attrName); isChild {
+		if cb, okc := rs.Blocks[cp]; okc && cb.ConfigUnknown {
+			return true
+		}
+		return !blockTreeHasPureConfigurable(rs, cp, make(map[string]bool))
 	}
 	return false
 }
