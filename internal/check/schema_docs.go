@@ -1119,6 +1119,19 @@ func (r *SchemaDocsRule) attributeMisplacementFindings(ctx CheckContext) []Resul
 				sm.hasComp = true
 			}
 		}
+		// Malformed bullets (e.g. a computed attribute written with a bad
+		// separator) are stored only in MalformedAttributes, so the loop above
+		// never sees them. A malformed computed-only field still pins the
+		// subsection: without this, a collapse would drag that computed output
+		// into Argument Reference.
+		if resolved {
+			for _, ma := range block.MalformedAttributes {
+				if fieldRequiresAttributeReference(ctx.Schema, path, ma.Name) {
+					sm.hasComp = true
+					break
+				}
+			}
+		}
 		if resolved && block.Heading != "" && sm.hasMis {
 			pathHasMis[path] = true
 		}

@@ -1528,3 +1528,39 @@ func TestLabels_ConfigUnknownChildBlockDoesNotCollapse(t *testing.T) {
 		t.Errorf("the configurable scalar must still get a per-attribute move: %+v", results)
 	}
 }
+
+// A subsection that documents a valid misplaced configurable field alongside a
+// computed-only field written with a malformed bullet (stored only in
+// MalformedAttributes) must NOT collapse: a "move this subsection" would drag
+// the computed output into Argument Reference. The malformed computed field
+// pins the subsection, forcing a per-attribute move of the configurable field
+// only.
+func TestLabels_MalformedComputedBlocksCollapse(t *testing.T) {
+	t.Parallel()
+
+	// `arn` uses an en-dash separator instead of " - ", so parseListItem
+	// rejects it and it lands only in MalformedAttributes.
+	src := "# Resource: aws_thing\n\n" +
+		"## Argument Reference\n\n" +
+		"* `name` - (Required) Name.\n\n" +
+		"## Attribute Reference\n\n" +
+		"### `logging` Block\n\n" +
+		"* `enabled` - (Required) Whether logging is enabled.\n" +
+		"* `arn` \u2013 ARN of the logging config.\n"
+
+	rs := &schema.ResourceSchema{Blocks: map[string]*schema.Block{
+		"": {Attributes: []schema.Attribute{{Name: "name", Required: true}}, ChildBlocks: []string{"logging"}},
+		"logging": {Path: "logging", Attributes: []schema.Attribute{
+			{Name: "enabled", Required: true},
+			{Name: "arn", Computed: true},
+		}},
+	}}
+
+	results := labelResults(t, src, rs)
+	if hasMsg(results, "move this subsection to Argument Reference") {
+		t.Errorf("a subsection with a malformed computed field must not collapse: %+v", results)
+	}
+	if !hasMsg(results, `argument "enabled" in block "logging" is documented under Attribute Reference but is a configurable argument in the schema; move it to Argument Reference`) {
+		t.Errorf("the configurable field must still get a per-attribute move: %+v", results)
+	}
+}
