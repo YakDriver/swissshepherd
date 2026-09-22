@@ -1626,3 +1626,40 @@ func TestLabels_CollapseSuppressesOptionalComputedStrip(t *testing.T) {
 		t.Errorf("a collapsing subsection must not also strip an Optional+Computed field's label: %+v", results)
 	}
 }
+
+// Two headings that normalize to the same block key merge into one DocBlock that
+// keeps only the first HeadingLine. Collapsing it would emit a single "move this
+// subsection" at the first heading, leaving the second physical subsection
+// misplaced. The merged entry must be treated as spanning multiple subsections,
+// so each configurable field gets its own per-attribute move instead.
+func TestLabels_RepeatedHeadingDoesNotCollapse(t *testing.T) {
+	t.Parallel()
+
+	src := "# Resource: aws_thing\n\n" +
+		"## Argument Reference\n\n" +
+		"* `name` - (Required) Name.\n\n" +
+		"## Attribute Reference\n\n" +
+		"### `foo` Block\n\n" +
+		"* `alpha` - (Required) Alpha.\n\n" +
+		"### `foo` Block\n\n" +
+		"* `beta` - (Required) Beta.\n"
+
+	rs := &schema.ResourceSchema{Blocks: map[string]*schema.Block{
+		"": {Attributes: []schema.Attribute{{Name: "name", Required: true}}, ChildBlocks: []string{"foo"}},
+		"foo": {Path: "foo", Attributes: []schema.Attribute{
+			{Name: "alpha", Required: true},
+			{Name: "beta", Required: true},
+		}},
+	}}
+
+	results := labelResults(t, src, rs)
+	if hasMsg(results, "move this subsection to Argument Reference") {
+		t.Errorf("a block documented under repeated headings must not collapse: %+v", results)
+	}
+	if !hasMsg(results, `argument "alpha" in block "foo" is documented under Attribute Reference but is a configurable argument in the schema; move it to Argument Reference`) {
+		t.Errorf("the first subsection's field must get a per-attribute move: %+v", results)
+	}
+	if !hasMsg(results, `argument "beta" in block "foo" is documented under Attribute Reference but is a configurable argument in the schema; move it to Argument Reference`) {
+		t.Errorf("the second subsection's field must get a per-attribute move: %+v", results)
+	}
+}

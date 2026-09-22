@@ -1065,15 +1065,15 @@ func (r *SchemaDocsRule) attributeMisplacementFindings(ctx CheckContext) []Resul
 	names := slices.Sorted(maps.Keys(ctx.Doc.AttributeBlocks))
 
 	type subMeta struct {
-		path       string
-		resolved   bool
-		heading    string
-		line       int
-		preHeading bool // entry spans pre-heading dot-path references; never collapse
-		hasMis     bool // documents at least one misplaced (labeled pure-config) attribute
-		hasComp    bool // documents a field that must stay under Attribute Reference (blocks collapse)
-		eligible   bool // this subsection is collapse-eligible on its own
-		collapses  bool // will actually collapse (self eligible AND whole alias group eligible)
+		path      string
+		resolved  bool
+		heading   string
+		line      int
+		spans     bool // entry spans multiple physical subsections; never collapse
+		hasMis    bool // documents at least one misplaced (labeled pure-config) attribute
+		hasComp   bool // documents a field that must stay under Attribute Reference (blocks collapse)
+		eligible  bool // this subsection is collapse-eligible on its own
+		collapses bool // will actually collapse (self eligible AND whole alias group eligible)
 	}
 	subs := make(map[string]*subMeta, len(names))
 	// pathHasMis[P] is true when a real-heading subsection resolving to P
@@ -1104,7 +1104,7 @@ func (r *SchemaDocsRule) attributeMisplacementFindings(ctx CheckContext) []Resul
 		// its legacy strip-label guidance without emitting the new error.
 		resolved := ok && !slices.Contains(skip, path)
 
-		sm := &subMeta{path: path, resolved: resolved, heading: block.Heading, line: block.HeadingLine, preHeading: block.PreHeadingAttrs}
+		sm := &subMeta{path: path, resolved: resolved, heading: block.Heading, line: block.HeadingLine, spans: block.SpansSubsections}
 		subs[name] = sm
 
 		for _, attr := range block.Attributes {
@@ -1155,7 +1155,7 @@ func (r *SchemaDocsRule) attributeMisplacementFindings(ctx CheckContext) []Resul
 	// *different* subsection that happens to resolve to the same path.
 	for _, name := range names {
 		sm := subs[name]
-		sm.eligible = sm.resolved && sm.heading != "" && sm.path != "" && sm.hasMis && !sm.hasComp && !sm.preHeading
+		sm.eligible = sm.resolved && sm.heading != "" && sm.path != "" && sm.hasMis && !sm.hasComp && !sm.spans
 	}
 
 	// Combined headings (`### `foo` and `bar``) mirror one physical subsection to

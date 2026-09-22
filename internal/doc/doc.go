@@ -53,13 +53,13 @@ type DocBlock struct {
 	Attributes          []DocAttribute
 	MalformedAttributes []MalformedAttr // attributes found but with formatting issues
 	SplitByLabel        bool            // true if the doc explicitly separates required/optional with distinct bylines
-	// PreHeadingAttrs is true when the entry accumulated attributes (from
-	// dot-path reference bullets) at an earlier physical location before its
-	// heading was parsed and backfilled. Such an entry spans more than one
-	// physical subsection, so the misplacement rule must not collapse a single
-	// "move this subsection" over it (that move would not relocate the earlier
-	// reference bullets).
-	PreHeadingAttrs bool
+	// SpansSubsections is true when the entry represents more than one physical
+	// subsection: it accumulated attributes or malformed bullets from a dot-path
+	// reference at an earlier location before its heading, or a later heading
+	// normalized to the same block key. A single "move this subsection" cannot
+	// relocate all of it, so the misplacement rule must not collapse such an
+	// entry (it emits per-attribute moves instead).
+	SpansSubsections bool
 }
 
 // HeadingTemplates defines patterns for recognizing block headings.
@@ -816,19 +816,32 @@ func extractBlocks(tree ast.Node, source []byte, idx *lineIndex, doc *Document, 
 						if inArguments {
 							target = doc.ArgumentBlocks
 						}
+						_, existed := target[bn]
+						existingHeading := ""
+						if existed {
+							existingHeading = target[bn].Heading
+						}
 						ensureBlock(target, bn, headingText)
 						b := target[bn]
-						if b.Heading == "" {
-							// Attributes already present were routed here from
-							// dot-path reference bullets at an earlier physical
-							// location; record that the entry spans pre-heading
-							// references so the misplacement rule will not collapse
-							// a single "move this subsection" over bullets the
-							// heading move would not physically relocate.
-							if len(b.Attributes) > 0 {
-								b.PreHeadingAttrs = true
+						switch {
+						case !existed:
+							// Brand-new block created by this heading — the normal case.
+						case existingHeading == "":
+							// The entry pre-existed without a heading: its content was
+							// routed here from an earlier physical location (a dot-path
+							// reference or a malformed bullet). Record that it spans more
+							// than one physical subsection so the misplacement rule will
+							// not collapse a single "move this subsection" over content
+							// the heading move would not relocate.
+							if len(b.Attributes) > 0 || len(b.MalformedAttributes) > 0 {
+								b.SpansSubsections = true
 							}
 							b.Heading = headingText
+						default:
+							// A later heading normalized to the same block key: the entry
+							// now covers two physical subsections, so a single collapse
+							// cannot relocate both.
+							b.SpansSubsections = true
 						}
 						if b.HeadingLine == 0 {
 							b.HeadingLine = headingLine
