@@ -1594,3 +1594,35 @@ func TestLabels_MixedAliasGroupDoesNotCollapse(t *testing.T) {
 		t.Errorf("the configurable alias must still get a per-attribute move: %+v", results)
 	}
 }
+
+// A collapsing subsection must not also emit a strip-label finding for an
+// Optional+Computed field it contains: the collapse moves the whole subsection
+// to Argument Reference, where that field is a valid argument and must keep its
+// (Optional) label. Emitting both would create a new labels error.
+func TestLabels_CollapseSuppressesOptionalComputedStrip(t *testing.T) {
+	t.Parallel()
+
+	src := "# Resource: aws_thing\n\n" +
+		"## Argument Reference\n\n" +
+		"* `name` - (Required) Name.\n\n" +
+		"## Attribute Reference\n\n" +
+		"### `settings` Block\n\n" +
+		"* `mode` - (Optional) Mode.\n" +
+		"* `state` - (Optional) State.\n"
+
+	rs := &schema.ResourceSchema{Blocks: map[string]*schema.Block{
+		"": {Attributes: []schema.Attribute{{Name: "name", Required: true}}, ChildBlocks: []string{"settings"}},
+		"settings": {Path: "settings", Attributes: []schema.Attribute{
+			{Name: "mode", Optional: true},                  // pure config -> drives the collapse
+			{Name: "state", Optional: true, Computed: true}, // Optional+Computed -> would strip
+		}},
+	}}
+
+	results := labelResults(t, src, rs)
+	if !hasMsg(results, `block "settings" is documented under Attribute Reference but is a configurable argument block`) {
+		t.Fatalf("expected the subsection to collapse: %+v", results)
+	}
+	if hasMsg(results, "should not have") {
+		t.Errorf("a collapsing subsection must not also strip an Optional+Computed field's label: %+v", results)
+	}
+}

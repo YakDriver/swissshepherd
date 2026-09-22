@@ -1251,6 +1251,13 @@ func (r *SchemaDocsRule) attributeMisplacementFindings(ctx CheckContext) []Resul
 	// arguments (computed-only, Optional+Computed, ConfigUnknown, or unresolved)
 	// keep the legacy "should not have label" guidance.
 	for _, s := range strips {
+		// A collapsing subsection moves wholesale to Argument Reference, where a
+		// labeled Optional+Computed field is a valid argument that must keep its
+		// label. Emitting a strip here would contradict the collapse and create a
+		// new labels error, so skip strips the collapse already relocates.
+		if subs[s.block].collapses {
+			continue
+		}
 		out = append(out, stripLabelResult(r, ctx, s.block, s.attr))
 	}
 
