@@ -302,11 +302,11 @@ before/after, zero new FPs" guarantee is **void by design**. Validation is:
 The PR description must be rewritten to present this categorized delta and drop
 the "identical before/after" claim.
 
-### MEASURED corpus diff — two-pass (6c99a00) vs redesign (a0071ac)
+### MEASURED corpus diff — two-pass (6c99a00) vs redesign (74161be)
 
 Both binaries run over terraform-provider-aws with `.ci/swissshepherd-full.hcl`
 (schema_docs enabled broadly), JSON output, findings keyed on
-`(resource, path, severity, message)`.
+`(resource, path, severity, message)`. Stable across a schema refresh.
 
 - **Nondeterminism floor.** Running either binary twice differs by ~487
   findings — all `block "…" is not documented` **coverage** findings on
@@ -314,31 +314,38 @@ Both binaries run over terraform-provider-aws with `.ci/swissshepherd-full.hcl`
   representative sibling path is chosen nondeterministically. This is a
   pre-existing coverage issue present in *both* binaries, unrelated to
   misplacement (misplacement findings are fully deterministic: new-vs-new
-  misplacement delta = 0/0). It is tracked separately, not by this PR.
+  misplacement delta = 0/0). Tracked separately as #65.
 
-- **Deterministic misplacement delta: exactly one finding, removed.**
-  Restricting to move/collapse/strip-label messages, the only-old vs only-new
-  delta is `only-old = 1, only-new = 0`:
+- **Deterministic misplacement delta: 2 removed, 9 added — all correct.**
 
-  > `aws_sagemaker_human_task_ui` — `attribute "ui_template" in block "(root)"
-  > should not have (Required) label` (removed)
+  *Removed (two-pass only):*
+  1. `aws_sagemaker_human_task_ui` — `attribute "ui_template" … should not have
+     (Required) label` (WARN). A misleading strip on a required `min_items=1`
+     block — the #60 defect (two-pass skipped the root).
+  2. `aws_wafv2_rule_group` — `block "custom_key" … move this subsection`
+     (ERROR). A **wrong wholesale collapse**: `custom_key` also documents
+     read-only child blocks (`forwarded_ip`, `http_method`, `ip`, `asn`), which a
+     wholesale move would drag into Argument Reference.
 
-  `ui_template` is a `list` block with `min_items = 1` (a required, configurable
-  block; `content` is config, `content_sha256`/`url` are computed). The doc
-  splits it across both sections. The two-pass skipped the root, so it stripped
-  the label off a genuinely-required block — the #60 defect. The redesign
-  classifies the root bullet as a configurable child-block reference, dedups it
-  (path-based) against the `### UI Template` subsection, and suppresses the
-  misleading strip-label; the computed fields under Attribute Reference are
-  unlabeled and correctly draw no finding.
+  *Added (redesign only):*
+  1. `aws_sagemaker_human_task_ui` — `argument "ui_template" … move it` (ERROR).
+     The redundant labeled config-block reference under Attribute Reference is
+     now surfaced as a move (child-ref dedup + target-based severity), replacing
+     the misleading strip.
+  2–9. `aws_wafv2_rule_group` — `argument "<child>" in block "custom_key" … move
+     it` (ERROR) for the eight **pure-config** children (`cookie`, `header`,
+     `ja3_fingerprint`, `ja4_fingerprint`, `label_namespace`, `query_argument`,
+     `query_string`, `uri_path`). The read-only children are correctly left under
+     Attribute Reference (the mixed-block / collapse-guard fix).
 
-- **Collapse findings identical** (10 → 10); no per-attribute or root moves fire
-  on the current (already-cleaned, `ignore_targets`-masked) corpus — consistent
-  with the §9/§12 population measurements.
+  Schema inspection confirmed `custom_key` is genuinely mixed (8 pure-config
+  children, 4 read-only), so per-attribute moves are correct and the two-pass
+  collapse was wrong.
 
-**Hard invariant satisfied:** zero new false ERROR on a correctly-placed field
-(only-new deterministic delta = 0). The sole change is the removal of one
-misleading strip-label — a correct #60 improvement.
+**Hard invariant satisfied:** every added finding targets a genuinely misplaced
+configurable field; zero new false ERROR on a correctly-placed field. The net
+effect is strictly better guidance (one misleading strip and one over-broad
+collapse replaced by precise per-attribute moves).
 
 ## 10. Implementation steps
 
