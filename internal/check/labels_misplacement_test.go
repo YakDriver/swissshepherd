@@ -322,11 +322,12 @@ func TestLabels_BareHeadingResolvesToExactRootBlock(t *testing.T) {
 	}
 }
 
-// A real subsection heading that is PRECEDED by a dot-notation reference to the
-// same block (which first creates the map entry with an empty Heading) must
-// still be classified. The parser must backfill Heading on the pre-existing
-// synthetic entry, otherwise checkLabels skips the block and emits misleading
-// strip-label warnings instead of the move error.
+// A real subsection heading PRECEDED by a dot-notation reference to the same
+// block (which first creates the map entry with an empty Heading) must still be
+// classified — never strip-labeled. Because the pre-heading reference bullet
+// lives at a different physical location than the heading, the entry must NOT
+// collapse into a single "move this subsection" (that move would not relocate
+// the earlier bullet); each configurable field gets its own per-attribute move.
 func TestLabels_RealHeadingAfterSyntheticReferenceStillMoved(t *testing.T) {
 	t.Parallel()
 
@@ -353,11 +354,19 @@ func TestLabels_RealHeadingAfterSyntheticReferenceStillMoved(t *testing.T) {
 	}}
 
 	results := labelResults(t, src, rs)
-	if !hasMsg(results, `block "notification" is documented under Attribute Reference but is a configurable argument block`) {
-		t.Errorf("a real heading preceded by a synthetic dot-notation reference must still be classified: %+v", results)
+	// No wholesale collapse — it would leave the pre-heading reference bullet behind.
+	if hasMsg(results, "move this subsection to Argument Reference") {
+		t.Errorf("a block spanning a pre-heading reference must not collapse: %+v", results)
+	}
+	// Both configurable fields are individually flagged as moves.
+	if !hasMsg(results, `argument "comparison_operator" in block "notification" is documented under Attribute Reference but is a configurable argument in the schema; move it to Argument Reference`) {
+		t.Errorf("the pre-heading reference bullet must get its own move: %+v", results)
+	}
+	if !hasMsg(results, `argument "threshold" in block "notification" is documented under Attribute Reference but is a configurable argument in the schema; move it to Argument Reference`) {
+		t.Errorf("the heading's configurable field must get a move: %+v", results)
 	}
 	if hasMsg(results, "should not have") {
-		t.Errorf("must not emit strip-label warnings for the moved block's configurable args: %+v", results)
+		t.Errorf("must not emit strip-label warnings for the block's configurable args: %+v", results)
 	}
 }
 

@@ -1055,14 +1055,14 @@ func (r *SchemaDocsRule) attributeMisplacementFindings(ctx CheckContext) []Resul
 	names := slices.Sorted(maps.Keys(ctx.Doc.AttributeBlocks))
 
 	type subMeta struct {
-		path     string
-		class    resolutionClass
-		resolved bool
-		heading  string
-		line     int
-		hasMis   bool // documents at least one misplaced (labeled pure-config) attribute
-		hasComp  bool // documents a field that must stay under Attribute Reference (blocks collapse)
-		eligible bool // collapse-eligible subsection
+		path       string
+		resolved   bool
+		heading    string
+		line       int
+		preHeading bool // entry spans pre-heading dot-path references; never collapse
+		hasMis     bool // documents at least one misplaced (labeled pure-config) attribute
+		hasComp    bool // documents a field that must stay under Attribute Reference (blocks collapse)
+		eligible   bool // collapse-eligible subsection
 	}
 	subs := make(map[string]*subMeta, len(names))
 	// pathHasMis[P] is true when a real-heading subsection resolving to P
@@ -1087,13 +1087,13 @@ func (r *SchemaDocsRule) attributeMisplacementFindings(ctx CheckContext) []Resul
 	// Collect: resolve each subsection and classify its attributes.
 	for _, name := range names {
 		block := ctx.Doc.AttributeBlocks[name]
-		path, class, ok := resolveSubsectionPath(ctx.Schema, ctx.Doc.AttributeBlocks, name)
+		path, _, ok := resolveSubsectionPath(ctx.Schema, ctx.Doc.AttributeBlocks, name)
 		// skip_blocks: a block opted out of checks (applied to its resolved
 		// schema path) must not produce a move. Treating it as unresolved keeps
 		// its legacy strip-label guidance without emitting the new error.
 		resolved := ok && !slices.Contains(skip, path)
 
-		sm := &subMeta{path: path, class: class, resolved: resolved, heading: block.Heading, line: block.HeadingLine}
+		sm := &subMeta{path: path, resolved: resolved, heading: block.Heading, line: block.HeadingLine, preHeading: block.PreHeadingAttrs}
 		subs[name] = sm
 
 		for _, attr := range block.Attributes {
@@ -1131,7 +1131,7 @@ func (r *SchemaDocsRule) attributeMisplacementFindings(ctx CheckContext) []Resul
 	// *different* subsection that happens to resolve to the same path.
 	for _, name := range names {
 		sm := subs[name]
-		sm.eligible = sm.resolved && sm.heading != "" && sm.path != "" && sm.hasMis && !sm.hasComp
+		sm.eligible = sm.resolved && sm.heading != "" && sm.path != "" && sm.hasMis && !sm.hasComp && !sm.preHeading
 	}
 
 	// A collapse "move this subsection" covers exactly the fields documented in

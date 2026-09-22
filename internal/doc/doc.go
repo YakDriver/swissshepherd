@@ -53,6 +53,13 @@ type DocBlock struct {
 	Attributes          []DocAttribute
 	MalformedAttributes []MalformedAttr // attributes found but with formatting issues
 	SplitByLabel        bool            // true if the doc explicitly separates required/optional with distinct bylines
+	// PreHeadingAttrs is true when the entry accumulated attributes (from
+	// dot-path reference bullets) at an earlier physical location before its
+	// heading was parsed and backfilled. Such an entry spans more than one
+	// physical subsection, so the misplacement rule must not collapse a single
+	// "move this subsection" over it (that move would not relocate the earlier
+	// reference bullets).
+	PreHeadingAttrs bool
 }
 
 // HeadingTemplates defines patterns for recognizing block headings.
@@ -805,22 +812,26 @@ func extractBlocks(tree ast.Node, source []byte, idx *lineIndex, doc *Document, 
 					}
 					headingLine := nodeLineNumber(n, idx)
 					for _, bn := range blockNames {
+						target := doc.AttributeBlocks
 						if inArguments {
-							ensureBlock(doc.ArgumentBlocks, bn, headingText)
-							if doc.ArgumentBlocks[bn].Heading == "" {
-								doc.ArgumentBlocks[bn].Heading = headingText
+							target = doc.ArgumentBlocks
+						}
+						ensureBlock(target, bn, headingText)
+						b := target[bn]
+						if b.Heading == "" {
+							// Attributes already present were routed here from
+							// dot-path reference bullets at an earlier physical
+							// location; record that the entry spans pre-heading
+							// references so the misplacement rule will not collapse
+							// a single "move this subsection" over bullets the
+							// heading move would not physically relocate.
+							if len(b.Attributes) > 0 {
+								b.PreHeadingAttrs = true
 							}
-							if doc.ArgumentBlocks[bn].HeadingLine == 0 {
-								doc.ArgumentBlocks[bn].HeadingLine = headingLine
-							}
-						} else {
-							ensureBlock(doc.AttributeBlocks, bn, headingText)
-							if doc.AttributeBlocks[bn].Heading == "" {
-								doc.AttributeBlocks[bn].Heading = headingText
-							}
-							if doc.AttributeBlocks[bn].HeadingLine == 0 {
-								doc.AttributeBlocks[bn].HeadingLine = headingLine
-							}
+							b.Heading = headingText
+						}
+						if b.HeadingLine == 0 {
+							b.HeadingLine = headingLine
 						}
 					}
 					currentBlockAliases = blockNames[1:]
