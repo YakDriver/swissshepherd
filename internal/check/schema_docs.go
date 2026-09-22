@@ -1304,9 +1304,12 @@ func hasConfigurableAttributes(block *schema.Block) bool {
 }
 
 // resolutionClass records how an Attribute-Reference subsection heading resolved
-// to a schema path. It is threaded into the emitted finding so severity can be
-// assigned by false-positive risk rather than parsed back out of the message
-// (see docs/rules/argument-attribute-misplacement.md §9, §10 step 2b).
+// to a schema path. It is returned by resolveSubsectionPath and pinned by the
+// classifier test to validate §4 resolution, but it is NOT stored on a finding:
+// severity is derived from the resolved (path, target) — a genuine root scalar
+// is WARN, every nested move/collapse is ERROR — so no per-class provenance
+// travels into Result (see docs/rules/argument-attribute-misplacement.md §9,
+// §10 step 2b).
 type resolutionClass int
 
 const (
