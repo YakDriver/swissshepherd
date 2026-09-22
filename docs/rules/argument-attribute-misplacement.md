@@ -261,11 +261,16 @@ lasting severity distinction is confidence, and once the root bucket clears its
 own corpus run it collapses to **uniform ERROR** with the rest. The WARN tier is
 a rollout artifact with a scheduled end, not a design feature.
 
-**Provenance requirement (implements this table).** Severity-by-class is only
-possible if each finding records how its path resolved. The resolution class
-(`dotted-exact` / `bare-exact` / `unique-leaf` / `root`) must be threaded from
-`resolveSubsectionPath` → `classifyAttrPlacement` → the `Result`, and mapped to
-severity at emission. See §10 step 2b.
+**Severity is derived from the resolved path, not a stored class.** In the final
+model every nested move and collapse is ERROR and only a genuine root scalar is
+WARN, so severity is a function of the resolved `(path, target)`: WARN iff both
+are the root (`""`), else ERROR. The resolution class (`dotted-exact` /
+`bare-exact` / `unique-leaf` / `root`) is still produced by
+`resolveSubsectionPath` and pinned by the classifier test (it validates §4 and
+documents provenance), but it is **not** threaded onto `Result` — the unique-leaf
+gate below cleared the only class distinction that would have affected severity,
+so no per-class field is needed. (Severity is data-driven from the resolved path,
+never parsed back out of the message.)
 
 ### Measured gate for the unique-leaf bucket (point 2 discharged)
 
@@ -302,7 +307,7 @@ before/after, zero new FPs" guarantee is **void by design**. Validation is:
 The PR description must be rewritten to present this categorized delta and drop
 the "identical before/after" claim.
 
-### MEASURED corpus diff — two-pass (6c99a00) vs redesign (74161be)
+### MEASURED corpus diff — two-pass (6c99a00) vs redesign (d6320d6)
 
 Both binaries run over terraform-provider-aws with `.ci/swissshepherd-full.hcl`
 (schema_docs enabled broadly), JSON output, findings keyed on
@@ -356,10 +361,12 @@ collapse replaced by precise per-attribute moves).
    heading-less=exact parent). `class` is the resolution provenance
    (`dotted-exact` / `bare-exact` / `unique-leaf` / `root`). Keep ownership
    resolution untouched for coverage.
-2b. **Thread provenance to severity.** Carry `class` from `resolveSubsectionPath`
-   through `classifyAttrPlacement` into the emitted `Result` (a field, not parsed
-   back out of the message), and map class→severity at emission per the §9 table.
-   Without this the §9 table is not implementable.
+2b. **Derive severity from the resolved path.** Severity is a function of the
+   resolved `(path, target)` — WARN only for a genuine root scalar (both root),
+   ERROR otherwise (all nested moves and collapses). The resolution class from
+   `resolveSubsectionPath` is validated by the pinned classifier test but is not
+   stored on `Result`; no per-class field is needed, because the unique-leaf gate
+   (§9) cleared the only class-dependent severity distinction.
 3. Rewrite `checkLabels`' Attribute-Reference half as a single pass:
    resolve `P`; classify each labeled attr; choose message granularity per §5;
    dedup per §5.
