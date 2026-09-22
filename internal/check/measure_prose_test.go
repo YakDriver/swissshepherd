@@ -7,7 +7,7 @@ package check
 
 // TRANSIENT measurement (build-tagged `measure`, never compiled in normal runs
 // or CI). Sizes the prose-heading anchor-bridge gap described in
-// MISPLACEMENT_REDESIGN.md §12 against the real provider corpus.
+// docs/rules/argument-attribute-misplacement.md §12 against the real provider corpus.
 //
 // Run:
 //   SS_PROVIDER_DIR=/abs/path/to/terraform-provider-aws2 \

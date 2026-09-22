@@ -1081,6 +1081,11 @@ func (r *SchemaDocsRule) attributeMisplacementFindings(ctx CheckContext) []Resul
 	// dedup a child-block reference bullet only against a child subsection that
 	// actually produces a finding.
 	pathHasMis := make(map[string]bool)
+	// groupMalformed[groupKey] collects the malformed-bullet names of every block
+	// in a physical subsection (combined-heading aliases share a group key), so
+	// each alias can be pinned by a malformed computed field even though the
+	// parser records the bullet only on the primary alias.
+	groupMalformed := make(map[string][]string)
 
 	type misplacedAttr struct {
 		block  string
@@ -1120,6 +1125,14 @@ func (r *SchemaDocsRule) attributeMisplacementFindings(ctx CheckContext) []Resul
 						target = cp
 					}
 				}
+				if slices.Contains(skip, target) {
+					// The move would relocate a reference to a skip_blocks target
+					// (e.g. a root bullet pointing at "timeouts"); skip_blocks is
+					// exempt from the new move, so fall back to the legacy
+					// strip-label, exactly as a skipped subsection path does.
+					strips = append(strips, stripEntry{name, attr})
+					continue
+				}
 				misplaced = append(misplaced, misplacedAttr{name, path, attr, target})
 				sm.hasMis = true
 				if sm.line == 0 {
@@ -1130,21 +1143,36 @@ func (r *SchemaDocsRule) attributeMisplacementFindings(ctx CheckContext) []Resul
 				sm.hasComp = true
 			}
 		}
-		// Malformed bullets (e.g. a computed attribute written with a bad
-		// separator) are stored only in MalformedAttributes, so the loop above
-		// never sees them. A malformed computed-only field still pins the
-		// subsection: without this, a collapse would drag that computed output
-		// into Argument Reference.
-		if resolved {
-			for _, ma := range block.MalformedAttributes {
-				if fieldRequiresAttributeReference(ctx.Schema, path, ma.Name) {
-					sm.hasComp = true
-					break
-				}
-			}
+		// Malformed bullets (bad separator / unparseable) live only in
+		// MalformedAttributes and — for a combined heading — only on the primary
+		// alias, while valid attributes are mirrored to every alias. Collect the
+		// group's malformed names now and evaluate them against each alias's own
+		// path after the loop, so a malformed computed-only field pins whichever
+		// alias it is computed under.
+		for _, ma := range block.MalformedAttributes {
+			gk := collapseGroupKey(name, block.HeadingLine)
+			groupMalformed[gk] = append(groupMalformed[gk], ma.Name)
 		}
 		if resolved && block.Heading != "" && sm.hasMis {
 			pathHasMis[path] = true
+		}
+	}
+
+	// Pin any subsection whose physical group documents a malformed computed-only
+	// field at that subsection's path (see collection above): without this a
+	// collapse could drag that computed output into Argument Reference, and a
+	// malformed bullet on the primary alias would otherwise never be evaluated
+	// against a non-primary alias's schema path.
+	for _, name := range names {
+		sm := subs[name]
+		if !sm.resolved {
+			continue
+		}
+		for _, mn := range groupMalformed[collapseGroupKey(name, sm.line)] {
+			if fieldRequiresAttributeReference(ctx.Schema, sm.path, mn) {
+				sm.hasComp = true
+				break
+			}
 		}
 	}
 

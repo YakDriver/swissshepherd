@@ -1663,3 +1663,68 @@ func TestLabels_RepeatedHeadingDoesNotCollapse(t *testing.T) {
 		t.Errorf("the second subsection's field must get a per-attribute move: %+v", results)
 	}
 }
+
+// A labeled root bullet that references a skip_blocks target (e.g. the default
+// "timeouts") must not produce a move: the subsection path is "" (not skipped),
+// but the resolved target is "timeouts". Filtering only the path would emit a
+// spurious ERROR for a block documented as skipped entirely.
+func TestLabels_SkippedTargetRootBulletNotMoved(t *testing.T) {
+	t.Parallel()
+
+	src := `# Resource: aws_thing
+
+## Argument Reference
+
+* ` + "`name`" + ` - (Required) Name.
+
+## Attribute Reference
+
+* ` + "`timeouts`" + ` - (Optional) Timeouts.
+`
+	rs := &schema.ResourceSchema{Blocks: map[string]*schema.Block{
+		"":         {Attributes: []schema.Attribute{{Name: "name", Required: true}}, ChildBlocks: []string{"timeouts"}},
+		"timeouts": {Path: "timeouts", Attributes: []schema.Attribute{{Name: "create", Optional: true}}},
+	}}
+
+	// Default SkipBlocks includes "timeouts".
+	results := labelResults(t, src, rs)
+	if hasMsg(results, "move it to Argument Reference") || hasMsg(results, "move this subsection to Argument Reference") {
+		t.Errorf("a root bullet referencing a skip_blocks target must not produce a move: %+v", results)
+	}
+}
+
+// In a combined heading the parser mirrors valid attributes to every alias but
+// records a malformed bullet only on the primary alias. A malformed computed-only
+// field that is computed under a NON-primary alias must still pin that alias, so
+// the shared subsection does not collapse and drag the computed output into
+// Argument Reference.
+func TestLabels_MalformedComputedOnAliasBlocksCollapse(t *testing.T) {
+	t.Parallel()
+
+	// `arn` uses a missing-dash form -> parseListItem rejects it -> it lands only
+	// in the primary alias (foo) MalformedAttributes. It is computed under bar.
+	src := "# Resource: aws_thing\n\n" +
+		"## Argument Reference\n\n" +
+		"* `name` - (Required) Name.\n\n" +
+		"## Attribute Reference\n\n" +
+		"### `foo` and `bar`\n\n" +
+		"* `enabled` - (Required) Enabled.\n" +
+		"* `arn` (Read-Only) ARN.\n"
+
+	rs := &schema.ResourceSchema{Blocks: map[string]*schema.Block{
+		"":    {Attributes: []schema.Attribute{{Name: "name", Required: true}}, ChildBlocks: []string{"foo", "bar"}},
+		"foo": {Path: "foo", Attributes: []schema.Attribute{{Name: "enabled", Required: true}}},
+		"bar": {Path: "bar", Attributes: []schema.Attribute{
+			{Name: "enabled", Required: true},
+			{Name: "arn", Computed: true},
+		}},
+	}}
+
+	results := labelResults(t, src, rs)
+	if hasMsg(results, "move this subsection to Argument Reference") {
+		t.Errorf("a malformed computed field on a non-primary alias must block the group collapse: %+v", results)
+	}
+	if !hasMsg(results, `argument "enabled" in block "foo" is documented under Attribute Reference but is a configurable argument in the schema; move it to Argument Reference`) {
+		t.Errorf("the configurable field must still get a per-attribute move: %+v", results)
+	}
+}
