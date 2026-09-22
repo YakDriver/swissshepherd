@@ -161,8 +161,14 @@ func (r *SchemaDocsRule) checkCoverage(ctx CheckContext) []Result {
 	reportedMissingBlocks := make(map[string]bool)
 	reportedExtraAttrs := make(map[string]bool)
 
-	// Arguments: configurable attrs
-	for blockPath, schemaBlock := range rs.Blocks {
+	// Iterate schema blocks in sorted path order. Several undocumented blocks
+	// can share a leaf name (e.g. many `...display_options` siblings across a
+	// large nested schema); the reportedMissingBlocks / reportedExtraAttrs dedup
+	// below keeps only one representative per leaf, so the iteration order would
+	// otherwise leak Go's randomized map ordering into which path is reported
+	// (see issue #65). Sorting makes the representative deterministic.
+	for _, blockPath := range slices.Sorted(maps.Keys(rs.Blocks)) {
+		schemaBlock := rs.Blocks[blockPath]
 		if slices.Contains(r.skipBlocks(), blockPath) {
 			continue
 		}
