@@ -321,7 +321,7 @@ Both binaries run over terraform-provider-aws with `.ci/swissshepherd-full.hcl`
   misplacement (misplacement findings are fully deterministic: new-vs-new
   misplacement delta = 0/0). Tracked separately as #65.
 
-- **Deterministic misplacement delta: 2 removed, 9 added — all correct.**
+- **Deterministic misplacement delta: 4 removed, 9 added — all correct.**
 
   *Removed (two-pass only):*
   1. `aws_sagemaker_human_task_ui` — `attribute "ui_template" … should not have
@@ -331,6 +331,14 @@ Both binaries run over terraform-provider-aws with `.ci/swissshepherd-full.hcl`
      (ERROR). A **wrong wholesale collapse**: `custom_key` also documents
      read-only child blocks (`forwarded_ip`, `http_method`, `ip`, `asn`), which a
      wholesale move would drag into Argument Reference.
+  3–4. `aws_ssmcontacts_rotation` — `attribute "daly_settings" in block
+     "recurrence" … should not have (Optional) label` and `attribute
+     "day_of_week" in block "shift_coverages" … should not have (Required)
+     label` (WARN). Both `recurrence` and `shift_coverages` collapse (in *both*
+     binaries), so telling the author to strip these labels contradicts the
+     wholesale move to Argument Reference, where the labels are required. The
+     redesign suppresses strips inside a collapsing subsection; the unrelated
+     `hand_off_time` strips (that subsection does not collapse) are unaffected.
 
   *Added (redesign only):*
   1. `aws_sagemaker_human_task_ui` — `argument "ui_template" … move it` (ERROR).
@@ -349,8 +357,9 @@ Both binaries run over terraform-provider-aws with `.ci/swissshepherd-full.hcl`
 
 **Hard invariant satisfied:** every added finding targets a genuinely misplaced
 configurable field; zero new false ERROR on a correctly-placed field. The net
-effect is strictly better guidance (one misleading strip and one over-broad
-collapse replaced by precise per-attribute moves).
+effect is strictly better guidance (a misleading strip, an over-broad collapse,
+and two collapse-vs-strip contradictions replaced by precise, non-contradictory
+findings).
 
 ## 10. Implementation steps
 
