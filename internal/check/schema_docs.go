@@ -1050,6 +1050,16 @@ func stripLabelResult(r *SchemaDocsRule, ctx CheckContext, blockName string, att
 // configurable (documents no computed-only field) the moves collapse into one
 // "move this subsection" finding; a mixed subsection emits per-attribute moves
 // and leaves its computed-only fields where they are.
+// collapseGroupKey identifies the physical subsection a block belongs to.
+// Combined-heading aliases share a HeadingLine, so they map to one key; blocks
+// without a heading line (e.g. manually constructed) key on their own name.
+func collapseGroupKey(name string, line int) string {
+	if line > 0 {
+		return fmt.Sprintf("line:%d", line)
+	}
+	return "name:" + name
+}
+
 func (r *SchemaDocsRule) attributeMisplacementFindings(ctx CheckContext) []Result {
 	skip := r.skipBlocks()
 	names := slices.Sorted(maps.Keys(ctx.Doc.AttributeBlocks))
@@ -1062,7 +1072,8 @@ func (r *SchemaDocsRule) attributeMisplacementFindings(ctx CheckContext) []Resul
 		preHeading bool // entry spans pre-heading dot-path references; never collapse
 		hasMis     bool // documents at least one misplaced (labeled pure-config) attribute
 		hasComp    bool // documents a field that must stay under Attribute Reference (blocks collapse)
-		eligible   bool // collapse-eligible subsection
+		eligible   bool // this subsection is collapse-eligible on its own
+		collapses  bool // will actually collapse (self eligible AND whole alias group eligible)
 	}
 	subs := make(map[string]*subMeta, len(names))
 	// pathHasMis[P] is true when a real-heading subsection resolving to P
@@ -1147,12 +1158,34 @@ func (r *SchemaDocsRule) attributeMisplacementFindings(ctx CheckContext) []Resul
 		sm.eligible = sm.resolved && sm.heading != "" && sm.path != "" && sm.hasMis && !sm.hasComp && !sm.preHeading
 	}
 
+	// Combined headings (`### `foo` and `bar``) mirror one physical subsection to
+	// several alias blocks that share a HeadingLine but resolve to independent
+	// schema paths. "move this subsection" relocates the whole physical block, so
+	// collapse only when every alias in the group is eligible; if any alias must
+	// keep content under Attribute Reference, suppress the group collapse and let
+	// per-attribute moves handle the eligible aliases.
+	groupEligible := make(map[string]bool)
+	for _, name := range names {
+		sm := subs[name]
+		key := collapseGroupKey(name, sm.line)
+		if _, seen := groupEligible[key]; !seen {
+			groupEligible[key] = true
+		}
+		if !sm.eligible {
+			groupEligible[key] = false
+		}
+	}
+	for _, name := range names {
+		sm := subs[name]
+		sm.collapses = sm.eligible && groupEligible[collapseGroupKey(name, sm.line)]
+	}
+
 	// A collapse "move this subsection" covers exactly the fields documented in
 	// that subsection. Mark those fields covered so an alternate subsection does
 	// not re-report the same field — while its *distinct* fields still surface.
 	covered := make(map[string]bool)
 	for _, m := range misplaced {
-		if subs[m.block].eligible {
+		if subs[m.block].collapses {
 			covered[m.target+"\x00"+m.attr.Name] = true
 		}
 	}
@@ -1165,13 +1198,10 @@ func (r *SchemaDocsRule) attributeMisplacementFindings(ctx CheckContext) []Resul
 	emittedCollapse := make(map[string]bool)
 	for _, name := range names {
 		sm := subs[name]
-		if !sm.eligible {
+		if !sm.collapses {
 			continue
 		}
-		phys := "name:" + name
-		if sm.line > 0 {
-			phys = fmt.Sprintf("line:%d", sm.line)
-		}
+		phys := collapseGroupKey(name, sm.line)
 		if emittedCollapse[phys] {
 			continue
 		}
@@ -1192,7 +1222,7 @@ func (r *SchemaDocsRule) attributeMisplacementFindings(ctx CheckContext) []Resul
 	// at the root — is a nested-block move at ERROR.
 	seen := make(map[string]bool)
 	for _, m := range misplaced {
-		if subs[m.block].eligible {
+		if subs[m.block].collapses {
 			continue // covered by this subsection's own collapse
 		}
 		fk := m.target + "\x00" + m.attr.Name

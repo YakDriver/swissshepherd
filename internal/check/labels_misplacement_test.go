@@ -1564,3 +1564,33 @@ func TestLabels_MalformedComputedBlocksCollapse(t *testing.T) {
 		t.Errorf("the configurable field must still get a per-attribute move: %+v", results)
 	}
 }
+
+// A combined heading (`### `foo` and `bar“) mirrors one physical subsection to
+// alias blocks that resolve independently. When one alias is a configurable
+// block and another is computed/read-only, collapsing the whole subsection would
+// drag the computed alias's content into Argument Reference. The group must not
+// collapse; the configurable alias gets a per-attribute move instead.
+func TestLabels_MixedAliasGroupDoesNotCollapse(t *testing.T) {
+	t.Parallel()
+
+	src := "# Resource: aws_thing\n\n" +
+		"## Argument Reference\n\n" +
+		"* `name` - (Required) Name.\n\n" +
+		"## Attribute Reference\n\n" +
+		"### `foo` and `bar`\n\n" +
+		"* `enabled` - (Required) Whether enabled.\n"
+
+	rs := &schema.ResourceSchema{Blocks: map[string]*schema.Block{
+		"":    {Attributes: []schema.Attribute{{Name: "name", Required: true}}, ChildBlocks: []string{"foo", "bar"}},
+		"foo": {Path: "foo", Attributes: []schema.Attribute{{Name: "enabled", Required: true}}},
+		"bar": {Path: "bar", Attributes: []schema.Attribute{{Name: "enabled", Computed: true}}},
+	}}
+
+	results := labelResults(t, src, rs)
+	if hasMsg(results, "move this subsection to Argument Reference") {
+		t.Errorf("a mixed alias group must not collapse the shared subsection: %+v", results)
+	}
+	if !hasMsg(results, `argument "enabled" in block "foo" is documented under Attribute Reference but is a configurable argument in the schema; move it to Argument Reference`) {
+		t.Errorf("the configurable alias must still get a per-attribute move: %+v", results)
+	}
+}
