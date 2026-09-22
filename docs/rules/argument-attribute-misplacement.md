@@ -157,8 +157,10 @@ labeled attributes:
 
 - **Otherwise emit per-attribute moves** —
   `argument "A" in block "P" ... move it to Argument Reference` — for each
-  misplaced attribute, and **leave computed-only fields where they are** (no
-  strip-label, no move).
+  misplaced attribute, and **leave computed-only fields where they are**. A
+  computed-only field that is *correctly unlabeled* draws no finding; one that
+  carries an erroneous `(Required)`/`(Optional)` label still draws the legacy
+  strip-label warning (it is not configurable, so it is never a move).
 
   This is the mixed block (3/3): the author moves only the configurable bullets;
   the computed outputs correctly remain under Attribute Reference. Following the
