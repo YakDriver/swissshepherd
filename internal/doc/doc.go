@@ -49,9 +49,17 @@ type LinkRef struct {
 type DocBlock struct {
 	Name                string
 	Heading             string
+	HeadingLine         int // 1-based source line of the block's heading (0 if none)
 	Attributes          []DocAttribute
 	MalformedAttributes []MalformedAttr // attributes found but with formatting issues
 	SplitByLabel        bool            // true if the doc explicitly separates required/optional with distinct bylines
+	// SpansSubsections is true when the entry represents more than one physical
+	// subsection: it accumulated attributes or malformed bullets from a dot-path
+	// reference at an earlier location before its heading, or a later heading
+	// normalized to the same block key. A single "move this subsection" cannot
+	// relocate all of it, so the misplacement rule must not collapse such an
+	// entry (it emits per-attribute moves instead).
+	SpansSubsections bool
 }
 
 // HeadingTemplates defines patterns for recognizing block headings.
@@ -802,11 +810,41 @@ func extractBlocks(tree ast.Node, source []byte, idx *lineIndex, doc *Document, 
 							blockAnchors[slug] = blockNames[0]
 						}
 					}
+					headingLine := nodeLineNumber(n, idx)
 					for _, bn := range blockNames {
+						target := doc.AttributeBlocks
 						if inArguments {
-							ensureBlock(doc.ArgumentBlocks, bn, headingText)
-						} else {
-							ensureBlock(doc.AttributeBlocks, bn, headingText)
+							target = doc.ArgumentBlocks
+						}
+						_, existed := target[bn]
+						existingHeading := ""
+						if existed {
+							existingHeading = target[bn].Heading
+						}
+						ensureBlock(target, bn, headingText)
+						b := target[bn]
+						switch {
+						case !existed:
+							// Brand-new block created by this heading — the normal case.
+						case existingHeading == "":
+							// The entry pre-existed without a heading: its content was
+							// routed here from an earlier physical location (a dot-path
+							// reference or a malformed bullet). Record that it spans more
+							// than one physical subsection so the misplacement rule will
+							// not collapse a single "move this subsection" over content
+							// the heading move would not relocate.
+							if len(b.Attributes) > 0 || len(b.MalformedAttributes) > 0 {
+								b.SpansSubsections = true
+							}
+							b.Heading = headingText
+						default:
+							// A later heading normalized to the same block key: the entry
+							// now covers two physical subsections, so a single collapse
+							// cannot relocate both.
+							b.SpansSubsections = true
+						}
+						if b.HeadingLine == 0 {
+							b.HeadingLine = headingLine
 						}
 					}
 					currentBlockAliases = blockNames[1:]

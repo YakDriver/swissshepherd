@@ -7,6 +7,7 @@ import (
 	"bufio"
 	"bytes"
 	"fmt"
+	"maps"
 	"slices"
 	"sort"
 	"strings"
@@ -1010,32 +1011,538 @@ func (r *SchemaDocsRule) checkLabels(ctx CheckContext) []Result {
 		}
 	}
 
-	// Attributes must NOT have (Required) or (Optional)
-	for blockName, block := range ctx.Doc.AttributeBlocks {
-		for _, attr := range block.Attributes {
-			if attr.Required || attr.Optional {
-				label := "(Optional)"
-				if attr.Required {
-					label = "(Required)"
-				}
-				results = append(results, Result{
-					Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityWarning,
-					Message: fmt.Sprintf("attribute %q in block %q should not have %s label", attr.Name, displayPath(blockName), label),
-					Block:   blockName,
-					Line:    attr.Line,
-				})
-			}
-		}
-	}
+	// Attribute Reference: flag labeled configurable arguments as misplaced
+	// (move them to Argument Reference) instead of pushing the author to strip
+	// accurate labels. Detection is per attribute; the message collapses to a
+	// single subsection move when an entire block is configurable. See
+	// docs/rules/argument-attribute-misplacement.md.
+	results = append(results, r.attributeMisplacementFindings(ctx)...)
 
 	return results
 }
 
+// stripLabelResult builds the "attribute should not have (Required)/(Optional)
+// label" warning for a labeled attribute documented under Attribute Reference.
+func stripLabelResult(r *SchemaDocsRule, ctx CheckContext, blockName string, attr doc.DocAttribute) Result {
+	label := "(Optional)"
+	if attr.Required {
+		label = "(Required)"
+	}
+	return Result{
+		Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityWarning,
+		Message: fmt.Sprintf("attribute %q in block %q should not have %s label", attr.Name, displayPath(blockName), label),
+		Block:   blockName,
+		Line:    attr.Line,
+	}
+}
+
 // --- Shared helpers ---
+
+// attributeMisplacementFindings implements the attribute-granular
+// Argument/Attribute-Reference misplacement rule in a single pass over
+// AttributeBlocks (docs/rules/argument-attribute-misplacement.md §3–§5):
+// resolve each subsection to a schema path, classify every labeled attribute,
+// then choose the message granularity per subsection and deduplicate.
+//
+// A configurable argument (Required/Optional and not Computed) documented under
+// Attribute Reference is *misplaced* — the author should move it to Argument
+// Reference, not strip its (correct) label. When an entire subsection is
+// configurable (documents no computed-only field) the moves collapse into one
+// "move this subsection" finding; a mixed subsection emits per-attribute moves
+// and leaves its computed-only fields where they are.
+// collapseGroupKey identifies the physical subsection a block belongs to.
+// Combined-heading aliases share a HeadingLine, so they map to one key; blocks
+// without a heading line (e.g. manually constructed) key on their own name.
+func collapseGroupKey(name string, line int) string {
+	if line > 0 {
+		return fmt.Sprintf("line:%d", line)
+	}
+	return "name:" + name
+}
+
+func (r *SchemaDocsRule) attributeMisplacementFindings(ctx CheckContext) []Result {
+	skip := r.skipBlocks()
+	names := slices.Sorted(maps.Keys(ctx.Doc.AttributeBlocks))
+
+	type subMeta struct {
+		path      string
+		resolved  bool
+		heading   string
+		line      int
+		spans     bool // entry spans multiple physical subsections; never collapse
+		hasMis    bool // documents at least one misplaced (labeled pure-config) attribute
+		hasComp   bool // documents a field that must stay under Attribute Reference (blocks collapse)
+		eligible  bool // this subsection is collapse-eligible on its own
+		collapses bool // will actually collapse (self eligible AND whole alias group eligible)
+	}
+	subs := make(map[string]*subMeta, len(names))
+	// pathHasMis[P] is true when a real-heading subsection resolving to P
+	// documents at least one misplaced attribute (i.e. emits a move). Used to
+	// dedup a child-block reference bullet only against a child subsection that
+	// actually produces a finding.
+	pathHasMis := make(map[string]bool)
+	// groupMalformed[groupKey] collects the malformed-bullet names of every block
+	// in a physical subsection (combined-heading aliases share a group key), so
+	// each alias can be pinned by a malformed computed field even though the
+	// parser records the bullet only on the primary alias.
+	groupMalformed := make(map[string][]string)
+
+	type misplacedAttr struct {
+		block  string
+		path   string
+		attr   doc.DocAttribute
+		target string // child block path if the attr is a child-block reference; else path
+	}
+	var misplaced []misplacedAttr
+	type stripEntry struct {
+		block string
+		attr  doc.DocAttribute
+	}
+	var strips []stripEntry
+
+	// Collect: resolve each subsection and classify its attributes.
+	for _, name := range names {
+		block := ctx.Doc.AttributeBlocks[name]
+		path, _, ok := resolveSubsectionPath(ctx.Schema, ctx.Doc.AttributeBlocks, name)
+		// skip_blocks: a block opted out of checks (applied to its resolved
+		// schema path) must not produce a move. Treating it as unresolved keeps
+		// its legacy strip-label guidance without emitting the new error.
+		resolved := ok && !slices.Contains(skip, path)
+
+		sm := &subMeta{path: path, resolved: resolved, heading: block.Heading, line: block.HeadingLine, spans: block.SpansSubsections}
+		subs[name] = sm
+
+		for _, attr := range block.Attributes {
+			switch classifyAttrPlacement(ctx.Schema, path, resolved, attr) {
+			case placementOK:
+				// Unlabeled computed output — correctly placed.
+			case placementStripLabel:
+				strips = append(strips, stripEntry{name, attr})
+			case placementMisplaced:
+				target := path
+				if b, okb := ctx.Schema.Blocks[path]; okb {
+					if cp, isChild := childPathForAttr(path, b, attr.Name); isChild {
+						target = cp
+					}
+				}
+				if slices.Contains(skip, target) {
+					// The move would relocate a reference to a skip_blocks target
+					// (e.g. a root bullet pointing at "timeouts"); skip_blocks is
+					// exempt from the new move, so fall back to the legacy
+					// strip-label, exactly as a skipped subsection path does.
+					strips = append(strips, stripEntry{name, attr})
+					continue
+				}
+				misplaced = append(misplaced, misplacedAttr{name, path, attr, target})
+				sm.hasMis = true
+				if sm.line == 0 {
+					sm.line = attr.Line
+				}
+			}
+			if resolved && fieldRequiresAttributeReference(ctx.Schema, path, attr.Name) {
+				sm.hasComp = true
+			}
+		}
+		// Malformed bullets (bad separator / unparseable) live only in
+		// MalformedAttributes and — for a combined heading — only on the primary
+		// alias, while valid attributes are mirrored to every alias. Collect the
+		// group's malformed names now and evaluate them against each alias's own
+		// path after the loop, so a malformed computed-only field pins whichever
+		// alias it is computed under.
+		for _, ma := range block.MalformedAttributes {
+			gk := collapseGroupKey(name, block.HeadingLine)
+			groupMalformed[gk] = append(groupMalformed[gk], ma.Name)
+		}
+		if resolved && block.Heading != "" && sm.hasMis {
+			pathHasMis[path] = true
+		}
+	}
+
+	// Pin any subsection whose physical group documents a malformed computed-only
+	// field at that subsection's path (see collection above): without this a
+	// collapse could drag that computed output into Argument Reference, and a
+	// malformed bullet on the primary alias would otherwise never be evaluated
+	// against a non-primary alias's schema path.
+	for _, name := range names {
+		sm := subs[name]
+		if !sm.resolved {
+			continue
+		}
+		for _, mn := range groupMalformed[collapseGroupKey(name, sm.line)] {
+			if fieldRequiresAttributeReference(ctx.Schema, sm.path, mn) {
+				sm.hasComp = true
+				break
+			}
+		}
+	}
+
+	// Collapse eligibility is per physical subsection (§5): a resolved,
+	// real-heading, non-root subsection that documents at least one misplaced
+	// attribute and nothing that must stay under Attribute Reference. Judged per
+	// subsection — not per schema path — so a subsection is never silenced by a
+	// *different* subsection that happens to resolve to the same path.
+	for _, name := range names {
+		sm := subs[name]
+		sm.eligible = sm.resolved && sm.heading != "" && sm.path != "" && sm.hasMis && !sm.hasComp && !sm.spans
+	}
+
+	// Combined headings (`### `foo` and `bar``) mirror one physical subsection to
+	// several alias blocks that share a HeadingLine but resolve to independent
+	// schema paths. "move this subsection" relocates the whole physical block, so
+	// collapse only when every alias in the group is eligible; if any alias must
+	// keep content under Attribute Reference, suppress the group collapse and let
+	// per-attribute moves handle the eligible aliases.
+	groupEligible := make(map[string]bool)
+	for _, name := range names {
+		sm := subs[name]
+		key := collapseGroupKey(name, sm.line)
+		if _, seen := groupEligible[key]; !seen {
+			groupEligible[key] = true
+		}
+		if !sm.eligible {
+			groupEligible[key] = false
+		}
+	}
+	for _, name := range names {
+		sm := subs[name]
+		sm.collapses = sm.eligible && groupEligible[collapseGroupKey(name, sm.line)]
+	}
+
+	// A collapse "move this subsection" covers exactly the fields documented in
+	// that subsection. Mark those fields covered so an alternate subsection does
+	// not re-report the same field — while its *distinct* fields still surface.
+	covered := make(map[string]bool)
+	for _, m := range misplaced {
+		if subs[m.block].collapses {
+			covered[m.target+"\x00"+m.attr.Name] = true
+		}
+	}
+
+	var out []Result
+
+	// Collapse findings: one per physical heading. Parser aliases share a
+	// heading line, so dedup on it to avoid re-reporting one subsection under
+	// each alias key; genuinely distinct headings have distinct lines.
+	emittedCollapse := make(map[string]bool)
+	for _, name := range names {
+		sm := subs[name]
+		if !sm.collapses {
+			continue
+		}
+		phys := collapseGroupKey(name, sm.line)
+		if emittedCollapse[phys] {
+			continue
+		}
+		emittedCollapse[phys] = true
+		out = append(out, Result{
+			Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityError,
+			Message: fmt.Sprintf("block %q is documented under Attribute Reference but is a configurable argument block in the schema; move this subsection to Argument Reference", displayPath(name)),
+			Block:   name,
+			Line:    sm.line,
+		})
+	}
+
+	// Per-attribute moves for misplaced attributes not covered by a collapse. A
+	// child-block reference bullet is deduped only against a child subsection
+	// that actually emits a move (pathHasMis), never against the mere existence
+	// of a child heading. Severity is WARN only for a genuine root scalar (path
+	// and target both root, #62); a child-block reference — even one documented
+	// at the root — is a nested-block move at ERROR.
+	seen := make(map[string]bool)
+	for _, m := range misplaced {
+		if subs[m.block].collapses {
+			continue // covered by this subsection's own collapse
+		}
+		fk := m.target + "\x00" + m.attr.Name
+		if covered[fk] || seen[fk] {
+			continue
+		}
+		if m.target != m.path && pathHasMis[m.target] {
+			continue // the child subsection carries the finding
+		}
+		seen[fk] = true
+
+		sev := SeverityError
+		var msg string
+		if m.path == "" {
+			if m.target == "" {
+				sev = SeverityWarning // genuine root scalar (#62)
+			}
+			msg = fmt.Sprintf("argument %q is documented under Attribute Reference but is a configurable argument in the schema; move it to Argument Reference", m.attr.Name)
+		} else {
+			msg = fmt.Sprintf("argument %q in block %q is documented under Attribute Reference but is a configurable argument in the schema; move it to Argument Reference", m.attr.Name, displayPath(m.block))
+		}
+		out = append(out, Result{Rule: r.Name(), Resource: ctx.Resource, Severity: sev, Message: msg, Block: m.block, Line: m.attr.Line})
+	}
+
+	// Strip-label findings: labeled attributes that are not configurable
+	// arguments (computed-only, Optional+Computed, ConfigUnknown, or unresolved)
+	// keep the legacy "should not have label" guidance.
+	for _, s := range strips {
+		// A collapsing subsection moves wholesale to Argument Reference, where a
+		// labeled Optional+Computed field is a valid argument that must keep its
+		// label. Emitting a strip here would contradict the collapse and create a
+		// new labels error, so skip strips the collapse already relocates.
+		if subs[s.block].collapses {
+			continue
+		}
+		out = append(out, stripLabelResult(r, ctx, s.block, s.attr))
+	}
+
+	return out
+}
+
+// fieldRequiresAttributeReference reports whether a documented attribute must
+// remain under Attribute Reference, which prevents its subsection from
+// collapsing into a wholesale "move this subsection" finding (§5). That holds
+// for a computed-only scalar (Computed and neither Required nor Optional), and
+// for a documented child block that is entirely read-only (no configurable
+// field anywhere in its subtree) or whose per-field configurability is
+// unknowable (ConfigUnknown, handled conservatively so read-only child docs are
+// never dragged into Argument Reference).
+func fieldRequiresAttributeReference(rs *schema.ResourceSchema, path, attrName string) bool {
+	if rs == nil {
+		return false
+	}
+	b, ok := rs.Blocks[path]
+	if !ok {
+		return false
+	}
+	for _, a := range b.Attributes {
+		if a.Name == attrName {
+			return a.Computed && !a.Required && !a.Optional
+		}
+	}
+	if cp, isChild := childPathForAttr(path, b, attrName); isChild {
+		if cb, okc := rs.Blocks[cp]; okc && cb.ConfigUnknown {
+			return true
+		}
+		return !blockTreeHasPureConfigurable(rs, cp, make(map[string]bool))
+	}
+	return false
+}
 
 func hasConfigurableAttributes(block *schema.Block) bool {
 	for _, attr := range block.Attributes {
 		if attr.Required || attr.Optional {
+			return true
+		}
+	}
+	return false
+}
+
+// resolutionClass records how an Attribute-Reference subsection heading resolved
+// to a schema path. It is returned by resolveSubsectionPath and pinned by the
+// classifier test to validate §4 resolution, but it is NOT stored on a finding:
+// severity is derived from the resolved (path, target) — a genuine root scalar
+// is WARN, every nested move/collapse is ERROR — so no per-class provenance
+// travels into Result (see docs/rules/argument-attribute-misplacement.md §9,
+// §10 step 2b).
+type resolutionClass int
+
+const (
+	// resolveUnresolved: no schema path could be assigned; the caller falls
+	// back to the legacy strip-label behavior (never a move).
+	resolveUnresolved resolutionClass = iota
+	// resolveRoot: the root block (top-level scalars, #62).
+	resolveRoot
+	// resolveDottedExact: a dotted heading matched an exact schema block.
+	resolveDottedExact
+	// resolveBareExact: a bare heading matched an exact (root-level) schema block.
+	resolveBareExact
+	// resolveUniqueLeaf: a bare heading was inferred to the sole schema path
+	// carrying that leaf. This is the ONLY inference step (see §4).
+	resolveUniqueLeaf
+)
+
+// resolveSubsectionPath maps an Attribute-Reference subsection's doc-block key to
+// a single schema path for misplacement classification, using the strict,
+// ownership-free rules in docs/rules/argument-attribute-misplacement.md §4:
+//
+//   - root (""):   resolves to "" (resolveRoot).
+//   - dotted key:  the exact schema block, else unresolved. A dotted heading
+//     claims an exact path and is never remapped by leaf (fixes 2/3).
+//   - bare key:    the exact root-level block (resolveBareExact); else the sole
+//     schema path carrying that leaf (resolveUniqueLeaf); else unresolved
+//     (fixes 1/3).
+//
+// Unlike coverage's ownership resolver (schemaPathsResolvedByDocKey), this never
+// uses most-specific-owner logic: ownership exists to avoid double-counting
+// coverage and is the wrong tool for "does this documented argument correspond
+// to a configurable schema field." The unique-leaf branch is the only step that
+// infers a path; it fires for real headings only (a heading-less synthetic
+// block is resolved by exact path alone, never inferred) and is double-gated
+// downstream by configurableArgAtPath, so it can never fabricate a move on a
+// non-configurable field.
+func resolveSubsectionPath(rs *schema.ResourceSchema, docBlocks map[string]*doc.DocBlock, key string) (string, resolutionClass, bool) {
+	if rs == nil {
+		return "", resolveUnresolved, false
+	}
+	if key == "" {
+		return "", resolveRoot, true
+	}
+	if strings.Contains(key, ".") {
+		if _, ok := rs.Blocks[key]; ok {
+			return key, resolveDottedExact, true
+		}
+		return "", resolveUnresolved, false
+	}
+	// Bare key: exact root-level block first.
+	if _, ok := rs.Blocks[key]; ok {
+		return key, resolveBareExact, true
+	}
+	// Unique-leaf inference, gated to real headings. A heading-less synthetic
+	// block (dot-path reference bullet or prose lead-in) must never be inferred
+	// by leaf; it resolves only by the exact-path branch above.
+	if b := docBlocks[key]; b != nil && b.Heading != "" {
+		if p, ok := uniqueSchemaPathForLeaf(rs, key); ok {
+			return p, resolveUniqueLeaf, true
+		}
+	}
+	return "", resolveUnresolved, false
+}
+
+// uniqueSchemaPathForLeaf returns the single non-root schema path whose leaf
+// name equals leaf, reporting false when zero or more than one path carries it.
+// It underpins the alternate-heading suppression: an alternate subsection can be
+// associated with a moved schema path only when the leaf is unambiguous.
+func uniqueSchemaPathForLeaf(rs *schema.ResourceSchema, leaf string) (string, bool) {
+	if rs == nil || leaf == "" {
+		return "", false
+	}
+	var found string
+	n := 0
+	for path := range rs.Blocks {
+		if path != "" && leafName(path) == leaf {
+			found = path
+			n++
+		}
+	}
+	if n == 1 {
+		return found, true
+	}
+	return "", false
+}
+
+// placement is the per-attribute verdict for an attribute documented under
+// Attribute Reference (docs/rules/argument-attribute-misplacement.md §3).
+type placement int
+
+const (
+	// placementOK: no finding. The attribute carries no (Required)/(Optional)
+	// label, so it is a proper computed output living under Attribute Reference.
+	placementOK placement = iota
+	// placementStripLabel: the attribute is labeled but is not a purely
+	// configurable argument at the resolved path (computed-only, Optional+
+	// Computed, ConfigUnknown, or the subsection did not resolve) — the legacy
+	// strip-label guidance, never a move.
+	placementStripLabel
+	// placementMisplaced: the attribute is labeled AND a purely configurable
+	// argument at the resolved path — the section is wrong; move it to Argument
+	// Reference rather than stripping its (correct) label (#60, #62).
+	placementMisplaced
+)
+
+// classifyAttrPlacement judges a single attribute documented under Attribute
+// Reference in a subsection resolved to schema path P, implementing the §3
+// classification table by composing label state with configurableArgAtPath:
+//
+//   - unlabeled                          -> placementOK (proper computed output)
+//   - labeled, pure-config arg at P       -> placementMisplaced (move it)
+//   - labeled, not pure-config / unresolved -> placementStripLabel (legacy)
+//
+// resolved is the ok result from resolveSubsectionPath and must gate the
+// misplacement branch: it distinguishes a genuine root subsection (path == ""
+// with resolved == true, for #62 top-level scalars) from an *unresolved*
+// subsection that also carries an empty path — without it, an attribute whose
+// name happened to match a configurable root argument would be spuriously
+// flagged as misplaced. Optional+Computed and ConfigUnknown are non-misplacement
+// by construction (configurableArgAtPath returns false), honoring the #62 guard.
+func classifyAttrPlacement(rs *schema.ResourceSchema, path string, resolved bool, attr doc.DocAttribute) placement {
+	if !attr.Required && !attr.Optional {
+		return placementOK
+	}
+	if resolved && configurableArgAtPath(rs, path, attr.Name) {
+		return placementMisplaced
+	}
+	return placementStripLabel
+}
+
+// configurableArgAtPath reports whether attrName is a purely configurable
+// argument ((Required || Optional) && !Computed) of the schema block at the
+// given canonical map-key path — either as a scalar attribute, or as an
+// immediate child block that (itself or via a descendant) carries such an
+// attribute. ConfigUnknown blocks and unresolved paths return false so an
+// ERROR never fires on a guess. Optional+Computed scalars are excluded because
+// they may legitimately appear under either section.
+func configurableArgAtPath(rs *schema.ResourceSchema, path, attrName string) bool {
+	if rs == nil {
+		return false
+	}
+	b, ok := rs.Blocks[path]
+	if !ok || b.ConfigUnknown {
+		return false
+	}
+	for _, a := range b.Attributes {
+		if a.Name == attrName {
+			return (a.Required || a.Optional) && !a.Computed
+		}
+	}
+	if childPath, found := childPathForAttr(path, b, attrName); found {
+		return blockTreeHasPureConfigurable(rs, childPath, make(map[string]bool))
+	}
+	return false
+}
+
+// childBlockPath returns the canonical ResourceSchema.Blocks key for a
+// ChildBlocks entry of the block at parentPath. Entries appear in two forms in
+// this codebase — a bare leaf name (from the provider loader) or a full
+// dot-path (common in fixtures and normalized elsewhere via leafName). A
+// full-path entry is used as-is; a bare leaf is joined to the parent path.
+func childBlockPath(parentPath, child string) string {
+	if strings.Contains(child, ".") {
+		return child
+	}
+	if parentPath == "" {
+		return child
+	}
+	return parentPath + "." + child
+}
+
+// childPathForAttr returns the canonical schema path of the immediate child
+// block of pb (at parentPath) whose leaf name is attrName, matching by leaf so
+// both ChildBlocks representations resolve. The second result reports whether
+// such a child exists.
+func childPathForAttr(parentPath string, pb *schema.Block, attrName string) (string, bool) {
+	for _, child := range pb.ChildBlocks {
+		if leafName(child) == attrName {
+			return childBlockPath(parentPath, child), true
+		}
+	}
+	return "", false
+}
+
+// blockTreeHasPureConfigurable reports whether the schema block at path, or any
+// descendant block, has a purely configurable (Required or Optional and NOT
+// Computed) attribute. Blocks are looked up by exact full path (unambiguous),
+// ConfigUnknown blocks are skipped, and visited guards against pathological
+// cycles.
+func blockTreeHasPureConfigurable(rs *schema.ResourceSchema, path string, visited map[string]bool) bool {
+	if rs == nil || visited[path] {
+		return false
+	}
+	visited[path] = true
+	b, ok := rs.Blocks[path]
+	if !ok || b.ConfigUnknown {
+		return false
+	}
+	for _, a := range b.Attributes {
+		if (a.Required || a.Optional) && !a.Computed {
+			return true
+		}
+	}
+	for _, child := range b.ChildBlocks {
+		if blockTreeHasPureConfigurable(rs, childBlockPath(path, child), visited) {
 			return true
 		}
 	}
