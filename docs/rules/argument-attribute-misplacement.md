@@ -307,7 +307,7 @@ before/after, zero new FPs" guarantee is **void by design**. Validation is:
 The PR description must be rewritten to present this categorized delta and drop
 the "identical before/after" claim.
 
-### MEASURED corpus diff — two-pass (6c99a00) vs redesign (d6320d6)
+### MEASURED corpus diff — two-pass (6c99a00) vs redesign (73a5d73)
 
 Both binaries run over terraform-provider-aws with `.ci/swissshepherd-full.hcl`
 (schema_docs enabled broadly), JSON output, findings keyed on
