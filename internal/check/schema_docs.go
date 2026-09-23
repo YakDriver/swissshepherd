@@ -998,16 +998,15 @@ func (r *SchemaDocsRule) checkLabels(ctx CheckContext) []Result {
 	allowReadOnly := r.allowInlineReadOnly()
 	for blockName, block := range ctx.Doc.ArgumentBlocks {
 		for _, attr := range block.Attributes {
-			// Skip if this attr is also in the attribute section (template bleed:
-			// broad heading templates can mirror an attribute-section item into
-			// ArgumentBlocks). Applies to both presence and correctness so a bleed
-			// item is never judged as an argument.
-			if ns, ok := attrSectionNames[blockName]; ok && ns[attr.Name] {
-				continue
-			}
 			if attr.Required || attr.Optional {
-				// Label present — verify it matches the schema's Required/Optional
-				// state.
+				// A present (Required)/(Optional) label is schema-checkable
+				// regardless of template bleed, and correctness runs BEFORE the
+				// bleed guard below on purpose: a bleed artifact is an *unlabeled*
+				// attribute-section bullet mirrored into ArgumentBlocks, so a
+				// labeled bullet is a genuine argument. Guarding on a same-named
+				// entry in the attribute section here would let an incorrect label
+				// (e.g. (Required) on an Optional+Computed field listed in both
+				// sections) slip through unreported (issue #68 review).
 				if res := r.labelCorrectness(ctx, blockName, attr); res != nil {
 					results = append(results, *res)
 				}
@@ -1016,6 +1015,14 @@ func (r *SchemaDocsRule) checkLabels(ctx CheckContext) []Result {
 			if attr.ReadOnly && allowReadOnly {
 				// Inline Read-Only is permitted by config; the
 				// label is present, so no labels-rule complaint.
+				continue
+			}
+			// Skip if this attr is also in the attribute section (template bleed:
+			// broad heading templates can mirror an *unlabeled* attribute-section
+			// item into ArgumentBlocks). This guard is scoped to the missing-label
+			// path only — a labeled argument is handled above and must not be
+			// silenced by a same-named attribute-section entry.
+			if ns, ok := attrSectionNames[blockName]; ok && ns[attr.Name] {
 				continue
 			}
 			label := "(Required) or (Optional)"

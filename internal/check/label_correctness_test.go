@@ -170,6 +170,38 @@ func TestLabelCorrectness_UnresolvedHeading_NoGuess(t *testing.T) {
 	}
 }
 
+// TestLabelCorrectness_DuplicateNameDoesNotHideWrongLabel guards the issue #68
+// review finding: a field listed in BOTH Argument Reference (with a wrong
+// label) and Attribute Reference must still be flagged. The template-bleed
+// duplicate-name guard suppresses only the missing-label warning for unlabeled
+// bleed items; it must not silence the schema-backed correctness check for a
+// genuinely labeled argument.
+func TestLabelCorrectness_DuplicateNameDoesNotHideWrongLabel(t *testing.T) {
+	t.Parallel()
+
+	src := `# Resource: aws_thing
+
+## Argument Reference
+
+* ` + "`displayable`" + ` - (Required) Whether the field is returned. The default is ` + "`true`" + `.
+
+## Attribute Reference
+
+* ` + "`displayable`" + ` - Whether the field is returned.
+`
+	rs := &schema.ResourceSchema{Blocks: map[string]*schema.Block{
+		"": {Attributes: []schema.Attribute{
+			{Name: "displayable", Optional: true, Computed: true},
+		}},
+	}}
+
+	results := labelResults(t, src, rs)
+
+	if !hasMsg(results, `argument "displayable" is labeled (Required) but is optional in the schema; use (Optional)`) {
+		t.Errorf("duplicate-name guard must not hide a wrong argument label; got: %+v", results)
+	}
+}
+
 // TestLabelCorrectness_ComputedOnlyNotFlagged: a computed-only field is out of
 // scope for correctness (its placement is checkComputedMisplacement's concern),
 // so no "use (...)" correctness finding fires for it.
