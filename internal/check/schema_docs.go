@@ -988,11 +988,28 @@ func (r *SchemaDocsRule) checkLabels(ctx CheckContext) []Result {
 		attrSectionNames[blockName] = names
 	}
 
-	// Arguments must have (Required), (Optional), or (Read-Only)
+	// A label is right only when it is both present and correct. Arguments must
+	// carry (Required), (Optional), or (Read-Only); and when a (Required) or
+	// (Optional) label is present, its value must match the schema (see
+	// labelCorrectness). Presence and correctness are one check: "is the label
+	// right?" — not two, because the schema_docs `ignore_targets` scope is shared
+	// across sub-checks, so a separate correctness toggle would only add a global
+	// on/off, never per-target granularity.
 	allowReadOnly := r.allowInlineReadOnly()
 	for blockName, block := range ctx.Doc.ArgumentBlocks {
 		for _, attr := range block.Attributes {
 			if attr.Required || attr.Optional {
+				// A present (Required)/(Optional) label is schema-checkable
+				// regardless of template bleed, and correctness runs BEFORE the
+				// bleed guard below on purpose: a bleed artifact is an *unlabeled*
+				// attribute-section bullet mirrored into ArgumentBlocks, so a
+				// labeled bullet is a genuine argument. Guarding on a same-named
+				// entry in the attribute section here would let an incorrect label
+				// (e.g. (Required) on an Optional+Computed field listed in both
+				// sections) slip through unreported (issue #68 review).
+				if res := r.labelCorrectness(ctx, blockName, attr); res != nil {
+					results = append(results, *res)
+				}
 				continue
 			}
 			if attr.ReadOnly && allowReadOnly {
@@ -1000,7 +1017,11 @@ func (r *SchemaDocsRule) checkLabels(ctx CheckContext) []Result {
 				// label is present, so no labels-rule complaint.
 				continue
 			}
-			// Skip if this attr is also in the attribute section (template bleed)
+			// Skip if this attr is also in the attribute section (template bleed:
+			// broad heading templates can mirror an *unlabeled* attribute-section
+			// item into ArgumentBlocks). This guard is scoped to the missing-label
+			// path only — a labeled argument is handled above and must not be
+			// silenced by a same-named attribute-section entry.
 			if ns, ok := attrSectionNames[blockName]; ok && ns[attr.Name] {
 				continue
 			}
@@ -1025,6 +1046,73 @@ func (r *SchemaDocsRule) checkLabels(ctx CheckContext) []Result {
 	results = append(results, r.attributeMisplacementFindings(ctx)...)
 
 	return results
+}
+
+// labelCorrectness verifies that a documented argument's (Required)/(Optional)
+// label matches the schema. The invariant is single-valued: the label must be
+// (Required) when the schema attribute is Required, and (Optional) otherwise —
+// which covers pure Optional as well as Optional+Computed (both must read
+// (Optional); only (Required) is wrong for an Optional+Computed field).
+//
+// It returns nil (no finding) whenever the schema attribute cannot be resolved
+// unambiguously so a finding never fires on a guess:
+//   - the subsection heading does not resolve to a schema path,
+//   - the resolved path is in skip_blocks,
+//   - the resolved block is ConfigUnknown (object-typed synthesized block whose
+//     per-field Required/Optional metadata is unknowable),
+//   - the attribute is not a scalar attribute at that path (e.g. a child-block
+//     reference bullet, which carries no scalar Required/Optional flag), or
+//   - the schema attribute is computed-only (handled by checkComputedMisplacement).
+//
+// Label additions such as "Forces new resource" or "Deprecated" do not matter:
+// the parser sets attr.Required/attr.Optional from the leading token, so the
+// booleans compared here are already correct regardless of trailing traits.
+func (r *SchemaDocsRule) labelCorrectness(ctx CheckContext, blockName string, attr doc.DocAttribute) *Result {
+	if ctx.Schema == nil {
+		return nil
+	}
+	path, _, ok := resolveSubsectionPath(ctx.Schema, ctx.Doc.ArgumentBlocks, blockName)
+	if !ok || slices.Contains(r.skipBlocks(), path) {
+		return nil
+	}
+	b, ok := ctx.Schema.Blocks[path]
+	if !ok || b.ConfigUnknown {
+		return nil
+	}
+
+	var sa *schema.Attribute
+	for i := range b.Attributes {
+		if b.Attributes[i].Name == attr.Name {
+			sa = &b.Attributes[i]
+			break
+		}
+	}
+	// Not a scalar attribute at this path (child-block reference or absent), or a
+	// computed-only output (its placement is checkComputedMisplacement's concern,
+	// not the label's value): out of scope for correctness.
+	if sa == nil || (!sa.Required && !sa.Optional) {
+		return nil
+	}
+
+	// The label is right when its required-ness equals the schema's.
+	if attr.Required == sa.Required {
+		return nil
+	}
+
+	have, state, want := "(Required)", "optional", "(Optional)"
+	if sa.Required {
+		have, state, want = "(Optional)", "required", "(Required)"
+	}
+	msg := fmt.Sprintf("argument %q is labeled %s but is %s in the schema; use %s", attr.Name, have, state, want)
+	if blockName != "" {
+		msg = fmt.Sprintf("argument %q in block %q is labeled %s but is %s in the schema; use %s", attr.Name, displayPath(blockName), have, state, want)
+	}
+	return &Result{
+		Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityWarning,
+		Message: msg,
+		Block:   blockName,
+		Line:    attr.Line,
+	}
 }
 
 // stripLabelResult builds the "attribute should not have (Required)/(Optional)
