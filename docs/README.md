@@ -241,7 +241,7 @@ When `inline_links` is enabled, reference-style link definitions (`[label]: url`
 Validates file↔schema alignment (runs once per invocation):
 - **require_doc**: every schema resource must have a documentation file
 - **require_schema**: every documentation file must have a matching schema resource
-- **mixed_layout**: can't mix legacy (`website/docs/`) and registry (`docs/`) layouts
+- **mixed_layout**: can't mix legacy (`website/docs/`) and registry (`docs/`) layouts. The layout is inferred only from schema-backed types (resources, data sources, and the like); documentation-only files such as a contributor `docs/index.md` or a `docs/guides/` tree are not treated as a registry layout on their own, so a provider that keeps its resource docs under `website/docs/` while using `docs/` for contributor material is not flagged
 
 ```hcl
 check "file_match" {
