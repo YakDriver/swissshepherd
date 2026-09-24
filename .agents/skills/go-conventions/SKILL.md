@@ -1,28 +1,28 @@
 ---
 name: go-conventions
-description: "Fundamental Go conventions for the Terraform AWS provider. Use whenever writing or editing Go in internal/**/*.go (any resource, data source, ephemeral resource, action, test, or helper) before making the change, not only when asked about Go."
+description: "Fundamental Go conventions. Use whenever writing or editing Go in this repository (any package, test, or helper) before making the change, not only when asked about Go."
 ---
 
-<!-- Copyright IBM Corp. 2014, 2026 -->
+<!-- Copyright IBM Corp. 2019, 2026 -->
 <!-- SPDX-License-Identifier: MPL-2.0 -->
 
 # Skill: Go Conventions
 
-Three forces pull this repository away from Go's conventions: existing code that violates them, human habits from other languages, and agent instincts trained on other ecosystems. Follow provider practice where it doesn't contradict this skill; where existing code violates this skill, it isn't precedent. Rationale and evidence: [docs/go-for-contributors.md](../../../docs/go-for-contributors.md).
+Three forces pull code away from Go's conventions: existing code that violates them, human habits from other languages, and agent instincts trained on other ecosystems. Follow existing practice in the repository where it doesn't contradict this skill; where existing code violates this skill, it isn't precedent.
 
 ## Naming
 
 - Initialisms keep one case: `ID`, `ARN`, `API`, `VPC`, `KMS`, `URL`, `HTTP`. Write `applicationID`, never `applicationId`, `Arn`, or `Url`.
-- `MixedCaps`, not underscores: `maxRetries`, not `MAX_RETRIES`. Test names (`TestAccFoo_basic`) are the exception.
+- `MixedCaps`, not underscores: `maxRetries`, not `MAX_RETRIES`. Test names that encode subtests (e.g. `TestThing_edgeCase`) are the exception.
 - Getters drop `Get`: `Owner()`, not `GetOwner()`.
-- Short locals (`c`, `i`). Receivers are one or two letters, consistent across the type, never `this` or `self`.
-- Don't create packages named `util`, `common`, `misc`, `api`, `types`, or `interfaces`. If callers must alias your package, the name failed. (We ship `internal/types`, `internal/framework/types`, `internal/sdkv2/types`; these are known fails, not precedent.)
+- Short locals (`c`, `i`). Receivers are one to three letters, consistent across the type, never `this` or `self`.
+- Don't create packages named `util`, `common`, `misc`, `api`, `types`, or `interfaces`. If callers must alias your package, the name failed.
 
 ## Comments
 
 - Names and structure first. A comment never compensates for code that is hard to read.
 - Delete a comment that restates the line, names the obvious operation, acts as an in-function section header, paraphrases the signature, teaches Go, or explains a name you should rename instead.
-- Keep comments that record constraints, invariants, surprising AWS behavior, or why an obvious approach was rejected.
+- Keep comments that record constraints, invariants, surprising external-system behavior, or why an obvious approach was rejected.
 - Document every exported declaration: full sentence, begins with the name, ends with a period.
 
 ## Organization: function, file, package
@@ -52,14 +52,18 @@ Then:
 ## Control flow and errors
 
 - Linear and top-to-bottom. Handle the exceptional case early and return. No unnecessary `else`.
-- Errors are values: return them, wrap with useful context, inspect deliberately. No exception-like infrastructure or custom error hierarchies.
-- Error strings are lowercase and unpunctuated: `"reading bucket policy"`.
+- Errors are values: return them, wrap with useful context (`fmt.Errorf("...: %w", err)`), inspect deliberately with `errors.Is`/`errors.As`. No exception-like infrastructure or custom error hierarchies.
+- Error strings are lowercase and unpunctuated: `"reading config file"`.
 - Never discard an error with `_`. Never panic for an ordinary failure.
 
 ## Context
 
 - `ctx context.Context` is the first parameter, always.
 - Never store a `Context` in a struct field; pass it to each method that needs it.
+
+## Modern standard library
+
+Prefer current stdlib idioms over hand-rolled equivalents: `slices` and `maps`, `strings.Cut`/`CutPrefix`/`CutSuffix` over `SplitN` with length checks, `any` over `interface{}`, `slices.SortFunc` over `sort.Slice`, range-over-int, and `log/slog` for structured logging.
 
 ## Commit messages
 
