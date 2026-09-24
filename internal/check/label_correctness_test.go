@@ -6,6 +6,8 @@ package check_test
 import (
 	"testing"
 
+	"github.com/YakDriver/swissshepherd/internal/check"
+	"github.com/YakDriver/swissshepherd/internal/doc"
 	"github.com/YakDriver/swissshepherd/internal/schema"
 )
 
@@ -226,5 +228,367 @@ func TestLabelCorrectness_ComputedOnlyNotFlagged(t *testing.T) {
 
 	if hasMsg(results, `argument "arn"`) && hasMsg(results, "in the schema; use ") {
 		t.Errorf("computed-only field must not get a correctness finding; got: %+v", results)
+	}
+}
+
+// --- Gap A: (Read-Only) label correctness in Argument Reference ---
+
+// labelResultsRO runs the labels checks with allow_inline_read_only = true, so a
+// (Read-Only) label inline in Argument Reference is permitted and correctness
+// applies to it.
+func labelResultsRO(t *testing.T, src string, rs *schema.ResourceSchema) []check.Result {
+	t.Helper()
+	d, err := doc.ParseWithTemplates([]byte(src), "aws_thing", labelTemplates)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ro := true
+	return (&check.SchemaDocsRule{IgnoreDeprecated: true, AllowInlineReadOnly: &ro}).Check(
+		check.CheckContext{Resource: "aws_thing", Schema: rs, Doc: d})
+}
+
+// TestLabelCorrectness_ReadOnlyOnOptional: a (Read-Only) label on a field that
+// is Optional in the schema is wrong and must be reported (use (Optional)).
+func TestLabelCorrectness_ReadOnlyOnOptional(t *testing.T) {
+	t.Parallel()
+
+	src := `# Resource: aws_thing
+
+## Argument Reference
+
+* ` + "`name`" + ` - (Required) Name.
+* ` + "`endpoint`" + ` - (Read-Only) Endpoint address.
+`
+	rs := &schema.ResourceSchema{Blocks: map[string]*schema.Block{
+		"": {Attributes: []schema.Attribute{
+			{Name: "name", Required: true},
+			{Name: "endpoint", Optional: true},
+		}},
+	}}
+
+	results := labelResultsRO(t, src, rs)
+	if !hasMsg(results, `argument "endpoint" is labeled (Read-Only) but is optional in the schema; use (Optional)`) {
+		t.Errorf("expected Read-Only correctness finding for endpoint; got: %+v", results)
+	}
+}
+
+// TestLabelCorrectness_ReadOnlyOnRequired: a (Read-Only) label on a Required
+// field must be reported (use (Required)).
+func TestLabelCorrectness_ReadOnlyOnRequired(t *testing.T) {
+	t.Parallel()
+
+	src := `# Resource: aws_thing
+
+## Argument Reference
+
+* ` + "`name`" + ` - (Read-Only) The name.
+`
+	rs := &schema.ResourceSchema{Blocks: map[string]*schema.Block{
+		"": {Attributes: []schema.Attribute{{Name: "name", Required: true}}},
+	}}
+
+	results := labelResultsRO(t, src, rs)
+	if !hasMsg(results, `argument "name" is labeled (Read-Only) but is required in the schema; use (Required)`) {
+		t.Errorf("expected Read-Only correctness finding for name; got: %+v", results)
+	}
+}
+
+// TestLabelCorrectness_ReadOnlyOnComputedOnly: a (Read-Only) label on a
+// genuinely read-only (computed-only) attribute is correct — no finding.
+func TestLabelCorrectness_ReadOnlyOnComputedOnly(t *testing.T) {
+	t.Parallel()
+
+	src := `# Resource: aws_thing
+
+## Argument Reference
+
+* ` + "`name`" + ` - (Required) Name.
+* ` + "`arn`" + ` - (Read-Only) ARN of the thing.
+`
+	rs := &schema.ResourceSchema{Blocks: map[string]*schema.Block{
+		"": {Attributes: []schema.Attribute{
+			{Name: "name", Required: true},
+			{Name: "arn", Computed: true},
+		}},
+	}}
+
+	results := labelResultsRO(t, src, rs)
+	if hasMsg(results, `argument "arn"`) && hasMsg(results, "in the schema; use ") {
+		t.Errorf("computed-only field labeled (Read-Only) must not be flagged; got: %+v", results)
+	}
+}
+
+// TestLabelCorrectness_ReadOnlyFlagOff_NoCorrectnessFinding: with
+// allow_inline_read_only = false, a (Read-Only) label is not an accepted
+// argument label, so it takes the missing-label path rather than producing a
+// Read-Only correctness finding.
+func TestLabelCorrectness_ReadOnlyFlagOff_NoCorrectnessFinding(t *testing.T) {
+	t.Parallel()
+
+	src := `# Resource: aws_thing
+
+## Argument Reference
+
+* ` + "`name`" + ` - (Required) Name.
+* ` + "`endpoint`" + ` - (Read-Only) Endpoint address.
+`
+	rs := &schema.ResourceSchema{Blocks: map[string]*schema.Block{
+		"": {Attributes: []schema.Attribute{
+			{Name: "name", Required: true},
+			{Name: "endpoint", Optional: true},
+		}},
+	}}
+
+	// Default rule: allow_inline_read_only is false.
+	results := labelResults(t, src, rs)
+	if hasMsg(results, "is labeled (Read-Only) but is") {
+		t.Errorf("no Read-Only correctness finding expected when allow_inline_read_only is false; got: %+v", results)
+	}
+}
+
+// --- Gap B: (Read-Only) label not allowed under Attribute Reference ---
+
+// TestLabelCorrectness_ReadOnlyUnderAttributeReference: a (Read-Only) label on an
+// attribute documented under Attribute Reference is not allowed — attributes
+// carry no label there — so it is flagged for stripping. This holds regardless
+// of allow_inline_read_only (that flag only permits inline Read-Only in
+// Argument Reference).
+func TestLabelCorrectness_ReadOnlyUnderAttributeReference(t *testing.T) {
+	t.Parallel()
+
+	src := `# Resource: aws_thing
+
+## Argument Reference
+
+* ` + "`name`" + ` - (Required) Name.
+
+## Attribute Reference
+
+* ` + "`arn`" + ` - (Read-Only) ARN of the thing.
+`
+	rs := &schema.ResourceSchema{Blocks: map[string]*schema.Block{
+		"": {Attributes: []schema.Attribute{
+			{Name: "name", Required: true},
+			{Name: "arn", Computed: true},
+		}},
+	}}
+
+	results := labelResults(t, src, rs)
+	if !hasMsg(results, `attribute "arn" in block "(root)" should not have (Read-Only) label`) {
+		t.Errorf("expected strip finding for (Read-Only) label under Attribute Reference; got: %+v", results)
+	}
+}
+
+// TestLabelCorrectness_UnlabeledUnderAttributeReference: a properly unlabeled
+// Read-Only attribute under Attribute Reference is correct — no strip finding.
+func TestLabelCorrectness_UnlabeledUnderAttributeReference(t *testing.T) {
+	t.Parallel()
+
+	src := `# Resource: aws_thing
+
+## Argument Reference
+
+* ` + "`name`" + ` - (Required) Name.
+
+## Attribute Reference
+
+* ` + "`arn`" + ` - ARN of the thing.
+`
+	rs := &schema.ResourceSchema{Blocks: map[string]*schema.Block{
+		"": {Attributes: []schema.Attribute{
+			{Name: "name", Required: true},
+			{Name: "arn", Computed: true},
+		}},
+	}}
+
+	results := labelResults(t, src, rs)
+	if hasMsg(results, `attribute "arn"`) && hasMsg(results, "should not have") {
+		t.Errorf("unlabeled Read-Only attribute must not be flagged; got: %+v", results)
+	}
+}
+
+// --- Gap A2: computed-only mislabeled (Required)/(Optional) in permissive mode ---
+
+// TestLabelCorrectness_ComputedOnlyMislabeledPermissive: with
+// allow_inline_read_only = true, checkComputedMisplacement is suppressed and
+// coverage accepts inline computed-only bullets, so labelCorrectness must catch
+// a computed-only field labeled (Optional)/(Required) and direct it to
+// (Read-Only). (Copilot #71 review.)
+func TestLabelCorrectness_ComputedOnlyMislabeledPermissive(t *testing.T) {
+	t.Parallel()
+
+	src := `# Resource: aws_thing
+
+## Argument Reference
+
+* ` + "`name`" + ` - (Required) Name.
+* ` + "`status`" + ` - (Optional) Current status.
+`
+	rs := &schema.ResourceSchema{Blocks: map[string]*schema.Block{
+		"": {Attributes: []schema.Attribute{
+			{Name: "name", Required: true},
+			{Name: "status", Computed: true},
+		}},
+	}}
+
+	results := labelResultsRO(t, src, rs)
+	if !hasMsg(results, `argument "status" is labeled (Optional) but is read-only in the schema; use (Read-Only)`) {
+		t.Errorf("expected (Read-Only) correctness finding for computed-only status in permissive mode; got: %+v", results)
+	}
+}
+
+// TestLabelCorrectness_ComputedOnlyMislabeledStrict: with
+// allow_inline_read_only = false, a computed-only field mislabeled in Argument
+// Reference is checkComputedMisplacement's concern, so labelCorrectness must not
+// emit a (Read-Only) "use" finding (avoid double-reporting).
+func TestLabelCorrectness_ComputedOnlyMislabeledStrict(t *testing.T) {
+	t.Parallel()
+
+	src := `# Resource: aws_thing
+
+## Argument Reference
+
+* ` + "`name`" + ` - (Required) Name.
+* ` + "`status`" + ` - (Optional) Current status.
+`
+	rs := &schema.ResourceSchema{Blocks: map[string]*schema.Block{
+		"": {Attributes: []schema.Attribute{
+			{Name: "name", Required: true},
+			{Name: "status", Computed: true},
+		}},
+	}}
+
+	results := labelResults(t, src, rs)
+	if hasMsg(results, "use (Read-Only)") {
+		t.Errorf("strict mode must defer computed-only mislabel to checkComputedMisplacement; got: %+v", results)
+	}
+}
+
+// TestLabelCorrectness_ContradictoryLabelNotBypassed guards against a
+// contradictory bullet like "(Read-Only, Optional)" — the parser sets a boolean
+// per trait, so both fields are true. The documented label must be built from
+// all categories so it cannot coincide with the single-valued schema label and
+// slip through. (Copilot #71 review.)
+func TestLabelCorrectness_ContradictoryLabelNotBypassed(t *testing.T) {
+	t.Parallel()
+
+	src := `# Resource: aws_thing
+
+## Argument Reference
+
+* ` + "`name`" + ` - (Required) Name.
+* ` + "`endpoint`" + ` - (Read-Only, Optional) Endpoint address.
+`
+	rs := &schema.ResourceSchema{Blocks: map[string]*schema.Block{
+		"": {Attributes: []schema.Attribute{
+			{Name: "name", Required: true},
+			{Name: "endpoint", Optional: true},
+		}},
+	}}
+
+	results := labelResultsRO(t, src, rs)
+	if !hasMsg(results, `argument "endpoint" is labeled (Optional), (Read-Only) but is optional in the schema; use (Optional)`) {
+		t.Errorf("contradictory (Read-Only, Optional) label must be flagged, not bypassed; got: %+v", results)
+	}
+}
+
+// TestLabelCorrectness_AttrRefContradictoryStripsAll: a contradictory bullet
+// under Attribute Reference, e.g. "(Required, Read-Only)" on a computed-only
+// field, must name every label to remove in one finding so the fix does not
+// require a second lint pass. (Copilot #71 review.)
+func TestLabelCorrectness_AttrRefContradictoryStripsAll(t *testing.T) {
+	t.Parallel()
+
+	src := `# Resource: aws_thing
+
+## Argument Reference
+
+* ` + "`name`" + ` - (Required) Name.
+
+## Attribute Reference
+
+* ` + "`arn`" + ` - (Required, Read-Only) ARN.
+`
+	rs := &schema.ResourceSchema{Blocks: map[string]*schema.Block{
+		"": {Attributes: []schema.Attribute{
+			{Name: "name", Required: true},
+			{Name: "arn", Computed: true},
+		}},
+	}}
+
+	results := labelResults(t, src, rs)
+	if !hasMsg(results, `attribute "arn" in block "(root)" should not have (Required), (Read-Only) labels`) {
+		t.Errorf("contradictory Attribute Reference label must list all categories in one finding; got: %+v", results)
+	}
+}
+
+// TestLabelCorrectness_ReadOnlyLabeledConfigurableMoves: a configurable field
+// mislabeled (Read-Only) under Attribute Reference must be directed to move to
+// Argument Reference (where its label is then corrected), not merely told to
+// strip the label — which would leave the misplaced field silently accepted.
+// (Copilot #71 review.)
+func TestLabelCorrectness_ReadOnlyLabeledConfigurableMoves(t *testing.T) {
+	t.Parallel()
+
+	src := `# Resource: aws_thing
+
+## Argument Reference
+
+* ` + "`name`" + ` - (Required) Name.
+
+## Attribute Reference
+
+* ` + "`arn`" + ` - ARN.
+* ` + "`bucket`" + ` - (Read-Only) Bucket name.
+`
+	rs := &schema.ResourceSchema{Blocks: map[string]*schema.Block{
+		"": {Attributes: []schema.Attribute{
+			{Name: "name", Required: true},
+			{Name: "bucket", Required: true},
+			{Name: "arn", Computed: true},
+		}},
+	}}
+
+	results := labelResults(t, src, rs)
+	if !hasMsg(results, `argument "bucket" is documented under Attribute Reference but is a configurable argument in the schema; move it to Argument Reference`) {
+		t.Errorf("configurable (Read-Only)-labeled field must get move guidance; got: %+v", results)
+	}
+	// It must not be told merely to strip the label and left in place.
+	if hasMsg(results, `attribute "bucket"`) && hasMsg(results, "should not have") {
+		t.Errorf("configurable field must move, not strip-and-stay; got: %+v", results)
+	}
+}
+
+// TestLabelCorrectness_ComputedOnlyMislabeledCoverageDisabled: with the coverage
+// sub-check disabled and labels enabled, checkComputedMisplacement never runs, so
+// labels must itself report a computed-only argument mislabeled (Required)/
+// (Optional) rather than dropping the only finding. (Copilot #71 review.)
+func TestLabelCorrectness_ComputedOnlyMislabeledCoverageDisabled(t *testing.T) {
+	t.Parallel()
+
+	src := `# Resource: aws_thing
+
+## Argument Reference
+
+* ` + "`name`" + ` - (Required) Name.
+* ` + "`status`" + ` - (Optional) Current status.
+`
+	rs := &schema.ResourceSchema{Blocks: map[string]*schema.Block{
+		"": {Attributes: []schema.Attribute{
+			{Name: "name", Required: true},
+			{Name: "status", Computed: true},
+		}},
+	}}
+
+	d, err := doc.ParseWithTemplates([]byte(src), "aws_thing", labelTemplates)
+	if err != nil {
+		t.Fatal(err)
+	}
+	no := false
+	results := (&check.SchemaDocsRule{IgnoreDeprecated: true, Coverage: &no}).Check(
+		check.CheckContext{Resource: "aws_thing", Schema: rs, Doc: d})
+
+	if !hasMsg(results, `argument "status" is labeled (Optional) but is computed-only in the schema; move it to Attribute Reference and remove the label`) {
+		t.Errorf("labels must report computed-only mislabel when coverage is disabled; got: %+v", results)
 	}
 }

@@ -16,7 +16,7 @@ All enabled by default; disable individually via the rule's config block.
 | `description` | Descriptions don't start with weak/redundant/meta prefixes ("The ", "This ", "Contains ", "Used ", etc.)                              |
 | `format`      | No code blocks in arg/attr sections; single-line attrs; uninterrupted lists                                                       |
 | `heading`     | Block headings match the preferred template style                                                                                  |
-| `labels`      | Arguments have (Required)/(Optional) labels (and optionally (Read-Only) when allow_inline_read_only = true); attributes do not                                                                |
+| `labels`      | Arguments carry a present, schema-correct label — (Required)/(Optional), or (Read-Only) for read-only attributes when allow_inline_read_only = true; attributes carry none                                                                |
 | `ordering`    | Attributes alphabetical (single-byline lists as one group; split required/optional bylines as separate groups)                    |
 
 ## Config
@@ -118,6 +118,29 @@ The `coverage` sub-check enforces presence of every schema attribute at every de
 - **Read-Only** — never set in configuration; always populated by the provider. Documented in `## Attribute Reference`, or — when `allow_inline_read_only = true` — inline in `## Argument Reference` with `(Read-Only)`.
 
 When a genuinely configurable argument (`Required`/`Optional` and not `Computed`) is instead documented under `## Attribute Reference`, the `labels` sub-check reports a *misplacement* — directing the author to move it to Argument Reference rather than to strip its (correct) label (issues #60, #62). For the design and rationale behind that detection — attribute-granular classification, heading→schema-path resolution, path-based severity (a genuine root scalar is a warning; every nested move is an error), and the measured corpus evidence — see [Argument/Attribute-Reference Misplacement](argument-attribute-misplacement.md).
+
+### Label correctness
+
+The `labels` sub-check validates that a documented argument's label is both **present and correct** — a single question, "is the label right?", not two separate ones. A present label whose value contradicts the schema is as much a defect as a missing one: `(Required)` on an attribute that is actually `Optional` misleads users about what they must set.
+
+The invariant is single-valued: exactly one label is correct for each attribute — `(Required)` when the schema attribute is `Required`, `(Optional)` when it is configurable but not required (pure `Optional` or `Optional`+`Computed`), and `(Read-Only)` when it is computed-only. The other two category labels are wrong; for example an `Optional`+`Computed` field must read `(Optional)`, so both `(Required)` and `(Read-Only)` on it are reported.
+
+Correctness lives inside the `labels` sub-check rather than behind a separate toggle. `schema_docs` shares one `ignore_targets`/`prefixes` scope across all sub-checks, so a second toggle would only add a global on/off, never per-target granularity. Validating the label's value was always the intent of `labels`; the earlier presence-only behavior was a gap in that check, not a deliberately narrower feature.
+
+The check never fires on a guess. It reports nothing when:
+
+- the subsection heading does not resolve to a schema path;
+- the resolved path is in `skip_blocks`;
+- the resolved block is `ConfigUnknown` (an object-typed synthesized block whose per-field configurability is unknowable — see [Object-typed attributes](object-typed-attributes.md)); or
+- the name is not a scalar attribute at that path (e.g. a child-block reference bullet).
+
+Label additions such as `(Required, Forces new resource)` do not affect detection: the required/optional state is read from the leading token, and trailing traits are left as authored.
+
+Correctness also covers the inline `(Read-Only)` label permitted when `allow_inline_read_only = true`: it is valid only for a genuinely read-only (computed-only) attribute. A configurable (`Required`/`Optional`) field mislabeled `(Read-Only)` is reported the same way, directing the author to the correct `(Required)`/`(Optional)` label. Conversely, a computed-only field mislabeled `(Required)`/`(Optional)` is reported with `use (Read-Only)` — but only under `allow_inline_read_only = true`; in strict mode a computed-only field does not belong in Argument Reference at all, which `coverage` reports instead, so `labels` defers to avoid a double finding.
+
+Under `## Attribute Reference` the rule is the mirror image: attributes carry **no label at all**. A `(Read-Only)` label there is flagged for removal, just as a stray `(Required)`/`(Optional)` label is — a configurable field is additionally directed to move to Argument Reference (see [Argument/Attribute-Reference Misplacement](argument-attribute-misplacement.md)). This holds regardless of `allow_inline_read_only`, which only governs inline `(Read-Only)` in Argument Reference.
+
+**Interaction with `ordering`.** In docs that split arguments under `The following arguments are required:` / `optional:` bylines, correcting a label changes the group the argument belongs to, so the byline semantics require relocating it under the matching byline and re-alphabetizing. Note that `ordering` does not enforce that physical placement: it rebuilds the required/optional groups from each bullet's *parsed label* — not from the byline it sits under — and checks each derived group alphabetically. It therefore *may* surface an alphabetical violation when a corrected bullet is left under the wrong byline, but only if the bullet's name breaks alphabetical order within its label group; a corrected bullet whose name still sorts correctly stays under the wrong byline with no finding. Treat the relocation as a manual step that pairs with the label fix, not something `ordering` will always catch.
 
 For nested blocks, Read-Only attributes can be documented in any of the following equivalent forms:
 

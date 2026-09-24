@@ -35,7 +35,7 @@ swissshepherd compares a Terraform provider's schema against its markdown docume
 - **Misplaced computed attributes** — computed-only attributes in the Argument Reference section
 - **Heading style mismatches** — nested block headings not matching the preferred format
 - **Format / structure issues** — code blocks inside argument sections, multi-line attribute descriptions, interrupted attribute lists
-- **Label violations** — arguments missing (Required)/(Optional) labels (and optionally (Read-Only) when allow_inline_read_only = true), or attributes that have them
+- **Label violations** — arguments missing a (Required)/(Optional) label, or carrying one that contradicts the schema (e.g. (Required) on an Optional attribute) (and optionally (Read-Only) when allow_inline_read_only = true); or attributes that have labels
 - **Byline mismatches** — section introductory paragraph doesn't match expected text
 - **Frontmatter problems** — missing required YAML fields, forbidden fields present, disallowed subcategories
 - **Title section problems** — missing title, wrong heading level, bad `<Kind>: ` prefix

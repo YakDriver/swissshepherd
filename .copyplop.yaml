@@ -17,6 +17,7 @@ files:
   exclude_paths:
     - "CHANGELOG.md"
     - "LICENSE"
+    - ".agents"
   extensions:
     - ".go"
     - ".md"

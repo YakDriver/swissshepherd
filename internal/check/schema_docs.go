@@ -1013,8 +1013,13 @@ func (r *SchemaDocsRule) checkLabels(ctx CheckContext) []Result {
 				continue
 			}
 			if attr.ReadOnly && allowReadOnly {
-				// Inline Read-Only is permitted by config; the
-				// label is present, so no labels-rule complaint.
+				// Inline Read-Only is permitted here, so the label is present.
+				// Still verify it names a genuinely read-only attribute: a
+				// (Read-Only) label on a configurable (Required/Optional) field is
+				// wrong and must name the real requiredness (Gap A).
+				if res := r.labelCorrectness(ctx, blockName, attr); res != nil {
+					results = append(results, *res)
+				}
 				continue
 			}
 			// Skip if this attr is also in the attribute section (template bleed:
@@ -1048,21 +1053,28 @@ func (r *SchemaDocsRule) checkLabels(ctx CheckContext) []Result {
 	return results
 }
 
-// labelCorrectness verifies that a documented argument's (Required)/(Optional)
-// label matches the schema. The invariant is single-valued: the label must be
-// (Required) when the schema attribute is Required, and (Optional) otherwise —
-// which covers pure Optional as well as Optional+Computed (both must read
-// (Optional); only (Required) is wrong for an Optional+Computed field).
+// labelCorrectness verifies that a documented argument's label matches the
+// schema. For (Required)/(Optional) the invariant is single-valued: the label
+// must be (Required) when the schema attribute is Required, (Optional) when it
+// is configurable but not required (pure Optional or Optional+Computed), and
+// (Read-Only) when it is computed-only. Only (Required) is wrong for an
+// Optional+Computed field. A (Read-Only) label is valid only for a genuinely
+// read-only attribute; on a configurable field it is wrong and must name the
+// real requiredness (Gap A). A computed-only field mislabeled (Required)/
+// (Optional) is a finding only under allow_inline_read_only = true, where inline
+// documentation is permitted and (Read-Only) is the right label; in strict mode
+// the field must move to Attribute Reference — reported by
+// checkComputedMisplacement when the coverage sub-check is enabled (labels defers
+// to avoid a double finding) and by labels itself when coverage is disabled.
 //
 // It returns nil (no finding) whenever the schema attribute cannot be resolved
 // unambiguously so a finding never fires on a guess:
 //   - the subsection heading does not resolve to a schema path,
 //   - the resolved path is in skip_blocks,
 //   - the resolved block is ConfigUnknown (object-typed synthesized block whose
-//     per-field Required/Optional metadata is unknowable),
+//     per-field Required/Optional metadata is unknowable), or
 //   - the attribute is not a scalar attribute at that path (e.g. a child-block
-//     reference bullet, which carries no scalar Required/Optional flag), or
-//   - the schema attribute is computed-only (handled by checkComputedMisplacement).
+//     reference bullet, which carries no scalar Required/Optional flag).
 //
 // Label additions such as "Forces new resource" or "Deprecated" do not matter:
 // the parser sets attr.Required/attr.Optional from the leading token, so the
@@ -1087,22 +1099,72 @@ func (r *SchemaDocsRule) labelCorrectness(ctx CheckContext, blockName string, at
 			break
 		}
 	}
-	// Not a scalar attribute at this path (child-block reference or absent), or a
-	// computed-only output (its placement is checkComputedMisplacement's concern,
-	// not the label's value): out of scope for correctness.
-	if sa == nil || (!sa.Required && !sa.Optional) {
+	// Not a scalar attribute at this path (child-block reference or absent): out
+	// of scope — no finding fires on a guess.
+	if sa == nil {
 		return nil
 	}
 
-	// The label is right when its required-ness equals the schema's.
-	if attr.Required == sa.Required {
-		return nil
+	// The schema-correct label for this attribute.
+	var want, state string
+	switch {
+	case sa.Required:
+		want, state = "(Required)", "required"
+	case sa.Optional:
+		want, state = "(Optional)", "optional" // pure Optional or Optional+Computed
+	default:
+		want, state = "(Read-Only)", "read-only" // computed-only
 	}
 
-	have, state, want := "(Required)", "optional", "(Optional)"
-	if sa.Required {
-		have, state, want = "(Optional)", "required", "(Required)"
+	// The documented label(s). A well-formed argument bullet carries exactly one
+	// category label; the parser sets a boolean per recognized trait, so a
+	// contradictory bullet like "(Read-Only, Optional)" sets several. Build have
+	// from every category present so a contradictory label can never coincide
+	// with the single-valued want and slip through.
+	var docLabels []string
+	if attr.Required {
+		docLabels = append(docLabels, "(Required)")
 	}
+	if attr.Optional {
+		docLabels = append(docLabels, "(Optional)")
+	}
+	if attr.ReadOnly {
+		docLabels = append(docLabels, "(Read-Only)")
+	}
+	if len(docLabels) == 0 {
+		return nil // unlabeled — not reached from the argument loop
+	}
+	have := strings.Join(docLabels, ", ")
+
+	if have == want {
+		return nil // exactly one category label, and it matches the schema
+	}
+
+	// A computed-only attribute mislabeled (Required)/(Optional) needs care:
+	//   - permissive mode (allow_inline_read_only): inline documentation is
+	//     allowed and (Read-Only) is the correct label — reported below with
+	//     "use (Read-Only)".
+	//   - strict mode: the field does not belong in Argument Reference at all.
+	//     checkComputedMisplacement reports that move, but it runs only from the
+	//     coverage sub-check. Defer to it only when coverage is enabled (avoiding
+	//     a double finding); when coverage is disabled that check never runs, so
+	//     labels must report the strict-mode fix itself or the finding is lost.
+	if want == "(Read-Only)" && !r.allowInlineReadOnly() {
+		if enabled(r.Coverage) {
+			return nil // checkComputedMisplacement reports the move
+		}
+		msg := fmt.Sprintf("argument %q is labeled %s but is computed-only in the schema; move it to Attribute Reference and remove the label", attr.Name, have)
+		if blockName != "" {
+			msg = fmt.Sprintf("argument %q in block %q is labeled %s but is computed-only in the schema; move it to Attribute Reference and remove the label", attr.Name, displayPath(blockName), have)
+		}
+		return &Result{
+			Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityWarning,
+			Message: msg,
+			Block:   blockName,
+			Line:    attr.Line,
+		}
+	}
+
 	msg := fmt.Sprintf("argument %q is labeled %s but is %s in the schema; use %s", attr.Name, have, state, want)
 	if blockName != "" {
 		msg = fmt.Sprintf("argument %q in block %q is labeled %s but is %s in the schema; use %s", attr.Name, displayPath(blockName), have, state, want)
@@ -1115,16 +1177,28 @@ func (r *SchemaDocsRule) labelCorrectness(ctx CheckContext, blockName string, at
 	}
 }
 
-// stripLabelResult builds the "attribute should not have (Required)/(Optional)
-// label" warning for a labeled attribute documented under Attribute Reference.
+// stripLabelResult builds the "attribute should not have <label(s)>" warning for
+// a labeled attribute documented under Attribute Reference. Every parsed category
+// label is listed so a contradictory bullet like "(Required, Read-Only)" is fully
+// resolved by one fix rather than surfacing again on a second pass.
 func stripLabelResult(r *SchemaDocsRule, ctx CheckContext, blockName string, attr doc.DocAttribute) Result {
-	label := "(Optional)"
+	var labels []string
 	if attr.Required {
-		label = "(Required)"
+		labels = append(labels, "(Required)")
+	}
+	if attr.Optional {
+		labels = append(labels, "(Optional)")
+	}
+	if attr.ReadOnly {
+		labels = append(labels, "(Read-Only)")
+	}
+	noun := "label"
+	if len(labels) > 1 {
+		noun = "labels"
 	}
 	return Result{
 		Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityWarning,
-		Message: fmt.Sprintf("attribute %q in block %q should not have %s label", attr.Name, displayPath(blockName), label),
+		Message: fmt.Sprintf("attribute %q in block %q should not have %s %s", attr.Name, displayPath(blockName), strings.Join(labels, ", "), noun),
 		Block:   blockName,
 		Line:    attr.Line,
 	}
@@ -1523,13 +1597,14 @@ func uniqueSchemaPathForLeaf(rs *schema.ResourceSchema, leaf string) (string, bo
 type placement int
 
 const (
-	// placementOK: no finding. The attribute carries no (Required)/(Optional)
-	// label, so it is a proper computed output living under Attribute Reference.
+	// placementOK: no finding. The attribute carries no label at all, so it is a
+	// proper computed output living under Attribute Reference.
 	placementOK placement = iota
 	// placementStripLabel: the attribute is labeled but is not a purely
 	// configurable argument at the resolved path (computed-only, Optional+
-	// Computed, ConfigUnknown, or the subsection did not resolve) — the legacy
-	// strip-label guidance, never a move.
+	// Computed, ConfigUnknown, or the subsection did not resolve), or it carries a
+	// (Read-Only) label — which is never permitted under Attribute Reference. The
+	// legacy strip-label guidance, never a move.
 	placementStripLabel
 	// placementMisplaced: the attribute is labeled AND a purely configurable
 	// argument at the resolved path — the section is wrong; move it to Argument
@@ -1542,6 +1617,10 @@ const (
 // classification table by composing label state with configurableArgAtPath:
 //
 //   - unlabeled                          -> placementOK (proper computed output)
+//   - (Read-Only), pure-config arg at P   -> placementMisplaced (move it; the
+//     label is fixed once in Argument Reference)
+//   - (Read-Only), not pure-config        -> placementStripLabel (no label allowed
+//     under Attribute Reference, regardless of allow_inline_read_only) (Gap B)
 //   - labeled, pure-config arg at P       -> placementMisplaced (move it)
 //   - labeled, not pure-config / unresolved -> placementStripLabel (legacy)
 //
@@ -1554,7 +1633,18 @@ const (
 // by construction (configurableArgAtPath returns false), honoring the #62 guard.
 func classifyAttrPlacement(rs *schema.ResourceSchema, path string, resolved bool, attr doc.DocAttribute) placement {
 	if !attr.Required && !attr.Optional {
-		return placementOK
+		if !attr.ReadOnly {
+			return placementOK // truly unlabeled — a proper computed output
+		}
+		// A (Read-Only) label is never allowed under Attribute Reference. If the
+		// field is actually a configurable argument it is *misplaced*: direct the
+		// move to Argument Reference (where labelCorrectness then fixes the label),
+		// not a bare label strip that would leave a configurable field silently
+		// accepted here. Computed, unresolved, and unknown fields keep the strip.
+		if resolved && configurableArgAtPath(rs, path, attr.Name) {
+			return placementMisplaced
+		}
+		return placementStripLabel
 	}
 	if resolved && configurableArgAtPath(rs, path, attr.Name) {
 		return placementMisplaced
