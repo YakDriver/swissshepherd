@@ -16,7 +16,7 @@ All enabled by default; disable individually via the rule's config block.
 | `description` | Descriptions don't start with weak/redundant/meta prefixes ("The ", "This ", "Contains ", "Used ", etc.)                              |
 | `format`      | No code blocks in arg/attr sections; single-line attrs; uninterrupted lists                                                       |
 | `heading`     | Block headings match the preferred template style                                                                                  |
-| `labels`      | Arguments have (Required)/(Optional) labels (and optionally (Read-Only) when allow_inline_read_only = true); attributes do not                                                                |
+| `labels`      | Arguments carry a (Required)/(Optional) label that is present *and* matches the schema (and optionally (Read-Only) when allow_inline_read_only = true); attributes do not                                                                |
 | `ordering`    | Attributes alphabetical (single-byline lists as one group; split required/optional bylines as separate groups)                    |
 
 ## Config
@@ -118,6 +118,26 @@ The `coverage` sub-check enforces presence of every schema attribute at every de
 - **Read-Only** — never set in configuration; always populated by the provider. Documented in `## Attribute Reference`, or — when `allow_inline_read_only = true` — inline in `## Argument Reference` with `(Read-Only)`.
 
 When a genuinely configurable argument (`Required`/`Optional` and not `Computed`) is instead documented under `## Attribute Reference`, the `labels` sub-check reports a *misplacement* — directing the author to move it to Argument Reference rather than to strip its (correct) label (issues #60, #62). For the design and rationale behind that detection — attribute-granular classification, heading→schema-path resolution, path-based severity (a genuine root scalar is a warning; every nested move is an error), and the measured corpus evidence — see [Argument/Attribute-Reference Misplacement](argument-attribute-misplacement.md).
+
+### Label correctness
+
+The `labels` sub-check validates that a documented argument's label is both **present and correct** — a single question, "is the label right?", not two separate ones. A present label whose value contradicts the schema is as much a defect as a missing one: `(Required)` on an attribute that is actually `Optional` misleads users about what they must set.
+
+The invariant is single-valued: the label must be `(Required)` when the schema attribute is `Required`, and `(Optional)` otherwise — covering both pure `Optional` and `Optional`+`Computed` (both read `(Optional)`; only `(Required)` is wrong for an `Optional`+`Computed` field).
+
+Correctness lives inside the `labels` sub-check rather than behind a separate toggle. `schema_docs` shares one `ignore_targets`/`prefixes` scope across all sub-checks, so a second toggle would only add a global on/off, never per-target granularity. Validating the label's value was always the intent of `labels`; the earlier presence-only behavior was a gap in that check, not a deliberately narrower feature.
+
+The check never fires on a guess. It reports nothing when:
+
+- the subsection heading does not resolve to a schema path;
+- the resolved path is in `skip_blocks`;
+- the resolved block is `ConfigUnknown` (an object-typed synthesized block whose per-field configurability is unknowable — see [Object-typed attributes](object-typed-attributes.md));
+- the name is not a scalar attribute at that path (e.g. a child-block reference bullet); or
+- the schema attribute is computed-only (its placement is coverage's concern, not the label's value).
+
+Label additions such as `(Required, Forces new resource)` do not affect detection: the required/optional state is read from the leading token, and trailing traits are left as authored.
+
+**Interaction with `ordering`.** In docs that split arguments under `The following arguments are required:` / `optional:` bylines, correcting a label can move an argument from one group to the other. Because `ordering` treats those bylines as separate alphabetical groups, the fix is not complete until the argument is relocated to its new group and re-alphabetized — otherwise `ordering` reports the now-misplaced bullet. Expect to pair a label-correctness fix with a small reordering in grouped-byline docs.
 
 For nested blocks, Read-Only attributes can be documented in any of the following equivalent forms:
 
