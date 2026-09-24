@@ -225,6 +225,36 @@ func TestFileMatchRule_MixedLayout_DefaultTypes(t *testing.T) {
 	t.Fatal("expected mixed-layout finding for the built-in Registry and legacy paths")
 }
 
+// TestFileMatchRule_NoMixedLayout_DocsIndexOnly guards the false positive where a
+// contributor `docs/index.md` (a documentation-only, schema_kind "none" type)
+// present alongside legacy `website/docs/` resource docs was misread as a mixed
+// layout. Registry layout must be inferred only from schema-backed types, so a
+// repo like terraform-provider-aws — legacy resource docs plus a contributor
+// docs/index.md — reports no mixed-layout finding.
+func TestFileMatchRule_NoMixedLayout_DocsIndexOnly(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	mkDirs(t, dir, "docs", "website/docs/r")
+	touch(t, filepath.Join(dir, "docs/index.md"))
+	touch(t, filepath.Join(dir, "website/docs/r/thing.html.markdown"))
+
+	cfg, err := config.Load(filepath.Join(dir, "missing.hcl"))
+	if err != nil {
+		t.Fatalf("config.Load() error = %v", err)
+	}
+	cfg.ProviderDir = dir
+
+	rule := &check.FileMatchRule{}
+	results := rule.Check(cfg, &schema.ProviderSchema{})
+
+	for _, r := range results {
+		if strings.Contains(r.Message, "mixed") {
+			t.Fatalf("unexpected mixed-layout finding from docs/index.md alone: %s", r.Message)
+		}
+	}
+}
+
 func mkDirs(t *testing.T, base string, dirs ...string) {
 	t.Helper()
 	for _, d := range dirs {
