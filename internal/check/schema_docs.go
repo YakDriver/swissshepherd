@@ -1160,19 +1160,28 @@ func (r *SchemaDocsRule) labelCorrectness(ctx CheckContext, blockName string, at
 	}
 }
 
-// stripLabelResult builds the "attribute should not have (Required)/(Optional)
-// label" warning for a labeled attribute documented under Attribute Reference.
+// stripLabelResult builds the "attribute should not have <label(s)>" warning for
+// a labeled attribute documented under Attribute Reference. Every parsed category
+// label is listed so a contradictory bullet like "(Required, Read-Only)" is fully
+// resolved by one fix rather than surfacing again on a second pass.
 func stripLabelResult(r *SchemaDocsRule, ctx CheckContext, blockName string, attr doc.DocAttribute) Result {
-	label := "(Optional)"
-	switch {
-	case attr.Required:
-		label = "(Required)"
-	case attr.ReadOnly:
-		label = "(Read-Only)"
+	var labels []string
+	if attr.Required {
+		labels = append(labels, "(Required)")
+	}
+	if attr.Optional {
+		labels = append(labels, "(Optional)")
+	}
+	if attr.ReadOnly {
+		labels = append(labels, "(Read-Only)")
+	}
+	noun := "label"
+	if len(labels) > 1 {
+		noun = "labels"
 	}
 	return Result{
 		Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityWarning,
-		Message: fmt.Sprintf("attribute %q in block %q should not have %s label", attr.Name, displayPath(blockName), label),
+		Message: fmt.Sprintf("attribute %q in block %q should not have %s %s", attr.Name, displayPath(blockName), strings.Join(labels, ", "), noun),
 		Block:   blockName,
 		Line:    attr.Line,
 	}

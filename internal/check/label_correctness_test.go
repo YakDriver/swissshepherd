@@ -491,3 +491,33 @@ func TestLabelCorrectness_ContradictoryLabelNotBypassed(t *testing.T) {
 		t.Errorf("contradictory (Read-Only, Optional) label must be flagged, not bypassed; got: %+v", results)
 	}
 }
+
+// TestLabelCorrectness_AttrRefContradictoryStripsAll: a contradictory bullet
+// under Attribute Reference, e.g. "(Required, Read-Only)" on a computed-only
+// field, must name every label to remove in one finding so the fix does not
+// require a second lint pass. (Copilot #71 review.)
+func TestLabelCorrectness_AttrRefContradictoryStripsAll(t *testing.T) {
+	t.Parallel()
+
+	src := `# Resource: aws_thing
+
+## Argument Reference
+
+* ` + "`name`" + ` - (Required) Name.
+
+## Attribute Reference
+
+* ` + "`arn`" + ` - (Required, Read-Only) ARN.
+`
+	rs := &schema.ResourceSchema{Blocks: map[string]*schema.Block{
+		"": {Attributes: []schema.Attribute{
+			{Name: "name", Required: true},
+			{Name: "arn", Computed: true},
+		}},
+	}}
+
+	results := labelResults(t, src, rs)
+	if !hasMsg(results, `attribute "arn" in block "(root)" should not have (Required), (Read-Only) labels`) {
+		t.Errorf("contradictory Attribute Reference label must list all categories in one finding; got: %+v", results)
+	}
+}
