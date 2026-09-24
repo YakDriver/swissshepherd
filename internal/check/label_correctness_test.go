@@ -558,3 +558,37 @@ func TestLabelCorrectness_ReadOnlyLabeledConfigurableMoves(t *testing.T) {
 		t.Errorf("configurable field must move, not strip-and-stay; got: %+v", results)
 	}
 }
+
+// TestLabelCorrectness_ComputedOnlyMislabeledCoverageDisabled: with the coverage
+// sub-check disabled and labels enabled, checkComputedMisplacement never runs, so
+// labels must itself report a computed-only argument mislabeled (Required)/
+// (Optional) rather than dropping the only finding. (Copilot #71 review.)
+func TestLabelCorrectness_ComputedOnlyMislabeledCoverageDisabled(t *testing.T) {
+	t.Parallel()
+
+	src := `# Resource: aws_thing
+
+## Argument Reference
+
+* ` + "`name`" + ` - (Required) Name.
+* ` + "`status`" + ` - (Optional) Current status.
+`
+	rs := &schema.ResourceSchema{Blocks: map[string]*schema.Block{
+		"": {Attributes: []schema.Attribute{
+			{Name: "name", Required: true},
+			{Name: "status", Computed: true},
+		}},
+	}}
+
+	d, err := doc.ParseWithTemplates([]byte(src), "aws_thing", labelTemplates)
+	if err != nil {
+		t.Fatal(err)
+	}
+	no := false
+	results := (&check.SchemaDocsRule{IgnoreDeprecated: true, Coverage: &no}).Check(
+		check.CheckContext{Resource: "aws_thing", Schema: rs, Doc: d})
+
+	if !hasMsg(results, `argument "status" is labeled (Optional) but is computed-only in the schema; move it to Attribute Reference and remove the label`) {
+		t.Errorf("labels must report computed-only mislabel when coverage is disabled; got: %+v", results)
+	}
+}

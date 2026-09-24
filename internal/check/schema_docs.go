@@ -1063,8 +1063,9 @@ func (r *SchemaDocsRule) checkLabels(ctx CheckContext) []Result {
 // real requiredness (Gap A). A computed-only field mislabeled (Required)/
 // (Optional) is a finding only under allow_inline_read_only = true, where inline
 // documentation is permitted and (Read-Only) is the right label; in strict mode
-// checkComputedMisplacement reports it instead, so this defers to avoid a
-// double finding.
+// the field must move to Attribute Reference — reported by
+// checkComputedMisplacement when the coverage sub-check is enabled (labels defers
+// to avoid a double finding) and by labels itself when coverage is disabled.
 //
 // It returns nil (no finding) whenever the schema attribute cannot be resolved
 // unambiguously so a finding never fires on a guess:
@@ -1139,13 +1140,29 @@ func (r *SchemaDocsRule) labelCorrectness(ctx CheckContext, blockName string, at
 		return nil // exactly one category label, and it matches the schema
 	}
 
-	// A computed-only attribute mislabeled (Required)/(Optional) is only a
-	// label-correctness finding under the permissive convention, where inline
-	// documentation in Argument Reference is allowed and (Read-Only) is the right
-	// label. In strict mode the field should not be in Argument Reference at all,
-	// which checkComputedMisplacement already reports — so don't double-report.
+	// A computed-only attribute mislabeled (Required)/(Optional) needs care:
+	//   - permissive mode (allow_inline_read_only): inline documentation is
+	//     allowed and (Read-Only) is the correct label — reported below with
+	//     "use (Read-Only)".
+	//   - strict mode: the field does not belong in Argument Reference at all.
+	//     checkComputedMisplacement reports that move, but it runs only from the
+	//     coverage sub-check. Defer to it only when coverage is enabled (avoiding
+	//     a double finding); when coverage is disabled that check never runs, so
+	//     labels must report the strict-mode fix itself or the finding is lost.
 	if want == "(Read-Only)" && !r.allowInlineReadOnly() {
-		return nil
+		if enabled(r.Coverage) {
+			return nil // checkComputedMisplacement reports the move
+		}
+		msg := fmt.Sprintf("argument %q is labeled %s but is computed-only in the schema; move it to Attribute Reference and remove the label", attr.Name, have)
+		if blockName != "" {
+			msg = fmt.Sprintf("argument %q in block %q is labeled %s but is computed-only in the schema; move it to Attribute Reference and remove the label", attr.Name, displayPath(blockName), have)
+		}
+		return &Result{
+			Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityWarning,
+			Message: msg,
+			Block:   blockName,
+			Line:    attr.Line,
+		}
 	}
 
 	msg := fmt.Sprintf("argument %q is labeled %s but is %s in the schema; use %s", attr.Name, have, state, want)
