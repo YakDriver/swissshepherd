@@ -9,7 +9,10 @@
 
 type "resource" {
   schema_kind   = "resource"
-  website_paths = ["website/docs/r/{name}.html.markdown"]
+  website_paths = [
+    "docs/resources/{name}.md",
+    "website/docs/r/{name}.html.markdown",
+  ]
   title_prefix  = "Resource"
 
   section "title"      { required = true }
@@ -25,7 +28,10 @@ type "resource" {
 
 type "data_source" {
   schema_kind   = "data_source"
-  website_paths = ["website/docs/d/{name}.html.markdown"]
+  website_paths = [
+    "docs/data-sources/{name}.md",
+    "website/docs/d/{name}.html.markdown",
+  ]
   title_prefix  = "Data Source"
 
   section "title"      { required = true }
@@ -41,7 +47,10 @@ type "data_source" {
 
 type "ephemeral" {
   schema_kind   = "ephemeral"
-  website_paths = ["website/docs/ephemeral-resources/{name}.html.markdown"]
+  website_paths = [
+    "docs/ephemeral-resources/{name}.md",
+    "website/docs/ephemeral-resources/{name}.html.markdown",
+  ]
   title_prefix  = "Ephemeral"
 
   section "title"      { required = true }
@@ -57,7 +66,10 @@ type "ephemeral" {
 
 type "function" {
   schema_kind   = "function"
-  website_paths = ["website/docs/functions/{name}.html.markdown"]
+  website_paths = [
+    "docs/functions/{name}.md",
+    "website/docs/functions/{name}.html.markdown",
+  ]
   title_prefix  = "Function"
 
   arguments_heading              = "Arguments"
@@ -76,7 +88,10 @@ type "function" {
 
 type "list_resource" {
   schema_kind   = "list_resource"
-  website_paths = ["website/docs/list-resources/{name}.html.markdown"]
+  website_paths = [
+    "docs/list-resources/{name}.md",
+    "website/docs/list-resources/{name}.html.markdown",
+  ]
   title_prefix  = "List Resource"
 
   section "title"      { required = true }
@@ -92,7 +107,10 @@ type "list_resource" {
 
 type "action" {
   schema_kind   = "action"
-  website_paths = ["website/docs/actions/{name}.html.markdown"]
+  website_paths = [
+    "docs/actions/{name}.md",
+    "website/docs/actions/{name}.html.markdown",
+  ]
   title_prefix  = "Action"
 
   section "title"      { required = true }
@@ -108,14 +126,20 @@ type "action" {
 
 type "guide" {
   schema_kind   = "none"
-  website_paths = ["website/docs/guides/{name}.html.markdown"]
+  website_paths = [
+    "docs/guides/{name}.md",
+    "website/docs/guides/{name}.html.markdown",
+  ]
 
   region_aware = false
 }
 
 type "index" {
   schema_kind   = "none"
-  website_paths = ["website/docs/index.html.markdown"]
+  website_paths = [
+    "docs/index.md",
+    "website/docs/index.html.markdown",
+  ]
 
   region_aware = false
 }

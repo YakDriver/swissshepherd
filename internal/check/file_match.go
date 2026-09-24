@@ -56,6 +56,17 @@ func (r *FileMatchRule) checkMixedLayout(cfg *config.Config) []Result {
 	var hasLegacy, hasRegistry bool
 	for i := range cfg.Types {
 		t := &cfg.Types[i]
+		// Infer layout only from schema-backed types. Documentation-only types
+		// (schema_kind "none": index, guide) resolve to paths like `docs/index.md`
+		// or `docs/guides/{name}.md` that commonly exist in repositories keeping
+		// contributor docs under `docs/` without following the Registry layout, so
+		// they are not a reliable signal — e.g. terraform-provider-aws ships a
+		// contributor `docs/index.md` alongside its `website/docs/` resource docs,
+		// which must not read as a mixed layout. checkRequireDoc/checkRequireSchema
+		// already skip these types for the same reason.
+		if t.SchemaKind == "none" {
+			continue
+		}
 		for _, tmpl := range t.WebsitePaths {
 			pattern := strings.ReplaceAll(tmpl, "{name}", "*")
 			anchor := cfg.ProviderDir

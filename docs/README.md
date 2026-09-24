@@ -241,7 +241,7 @@ When `inline_links` is enabled, reference-style link definitions (`[label]: url`
 Validates file↔schema alignment (runs once per invocation):
 - **require_doc**: every schema resource must have a documentation file
 - **require_schema**: every documentation file must have a matching schema resource
-- **mixed_layout**: can't mix legacy (`website/docs/`) and registry (`docs/`) layouts
+- **mixed_layout**: can't mix legacy (`website/docs/`) and registry (`docs/`) layouts. The layout is inferred only from schema-backed types (resources, data sources, and the like); documentation-only files such as a contributor `docs/index.md` or a `docs/guides/` tree are not treated as a registry layout on their own, so a provider that keeps its resource docs under `website/docs/` while using `docs/` for contributor material is not flagged
 
 ```hcl
 check "file_match" {
@@ -463,16 +463,18 @@ swissshepherd ships with built-in type definitions for all standard Terraform do
 
 ### Built-in types
 
-| Type | Schema kind | Default doc path | Region-aware |
-|------|-------------|------------------|--------------|
-| `resource` | `resource` | `website/docs/r/{name}.html.markdown` | yes |
-| `data_source` | `data_source` | `website/docs/d/{name}.html.markdown` | yes |
-| `ephemeral` | `ephemeral` | `website/docs/ephemeral-resources/{name}.html.markdown` | yes |
-| `function` | `function` | `website/docs/functions/{name}.html.markdown` | no |
-| `list_resource` | `list_resource` | `website/docs/list-resources/{name}.html.markdown` | yes |
-| `action` | `action` | `website/docs/actions/{name}.html.markdown` | no |
-| `guide` | `none` | `website/docs/guides/{name}.html.markdown` | no |
-| `index` | `none` | `website/docs/index.html.markdown` | no |
+| Type | Schema kind | Registry path (tried first) | Legacy path | Region-aware |
+|------|-------------|------------------------------|-------------|--------------|
+| `resource` | `resource` | `docs/resources/{name}.md` | `website/docs/r/{name}.html.markdown` | yes |
+| `data_source` | `data_source` | `docs/data-sources/{name}.md` | `website/docs/d/{name}.html.markdown` | yes |
+| `ephemeral` | `ephemeral` | `docs/ephemeral-resources/{name}.md` | `website/docs/ephemeral-resources/{name}.html.markdown` | yes |
+| `function` | `function` | `docs/functions/{name}.md` | `website/docs/functions/{name}.html.markdown` | no |
+| `list_resource` | `list_resource` | `docs/list-resources/{name}.md` | `website/docs/list-resources/{name}.html.markdown` | yes |
+| `action` | `action` | `docs/actions/{name}.md` | `website/docs/actions/{name}.html.markdown` | no |
+| `guide` | `none` | `docs/guides/{name}.md` | `website/docs/guides/{name}.html.markdown` | no |
+| `index` | `none` | `docs/index.md` | `website/docs/index.html.markdown` | no |
+
+For each target, the checker uses the first path that exists. To use a different layout, override that type's `website_paths` in the provider config. Type overrides replace the built-in type, so keep any other settings the provider needs.
 
 ### Overriding a type
 
