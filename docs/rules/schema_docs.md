@@ -137,7 +137,7 @@ The check never fires on a guess. It reports nothing when:
 
 Label additions such as `(Required, Forces new resource)` do not affect detection: the required/optional state is read from the leading token, and trailing traits are left as authored.
 
-**Interaction with `ordering`.** In docs that split arguments under `The following arguments are required:` / `optional:` bylines, correcting a label can move an argument from one group to the other. Because `ordering` treats those bylines as separate alphabetical groups, the fix is not complete until the argument is relocated to its new group and re-alphabetized — otherwise `ordering` reports the now-misplaced bullet. Expect to pair a label-correctness fix with a small reordering in grouped-byline docs.
+**Interaction with `ordering`.** In docs that split arguments under `The following arguments are required:` / `optional:` bylines, correcting a label changes the group the argument belongs to, so the byline semantics require relocating it under the matching byline and re-alphabetizing. Note that `ordering` does not enforce that physical placement: it rebuilds the required/optional groups from each bullet's *parsed label* — not from the byline it sits under — and checks each derived group alphabetically. It therefore *may* surface an alphabetical violation when a corrected bullet is left under the wrong byline, but only if the bullet's name breaks alphabetical order within its label group; a corrected bullet whose name still sorts correctly stays under the wrong byline with no finding. Treat the relocation as a manual step that pairs with the label fix, not something `ordering` will always catch.
 
 For nested blocks, Read-Only attributes can be documented in any of the following equivalent forms:
 
