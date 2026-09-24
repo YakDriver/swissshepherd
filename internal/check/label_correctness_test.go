@@ -521,3 +521,40 @@ func TestLabelCorrectness_AttrRefContradictoryStripsAll(t *testing.T) {
 		t.Errorf("contradictory Attribute Reference label must list all categories in one finding; got: %+v", results)
 	}
 }
+
+// TestLabelCorrectness_ReadOnlyLabeledConfigurableMoves: a configurable field
+// mislabeled (Read-Only) under Attribute Reference must be directed to move to
+// Argument Reference (where its label is then corrected), not merely told to
+// strip the label — which would leave the misplaced field silently accepted.
+// (Copilot #71 review.)
+func TestLabelCorrectness_ReadOnlyLabeledConfigurableMoves(t *testing.T) {
+	t.Parallel()
+
+	src := `# Resource: aws_thing
+
+## Argument Reference
+
+* ` + "`name`" + ` - (Required) Name.
+
+## Attribute Reference
+
+* ` + "`arn`" + ` - ARN.
+* ` + "`bucket`" + ` - (Read-Only) Bucket name.
+`
+	rs := &schema.ResourceSchema{Blocks: map[string]*schema.Block{
+		"": {Attributes: []schema.Attribute{
+			{Name: "name", Required: true},
+			{Name: "bucket", Required: true},
+			{Name: "arn", Computed: true},
+		}},
+	}}
+
+	results := labelResults(t, src, rs)
+	if !hasMsg(results, `argument "bucket" is documented under Attribute Reference but is a configurable argument in the schema; move it to Argument Reference`) {
+		t.Errorf("configurable (Read-Only)-labeled field must get move guidance; got: %+v", results)
+	}
+	// It must not be told merely to strip the label and left in place.
+	if hasMsg(results, `attribute "bucket"`) && hasMsg(results, "should not have") {
+		t.Errorf("configurable field must move, not strip-and-stay; got: %+v", results)
+	}
+}

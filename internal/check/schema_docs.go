@@ -1600,7 +1600,9 @@ const (
 // classification table by composing label state with configurableArgAtPath:
 //
 //   - unlabeled                          -> placementOK (proper computed output)
-//   - (Read-Only) label                   -> placementStripLabel (no label allowed
+//   - (Read-Only), pure-config arg at P   -> placementMisplaced (move it; the
+//     label is fixed once in Argument Reference)
+//   - (Read-Only), not pure-config        -> placementStripLabel (no label allowed
 //     under Attribute Reference, regardless of allow_inline_read_only) (Gap B)
 //   - labeled, pure-config arg at P       -> placementMisplaced (move it)
 //   - labeled, not pure-config / unresolved -> placementStripLabel (legacy)
@@ -1614,12 +1616,18 @@ const (
 // by construction (configurableArgAtPath returns false), honoring the #62 guard.
 func classifyAttrPlacement(rs *schema.ResourceSchema, path string, resolved bool, attr doc.DocAttribute) placement {
 	if !attr.Required && !attr.Optional {
-		// A (Read-Only) label under Attribute Reference is not allowed — attributes
-		// carry no label there — so strip it; a truly unlabeled bullet is fine.
-		if attr.ReadOnly {
-			return placementStripLabel
+		if !attr.ReadOnly {
+			return placementOK // truly unlabeled — a proper computed output
 		}
-		return placementOK
+		// A (Read-Only) label is never allowed under Attribute Reference. If the
+		// field is actually a configurable argument it is *misplaced*: direct the
+		// move to Argument Reference (where labelCorrectness then fixes the label),
+		// not a bare label strip that would leave a configurable field silently
+		// accepted here. Computed, unresolved, and unknown fields keep the strip.
+		if resolved && configurableArgAtPath(rs, path, attr.Name) {
+			return placementMisplaced
+		}
+		return placementStripLabel
 	}
 	if resolved && configurableArgAtPath(rs, path, attr.Name) {
 		return placementMisplaced
