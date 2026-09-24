@@ -200,6 +200,31 @@ func TestFileMatchRule_MixedLayout(t *testing.T) {
 	}
 }
 
+func TestFileMatchRule_MixedLayout_DefaultTypes(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	mkDirs(t, dir, "docs/resources", "website/docs/r")
+	touch(t, filepath.Join(dir, "docs/resources/thing.md"))
+	touch(t, filepath.Join(dir, "website/docs/r/other.html.markdown"))
+
+	cfg, err := config.Load(filepath.Join(dir, "missing.hcl"))
+	if err != nil {
+		t.Fatalf("config.Load() error = %v", err)
+	}
+	cfg.ProviderDir = dir
+
+	rule := &check.FileMatchRule{}
+	results := rule.Check(cfg, &schema.ProviderSchema{})
+
+	for _, r := range results {
+		if strings.Contains(r.Message, "mixed") {
+			return
+		}
+	}
+	t.Fatal("expected mixed-layout finding for the built-in Registry and legacy paths")
+}
+
 func mkDirs(t *testing.T, base string, dirs ...string) {
 	t.Helper()
 	for _, d := range dirs {
