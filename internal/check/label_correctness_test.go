@@ -345,3 +345,64 @@ func TestLabelCorrectness_ReadOnlyFlagOff_NoCorrectnessFinding(t *testing.T) {
 		t.Errorf("no Read-Only correctness finding expected when allow_inline_read_only is false; got: %+v", results)
 	}
 }
+
+// --- Gap B: (Read-Only) label not allowed under Attribute Reference ---
+
+// TestLabelCorrectness_ReadOnlyUnderAttributeReference: a (Read-Only) label on an
+// attribute documented under Attribute Reference is not allowed — attributes
+// carry no label there — so it is flagged for stripping. This holds regardless
+// of allow_inline_read_only (that flag only permits inline Read-Only in
+// Argument Reference).
+func TestLabelCorrectness_ReadOnlyUnderAttributeReference(t *testing.T) {
+	t.Parallel()
+
+	src := `# Resource: aws_thing
+
+## Argument Reference
+
+* ` + "`name`" + ` - (Required) Name.
+
+## Attribute Reference
+
+* ` + "`arn`" + ` - (Read-Only) ARN of the thing.
+`
+	rs := &schema.ResourceSchema{Blocks: map[string]*schema.Block{
+		"": {Attributes: []schema.Attribute{
+			{Name: "name", Required: true},
+			{Name: "arn", Computed: true},
+		}},
+	}}
+
+	results := labelResults(t, src, rs)
+	if !hasMsg(results, `attribute "arn" in block "(root)" should not have (Read-Only) label`) {
+		t.Errorf("expected strip finding for (Read-Only) label under Attribute Reference; got: %+v", results)
+	}
+}
+
+// TestLabelCorrectness_UnlabeledUnderAttributeReference: a properly unlabeled
+// Read-Only attribute under Attribute Reference is correct — no strip finding.
+func TestLabelCorrectness_UnlabeledUnderAttributeReference(t *testing.T) {
+	t.Parallel()
+
+	src := `# Resource: aws_thing
+
+## Argument Reference
+
+* ` + "`name`" + ` - (Required) Name.
+
+## Attribute Reference
+
+* ` + "`arn`" + ` - ARN of the thing.
+`
+	rs := &schema.ResourceSchema{Blocks: map[string]*schema.Block{
+		"": {Attributes: []schema.Attribute{
+			{Name: "name", Required: true},
+			{Name: "arn", Computed: true},
+		}},
+	}}
+
+	results := labelResults(t, src, rs)
+	if hasMsg(results, `attribute "arn"`) && hasMsg(results, "should not have") {
+		t.Errorf("unlabeled Read-Only attribute must not be flagged; got: %+v", results)
+	}
+}

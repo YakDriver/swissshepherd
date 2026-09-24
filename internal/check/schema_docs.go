@@ -1142,8 +1142,11 @@ func (r *SchemaDocsRule) labelCorrectness(ctx CheckContext, blockName string, at
 // label" warning for a labeled attribute documented under Attribute Reference.
 func stripLabelResult(r *SchemaDocsRule, ctx CheckContext, blockName string, attr doc.DocAttribute) Result {
 	label := "(Optional)"
-	if attr.Required {
+	switch {
+	case attr.Required:
 		label = "(Required)"
+	case attr.ReadOnly:
+		label = "(Read-Only)"
 	}
 	return Result{
 		Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityWarning,
@@ -1546,13 +1549,14 @@ func uniqueSchemaPathForLeaf(rs *schema.ResourceSchema, leaf string) (string, bo
 type placement int
 
 const (
-	// placementOK: no finding. The attribute carries no (Required)/(Optional)
-	// label, so it is a proper computed output living under Attribute Reference.
+	// placementOK: no finding. The attribute carries no label at all, so it is a
+	// proper computed output living under Attribute Reference.
 	placementOK placement = iota
 	// placementStripLabel: the attribute is labeled but is not a purely
 	// configurable argument at the resolved path (computed-only, Optional+
-	// Computed, ConfigUnknown, or the subsection did not resolve) — the legacy
-	// strip-label guidance, never a move.
+	// Computed, ConfigUnknown, or the subsection did not resolve), or it carries a
+	// (Read-Only) label — which is never permitted under Attribute Reference. The
+	// legacy strip-label guidance, never a move.
 	placementStripLabel
 	// placementMisplaced: the attribute is labeled AND a purely configurable
 	// argument at the resolved path — the section is wrong; move it to Argument
@@ -1565,6 +1569,8 @@ const (
 // classification table by composing label state with configurableArgAtPath:
 //
 //   - unlabeled                          -> placementOK (proper computed output)
+//   - (Read-Only) label                   -> placementStripLabel (no label allowed
+//     under Attribute Reference, regardless of allow_inline_read_only) (Gap B)
 //   - labeled, pure-config arg at P       -> placementMisplaced (move it)
 //   - labeled, not pure-config / unresolved -> placementStripLabel (legacy)
 //
@@ -1577,6 +1583,11 @@ const (
 // by construction (configurableArgAtPath returns false), honoring the #62 guard.
 func classifyAttrPlacement(rs *schema.ResourceSchema, path string, resolved bool, attr doc.DocAttribute) placement {
 	if !attr.Required && !attr.Optional {
+		// A (Read-Only) label under Attribute Reference is not allowed — attributes
+		// carry no label there — so strip it; a truly unlabeled bullet is fine.
+		if attr.ReadOnly {
+			return placementStripLabel
+		}
 		return placementOK
 	}
 	if resolved && configurableArgAtPath(rs, path, attr.Name) {
