@@ -123,7 +123,7 @@ When a genuinely configurable argument (`Required`/`Optional` and not `Computed`
 
 The `labels` sub-check validates that a documented argument's label is both **present and correct** — a single question, "is the label right?", not two separate ones. A present label whose value contradicts the schema is as much a defect as a missing one: `(Required)` on an attribute that is actually `Optional` misleads users about what they must set.
 
-The invariant is single-valued: the label must be `(Required)` when the schema attribute is `Required`, `(Optional)` when it is configurable but not required (pure `Optional` or `Optional`+`Computed`), and `(Read-Only)` when it is computed-only. Only `(Required)` is wrong for an `Optional`+`Computed` field.
+The invariant is single-valued: exactly one label is correct for each attribute — `(Required)` when the schema attribute is `Required`, `(Optional)` when it is configurable but not required (pure `Optional` or `Optional`+`Computed`), and `(Read-Only)` when it is computed-only. The other two category labels are wrong; for example an `Optional`+`Computed` field must read `(Optional)`, so both `(Required)` and `(Read-Only)` on it are reported.
 
 Correctness lives inside the `labels` sub-check rather than behind a separate toggle. `schema_docs` shares one `ignore_targets`/`prefixes` scope across all sub-checks, so a second toggle would only add a global on/off, never per-target granularity. Validating the label's value was always the intent of `labels`; the earlier presence-only behavior was a gap in that check, not a deliberately narrower feature.
 
@@ -131,13 +131,12 @@ The check never fires on a guess. It reports nothing when:
 
 - the subsection heading does not resolve to a schema path;
 - the resolved path is in `skip_blocks`;
-- the resolved block is `ConfigUnknown` (an object-typed synthesized block whose per-field configurability is unknowable — see [Object-typed attributes](object-typed-attributes.md));
-- the name is not a scalar attribute at that path (e.g. a child-block reference bullet); or
-- the schema attribute is computed-only (its placement is coverage's concern, not the label's value).
+- the resolved block is `ConfigUnknown` (an object-typed synthesized block whose per-field configurability is unknowable — see [Object-typed attributes](object-typed-attributes.md)); or
+- the name is not a scalar attribute at that path (e.g. a child-block reference bullet).
 
 Label additions such as `(Required, Forces new resource)` do not affect detection: the required/optional state is read from the leading token, and trailing traits are left as authored.
 
-Correctness also covers the inline `(Read-Only)` label permitted when `allow_inline_read_only = true`: it is valid only for a genuinely read-only (computed-only) attribute. A configurable (`Required`/`Optional`) field mislabeled `(Read-Only)` is reported the same way, directing the author to the correct `(Required)`/`(Optional)` label.
+Correctness also covers the inline `(Read-Only)` label permitted when `allow_inline_read_only = true`: it is valid only for a genuinely read-only (computed-only) attribute. A configurable (`Required`/`Optional`) field mislabeled `(Read-Only)` is reported the same way, directing the author to the correct `(Required)`/`(Optional)` label. Conversely, a computed-only field mislabeled `(Required)`/`(Optional)` is reported with `use (Read-Only)` — but only under `allow_inline_read_only = true`; in strict mode a computed-only field does not belong in Argument Reference at all, which `coverage` reports instead, so `labels` defers to avoid a double finding.
 
 Under `## Attribute Reference` the rule is the mirror image: attributes carry **no label at all**. A `(Read-Only)` label there is flagged for removal, just as a stray `(Required)`/`(Optional)` label is — a configurable field is additionally directed to move to Argument Reference (see [Argument/Attribute-Reference Misplacement](argument-attribute-misplacement.md)). This holds regardless of `allow_inline_read_only`, which only governs inline `(Read-Only)` in Argument Reference.
 

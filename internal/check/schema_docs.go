@@ -1115,21 +1115,28 @@ func (r *SchemaDocsRule) labelCorrectness(ctx CheckContext, blockName string, at
 		want, state = "(Read-Only)", "read-only" // computed-only
 	}
 
-	// The documented label.
-	var have string
-	switch {
-	case attr.Required:
-		have = "(Required)"
-	case attr.Optional:
-		have = "(Optional)"
-	case attr.ReadOnly:
-		have = "(Read-Only)"
-	default:
+	// The documented label(s). A well-formed argument bullet carries exactly one
+	// category label; the parser sets a boolean per recognized trait, so a
+	// contradictory bullet like "(Read-Only, Optional)" sets several. Build have
+	// from every category present so a contradictory label can never coincide
+	// with the single-valued want and slip through.
+	var docLabels []string
+	if attr.Required {
+		docLabels = append(docLabels, "(Required)")
+	}
+	if attr.Optional {
+		docLabels = append(docLabels, "(Optional)")
+	}
+	if attr.ReadOnly {
+		docLabels = append(docLabels, "(Read-Only)")
+	}
+	if len(docLabels) == 0 {
 		return nil // unlabeled — not reached from the argument loop
 	}
+	have := strings.Join(docLabels, ", ")
 
 	if have == want {
-		return nil // the label matches the schema
+		return nil // exactly one category label, and it matches the schema
 	}
 
 	// A computed-only attribute mislabeled (Required)/(Optional) is only a

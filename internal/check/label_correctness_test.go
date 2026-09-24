@@ -463,3 +463,31 @@ func TestLabelCorrectness_ComputedOnlyMislabeledStrict(t *testing.T) {
 		t.Errorf("strict mode must defer computed-only mislabel to checkComputedMisplacement; got: %+v", results)
 	}
 }
+
+// TestLabelCorrectness_ContradictoryLabelNotBypassed guards against a
+// contradictory bullet like "(Read-Only, Optional)" — the parser sets a boolean
+// per trait, so both fields are true. The documented label must be built from
+// all categories so it cannot coincide with the single-valued schema label and
+// slip through. (Copilot #71 review.)
+func TestLabelCorrectness_ContradictoryLabelNotBypassed(t *testing.T) {
+	t.Parallel()
+
+	src := `# Resource: aws_thing
+
+## Argument Reference
+
+* ` + "`name`" + ` - (Required) Name.
+* ` + "`endpoint`" + ` - (Read-Only, Optional) Endpoint address.
+`
+	rs := &schema.ResourceSchema{Blocks: map[string]*schema.Block{
+		"": {Attributes: []schema.Attribute{
+			{Name: "name", Required: true},
+			{Name: "endpoint", Optional: true},
+		}},
+	}}
+
+	results := labelResultsRO(t, src, rs)
+	if !hasMsg(results, `argument "endpoint" is labeled (Optional), (Read-Only) but is optional in the schema; use (Optional)`) {
+		t.Errorf("contradictory (Read-Only, Optional) label must be flagged, not bypassed; got: %+v", results)
+	}
+}
