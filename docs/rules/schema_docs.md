@@ -123,7 +123,7 @@ When a genuinely configurable argument (`Required`/`Optional` and not `Computed`
 
 The `labels` sub-check validates that a documented argument's label is both **present and correct** — a single question, "is the label right?", not two separate ones. A present label whose value contradicts the schema is as much a defect as a missing one: `(Required)` on an attribute that is actually `Optional` misleads users about what they must set.
 
-The invariant is single-valued: the label must be `(Required)` when the schema attribute is `Required`, and `(Optional)` otherwise — covering both pure `Optional` and `Optional`+`Computed` (both read `(Optional)`; only `(Required)` is wrong for an `Optional`+`Computed` field).
+The invariant is single-valued: the label must be `(Required)` when the schema attribute is `Required`, `(Optional)` when it is configurable but not required (pure `Optional` or `Optional`+`Computed`), and `(Read-Only)` when it is computed-only. Only `(Required)` is wrong for an `Optional`+`Computed` field.
 
 Correctness lives inside the `labels` sub-check rather than behind a separate toggle. `schema_docs` shares one `ignore_targets`/`prefixes` scope across all sub-checks, so a second toggle would only add a global on/off, never per-target granularity. Validating the label's value was always the intent of `labels`; the earlier presence-only behavior was a gap in that check, not a deliberately narrower feature.
 

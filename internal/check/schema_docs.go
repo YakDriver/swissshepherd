@@ -1055,23 +1055,25 @@ func (r *SchemaDocsRule) checkLabels(ctx CheckContext) []Result {
 
 // labelCorrectness verifies that a documented argument's label matches the
 // schema. For (Required)/(Optional) the invariant is single-valued: the label
-// must be (Required) when the schema attribute is Required, and (Optional)
-// otherwise — which covers pure Optional as well as Optional+Computed (both must
-// read (Optional); only (Required) is wrong for an Optional+Computed field). A
-// (Read-Only) label (permitted inline in Argument Reference when
-// allow_inline_read_only = true) is valid only for a genuinely read-only
-// attribute; on a configurable field it is wrong and must name the real
-// requiredness (Gap A).
+// must be (Required) when the schema attribute is Required, (Optional) when it
+// is configurable but not required (pure Optional or Optional+Computed), and
+// (Read-Only) when it is computed-only. Only (Required) is wrong for an
+// Optional+Computed field. A (Read-Only) label is valid only for a genuinely
+// read-only attribute; on a configurable field it is wrong and must name the
+// real requiredness (Gap A). A computed-only field mislabeled (Required)/
+// (Optional) is a finding only under allow_inline_read_only = true, where inline
+// documentation is permitted and (Read-Only) is the right label; in strict mode
+// checkComputedMisplacement reports it instead, so this defers to avoid a
+// double finding.
 //
 // It returns nil (no finding) whenever the schema attribute cannot be resolved
 // unambiguously so a finding never fires on a guess:
 //   - the subsection heading does not resolve to a schema path,
 //   - the resolved path is in skip_blocks,
 //   - the resolved block is ConfigUnknown (object-typed synthesized block whose
-//     per-field Required/Optional metadata is unknowable),
+//     per-field Required/Optional metadata is unknowable), or
 //   - the attribute is not a scalar attribute at that path (e.g. a child-block
-//     reference bullet, which carries no scalar Required/Optional flag), or
-//   - the schema attribute is computed-only (handled by checkComputedMisplacement).
+//     reference bullet, which carries no scalar Required/Optional flag).
 //
 // Label additions such as "Forces new resource" or "Deprecated" do not matter:
 // the parser sets attr.Required/attr.Optional from the leading token, so the
@@ -1096,36 +1098,49 @@ func (r *SchemaDocsRule) labelCorrectness(ctx CheckContext, blockName string, at
 			break
 		}
 	}
-	// Not a scalar attribute at this path (child-block reference or absent), or a
-	// computed-only output: out of scope for correctness. A computed-only schema
-	// attribute is correctly labeled (Read-Only) inline (allow_inline_read_only)
-	// and, when instead labeled (Required)/(Optional), is left to
-	// checkComputedMisplacement — so no finding fires here on a guess.
-	if sa == nil || (!sa.Required && !sa.Optional) {
+	// Not a scalar attribute at this path (child-block reference or absent): out
+	// of scope — no finding fires on a guess.
+	if sa == nil {
 		return nil
 	}
 
-	// The schema attribute is configurable (Required or Optional). Determine the
-	// documented label and whether it is wrong.
-	var have string
+	// The schema-correct label for this attribute.
+	var want, state string
 	switch {
-	case attr.ReadOnly:
-		// A (Read-Only) label is valid only for a genuinely read-only attribute.
-		// Reaching here, the schema attribute is configurable, so it is wrong
-		// regardless of Required vs Optional (Gap A).
-		have = "(Read-Only)"
-	case attr.Required == sa.Required:
-		return nil // (Required)/(Optional) label already matches the schema
-	case attr.Required:
-		have = "(Required)"
+	case sa.Required:
+		want, state = "(Required)", "required"
+	case sa.Optional:
+		want, state = "(Optional)", "optional" // pure Optional or Optional+Computed
 	default:
-		have = "(Optional)"
+		want, state = "(Read-Only)", "read-only" // computed-only
 	}
 
-	state, want := "optional", "(Optional)"
-	if sa.Required {
-		state, want = "required", "(Required)"
+	// The documented label.
+	var have string
+	switch {
+	case attr.Required:
+		have = "(Required)"
+	case attr.Optional:
+		have = "(Optional)"
+	case attr.ReadOnly:
+		have = "(Read-Only)"
+	default:
+		return nil // unlabeled — not reached from the argument loop
 	}
+
+	if have == want {
+		return nil // the label matches the schema
+	}
+
+	// A computed-only attribute mislabeled (Required)/(Optional) is only a
+	// label-correctness finding under the permissive convention, where inline
+	// documentation in Argument Reference is allowed and (Read-Only) is the right
+	// label. In strict mode the field should not be in Argument Reference at all,
+	// which checkComputedMisplacement already reports — so don't double-report.
+	if want == "(Read-Only)" && !r.allowInlineReadOnly() {
+		return nil
+	}
+
 	msg := fmt.Sprintf("argument %q is labeled %s but is %s in the schema; use %s", attr.Name, have, state, want)
 	if blockName != "" {
 		msg = fmt.Sprintf("argument %q in block %q is labeled %s but is %s in the schema; use %s", attr.Name, displayPath(blockName), have, state, want)

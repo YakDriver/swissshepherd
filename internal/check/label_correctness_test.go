@@ -406,3 +406,60 @@ func TestLabelCorrectness_UnlabeledUnderAttributeReference(t *testing.T) {
 		t.Errorf("unlabeled Read-Only attribute must not be flagged; got: %+v", results)
 	}
 }
+
+// --- Gap A2: computed-only mislabeled (Required)/(Optional) in permissive mode ---
+
+// TestLabelCorrectness_ComputedOnlyMislabeledPermissive: with
+// allow_inline_read_only = true, checkComputedMisplacement is suppressed and
+// coverage accepts inline computed-only bullets, so labelCorrectness must catch
+// a computed-only field labeled (Optional)/(Required) and direct it to
+// (Read-Only). (Copilot #71 review.)
+func TestLabelCorrectness_ComputedOnlyMislabeledPermissive(t *testing.T) {
+	t.Parallel()
+
+	src := `# Resource: aws_thing
+
+## Argument Reference
+
+* ` + "`name`" + ` - (Required) Name.
+* ` + "`status`" + ` - (Optional) Current status.
+`
+	rs := &schema.ResourceSchema{Blocks: map[string]*schema.Block{
+		"": {Attributes: []schema.Attribute{
+			{Name: "name", Required: true},
+			{Name: "status", Computed: true},
+		}},
+	}}
+
+	results := labelResultsRO(t, src, rs)
+	if !hasMsg(results, `argument "status" is labeled (Optional) but is read-only in the schema; use (Read-Only)`) {
+		t.Errorf("expected (Read-Only) correctness finding for computed-only status in permissive mode; got: %+v", results)
+	}
+}
+
+// TestLabelCorrectness_ComputedOnlyMislabeledStrict: with
+// allow_inline_read_only = false, a computed-only field mislabeled in Argument
+// Reference is checkComputedMisplacement's concern, so labelCorrectness must not
+// emit a (Read-Only) "use" finding (avoid double-reporting).
+func TestLabelCorrectness_ComputedOnlyMislabeledStrict(t *testing.T) {
+	t.Parallel()
+
+	src := `# Resource: aws_thing
+
+## Argument Reference
+
+* ` + "`name`" + ` - (Required) Name.
+* ` + "`status`" + ` - (Optional) Current status.
+`
+	rs := &schema.ResourceSchema{Blocks: map[string]*schema.Block{
+		"": {Attributes: []schema.Attribute{
+			{Name: "name", Required: true},
+			{Name: "status", Computed: true},
+		}},
+	}}
+
+	results := labelResults(t, src, rs)
+	if hasMsg(results, "use (Read-Only)") {
+		t.Errorf("strict mode must defer computed-only mislabel to checkComputedMisplacement; got: %+v", results)
+	}
+}
