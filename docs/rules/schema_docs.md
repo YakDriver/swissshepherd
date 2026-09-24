@@ -16,7 +16,7 @@ All enabled by default; disable individually via the rule's config block.
 | `description` | Descriptions don't start with weak/redundant/meta prefixes ("The ", "This ", "Contains ", "Used ", etc.)                              |
 | `format`      | No code blocks in arg/attr sections; single-line attrs; uninterrupted lists                                                       |
 | `heading`     | Block headings match the preferred template style                                                                                  |
-| `labels`      | Arguments carry a (Required)/(Optional) label that is present *and* matches the schema (a (Read-Only) label is accepted, presence only, when allow_inline_read_only = true); attributes do not                                                                |
+| `labels`      | Arguments carry a present, schema-correct label — (Required)/(Optional), or (Read-Only) for read-only attributes when allow_inline_read_only = true; attributes carry none                                                                |
 | `ordering`    | Attributes alphabetical (single-byline lists as one group; split required/optional bylines as separate groups)                    |
 
 ## Config
@@ -121,7 +121,7 @@ When a genuinely configurable argument (`Required`/`Optional` and not `Computed`
 
 ### Label correctness
 
-The `labels` sub-check validates that a documented argument's `(Required)`/`(Optional)` label is both **present and correct** — a single question, "is the label right?", not two separate ones. A present label whose value contradicts the schema is as much a defect as a missing one: `(Required)` on an attribute that is actually `Optional` misleads users about what they must set.
+The `labels` sub-check validates that a documented argument's label is both **present and correct** — a single question, "is the label right?", not two separate ones. A present label whose value contradicts the schema is as much a defect as a missing one: `(Required)` on an attribute that is actually `Optional` misleads users about what they must set.
 
 The invariant is single-valued: the label must be `(Required)` when the schema attribute is `Required`, and `(Optional)` otherwise — covering both pure `Optional` and `Optional`+`Computed` (both read `(Optional)`; only `(Required)` is wrong for an `Optional`+`Computed` field).
 
@@ -137,7 +137,7 @@ The check never fires on a guess. It reports nothing when:
 
 Label additions such as `(Required, Forces new resource)` do not affect detection: the required/optional state is read from the leading token, and trailing traits are left as authored.
 
-Correctness covers `(Required)` and `(Optional)`. When `allow_inline_read_only = true`, an inline `(Read-Only)` label is accepted on **presence alone** — `labels` does not currently cross-check it against the schema, so a configurable (`Required`/`Optional`) field mislabeled `(Read-Only)` is not reported by this sub-check. Validating `(Read-Only)` labels against the schema is a possible future extension.
+Correctness also covers the inline `(Read-Only)` label permitted when `allow_inline_read_only = true`: it is valid only for a genuinely read-only (computed-only) attribute. A configurable (`Required`/`Optional`) field mislabeled `(Read-Only)` is reported the same way, directing the author to the correct `(Required)`/`(Optional)` label.
 
 **Interaction with `ordering`.** In docs that split arguments under `The following arguments are required:` / `optional:` bylines, correcting a label changes the group the argument belongs to, so the byline semantics require relocating it under the matching byline and re-alphabetizing. Note that `ordering` does not enforce that physical placement: it rebuilds the required/optional groups from each bullet's *parsed label* — not from the byline it sits under — and checks each derived group alphabetically. It therefore *may* surface an alphabetical violation when a corrected bullet is left under the wrong byline, but only if the bullet's name breaks alphabetical order within its label group; a corrected bullet whose name still sorts correctly stays under the wrong byline with no finding. Treat the relocation as a manual step that pairs with the label fix, not something `ordering` will always catch.
 

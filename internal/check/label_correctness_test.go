@@ -6,6 +6,8 @@ package check_test
 import (
 	"testing"
 
+	"github.com/YakDriver/swissshepherd/internal/check"
+	"github.com/YakDriver/swissshepherd/internal/doc"
 	"github.com/YakDriver/swissshepherd/internal/schema"
 )
 
@@ -226,5 +228,120 @@ func TestLabelCorrectness_ComputedOnlyNotFlagged(t *testing.T) {
 
 	if hasMsg(results, `argument "arn"`) && hasMsg(results, "in the schema; use ") {
 		t.Errorf("computed-only field must not get a correctness finding; got: %+v", results)
+	}
+}
+
+// --- Gap A: (Read-Only) label correctness in Argument Reference ---
+
+// labelResultsRO runs the labels checks with allow_inline_read_only = true, so a
+// (Read-Only) label inline in Argument Reference is permitted and correctness
+// applies to it.
+func labelResultsRO(t *testing.T, src string, rs *schema.ResourceSchema) []check.Result {
+	t.Helper()
+	d, err := doc.ParseWithTemplates([]byte(src), "aws_thing", labelTemplates)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ro := true
+	return (&check.SchemaDocsRule{IgnoreDeprecated: true, AllowInlineReadOnly: &ro}).Check(
+		check.CheckContext{Resource: "aws_thing", Schema: rs, Doc: d})
+}
+
+// TestLabelCorrectness_ReadOnlyOnOptional: a (Read-Only) label on a field that
+// is Optional in the schema is wrong and must be reported (use (Optional)).
+func TestLabelCorrectness_ReadOnlyOnOptional(t *testing.T) {
+	t.Parallel()
+
+	src := `# Resource: aws_thing
+
+## Argument Reference
+
+* ` + "`name`" + ` - (Required) Name.
+* ` + "`endpoint`" + ` - (Read-Only) Endpoint address.
+`
+	rs := &schema.ResourceSchema{Blocks: map[string]*schema.Block{
+		"": {Attributes: []schema.Attribute{
+			{Name: "name", Required: true},
+			{Name: "endpoint", Optional: true},
+		}},
+	}}
+
+	results := labelResultsRO(t, src, rs)
+	if !hasMsg(results, `argument "endpoint" is labeled (Read-Only) but is optional in the schema; use (Optional)`) {
+		t.Errorf("expected Read-Only correctness finding for endpoint; got: %+v", results)
+	}
+}
+
+// TestLabelCorrectness_ReadOnlyOnRequired: a (Read-Only) label on a Required
+// field must be reported (use (Required)).
+func TestLabelCorrectness_ReadOnlyOnRequired(t *testing.T) {
+	t.Parallel()
+
+	src := `# Resource: aws_thing
+
+## Argument Reference
+
+* ` + "`name`" + ` - (Read-Only) The name.
+`
+	rs := &schema.ResourceSchema{Blocks: map[string]*schema.Block{
+		"": {Attributes: []schema.Attribute{{Name: "name", Required: true}}},
+	}}
+
+	results := labelResultsRO(t, src, rs)
+	if !hasMsg(results, `argument "name" is labeled (Read-Only) but is required in the schema; use (Required)`) {
+		t.Errorf("expected Read-Only correctness finding for name; got: %+v", results)
+	}
+}
+
+// TestLabelCorrectness_ReadOnlyOnComputedOnly: a (Read-Only) label on a
+// genuinely read-only (computed-only) attribute is correct — no finding.
+func TestLabelCorrectness_ReadOnlyOnComputedOnly(t *testing.T) {
+	t.Parallel()
+
+	src := `# Resource: aws_thing
+
+## Argument Reference
+
+* ` + "`name`" + ` - (Required) Name.
+* ` + "`arn`" + ` - (Read-Only) ARN of the thing.
+`
+	rs := &schema.ResourceSchema{Blocks: map[string]*schema.Block{
+		"": {Attributes: []schema.Attribute{
+			{Name: "name", Required: true},
+			{Name: "arn", Computed: true},
+		}},
+	}}
+
+	results := labelResultsRO(t, src, rs)
+	if hasMsg(results, `argument "arn"`) && hasMsg(results, "in the schema; use ") {
+		t.Errorf("computed-only field labeled (Read-Only) must not be flagged; got: %+v", results)
+	}
+}
+
+// TestLabelCorrectness_ReadOnlyFlagOff_NoCorrectnessFinding: with
+// allow_inline_read_only = false, a (Read-Only) label is not an accepted
+// argument label, so it takes the missing-label path rather than producing a
+// Read-Only correctness finding.
+func TestLabelCorrectness_ReadOnlyFlagOff_NoCorrectnessFinding(t *testing.T) {
+	t.Parallel()
+
+	src := `# Resource: aws_thing
+
+## Argument Reference
+
+* ` + "`name`" + ` - (Required) Name.
+* ` + "`endpoint`" + ` - (Read-Only) Endpoint address.
+`
+	rs := &schema.ResourceSchema{Blocks: map[string]*schema.Block{
+		"": {Attributes: []schema.Attribute{
+			{Name: "name", Required: true},
+			{Name: "endpoint", Optional: true},
+		}},
+	}}
+
+	// Default rule: allow_inline_read_only is false.
+	results := labelResults(t, src, rs)
+	if hasMsg(results, "is labeled (Read-Only) but is") {
+		t.Errorf("no Read-Only correctness finding expected when allow_inline_read_only is false; got: %+v", results)
 	}
 }
