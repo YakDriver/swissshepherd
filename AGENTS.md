@@ -27,9 +27,9 @@ A linter that cries wolf gets disabled. A missed finding costs less than a wrong
 
 ## Invariants (must)
 
-- **Never guess.** If a heading doesn't resolve to a schema path, the path is in `skip_blocks`, the block is `ConfigUnknown`, or a name isn't a scalar at that path, emit nothing. Don't infer and report.
+- **Never guess.** Don't infer a field's section or label when the schema can't settle it: the heading doesn't resolve to a schema path, the path is in `skip_blocks`, the block is `ConfigUnknown`, or the name isn't a scalar at that path. In those cases emit no placement or label finding. This doesn't suppress coverage: an undocumented field still gets a neutral "is not documented" finding.
 - **Report the real defect.** A finding's suggested fix must never damage correct docs. Example: an argument documented under Attribute Reference gets "move it to Argument Reference", not "remove its (accurate) label". See `docs/rules/argument-attribute-misplacement.md`.
-- **The section determines labels.** Under Argument Reference, every entry carries `(Required)` if the schema says Required, and `(Optional)` otherwise. Under Attribute Reference, entries carry no labels.
+- **The section determines labels.** Under Argument Reference, each entry carries the one schema-correct label: `(Required)` if Required, `(Optional)` if configurable (including Optional+Computed), and `(Read-Only)` if computed-only, which is allowed there only when `allow_inline_read_only = true` (otherwise the fix is to move it). Under Attribute Reference, entries carry no labels.
 - **Output is deterministic.** Never let output, dedup, or signatures depend on Go map iteration order. Iterate `slices.Sorted(maps.Keys(m))`, and sort anything that feeds a comparison. Run twice and diff to confirm. This has caused flapping findings more than once.
 - **Dedup by schema path, never by leaf name.** Sibling blocks often share leaf names (`match`, `fields`, `header`); dedup by leaf silently drops or misattributes findings.
 - **Configurable object-typed fields have unknowable per-field flags.** Require them to be documented, but accept either section. See `docs/rules/object-typed-attributes.md`.
