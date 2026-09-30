@@ -73,7 +73,7 @@ go build -o /tmp/ss-new .
 cd <provider>   # reuse the cached schema; do not pass --refresh-schema
 /tmp/ss-base --config .ci/swissshepherd-full.hcl | LC_ALL=C sort > /tmp/base.txt
 /tmp/ss-new  --config .ci/swissshepherd-full.hcl | LC_ALL=C sort > /tmp/new.txt
-comm -3 /tmp/base.txt /tmp/new.txt   # added (right) / removed (left)
+LC_ALL=C comm -3 /tmp/base.txt /tmp/new.txt   # added (right) / removed (left)
 ```
 
 Also:
@@ -86,4 +86,4 @@ Also:
 
 ## PRs
 
-Keep the title under 70 characters. The body covers: summary, root cause (for bugs), fix, testing, and corpus results (baseline vs. branch, added/removed, weak-config impact). Link issues with `Closes #N`.
+Keep the title under 70 characters. The body covers: summary, root cause (for bugs), fix, and testing. For changes that can alter findings, it also covers corpus results (baseline vs. branch, added/removed, weak-config impact). Link issues with `Closes #N`.
