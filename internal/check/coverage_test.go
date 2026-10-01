@@ -1558,6 +1558,68 @@ func coverageMissingBlockMsgs(t *testing.T, src string, rs *schema.ResourceSchem
 	return msgs
 }
 
+// TestCoverage_UndocumentedSubtreeReportsShallowest: only the shallowest
+// undocumented block in a subtree is reported, with the count of undocumented
+// paths beneath it. Descendants can't be reached from the docs, so the real
+// defect is the missing ancestor section (#77). An ancestor without
+// configurable fields is never reported, so it must not absorb descendants.
+func TestCoverage_UndocumentedSubtreeReportsShallowest(t *testing.T) {
+	t.Parallel()
+
+	opt := func(n string) []schema.Attribute { return []schema.Attribute{{Name: n, Optional: true}} }
+	rs := &schema.ResourceSchema{Blocks: map[string]*schema.Block{
+		"":         {Attributes: []schema.Attribute{{Name: "name", Required: true}}, ChildBlocks: []string{"a", "c"}},
+		"a":        {Attributes: opt("x"), ChildBlocks: []string{"a.b"}},
+		"a.b":      {Attributes: opt("y"), ChildBlocks: []string{"a.b.leaf"}},
+		"a.b.leaf": {Attributes: opt("z")},
+		"c":        {ChildBlocks: []string{"c.d"}}, // container: no configurable fields
+		"c.d":      {Attributes: opt("w"), ChildBlocks: []string{"c.d.leaf"}},
+		"c.d.leaf": {Attributes: opt("z")},
+	}}
+	src := "# Resource: aws_thing\n\n## Argument Reference\n\n* `name` - (Required) Name.\n"
+
+	testCases := map[string]struct {
+		skip []string
+		want []string
+	}{
+		"shallowest undocumented block per subtree": {
+			want: []string{
+				`block "a" is not documented (2 paths beneath it are also undocumented)`,
+				`block "c.d" is not documented (1 path beneath it is also undocumented)`,
+			},
+		},
+		// A skipped ancestor isn't a finding, so it absorbs nothing.
+		"skipped ancestor": {
+			skip: []string{"a"},
+			want: []string{
+				`block "a.b" is not documented (1 path beneath it is also undocumented)`,
+				`block "c.d" is not documented (1 path beneath it is also undocumented)`,
+			},
+		},
+	}
+	for name, tc := range testCases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			d, err := doc.ParseWithTemplates([]byte(src), "aws_thing", labelTemplates)
+			if err != nil {
+				t.Fatal(err)
+			}
+			results := (&check.SchemaDocsRule{IgnoreDeprecated: true, SkipBlocks: tc.skip}).Check(
+				check.CheckContext{Resource: "aws_thing", Schema: rs, Doc: d})
+			var got []string
+			for _, r := range results {
+				if strings.Contains(r.Message, "is not documented") {
+					got = append(got, r.Message)
+				}
+			}
+			slices.Sort(got)
+			if !slices.Equal(got, tc.want) {
+				t.Errorf("missing-block findings = %q\nwant %q", got, tc.want)
+			}
+		})
+	}
+}
+
 // Several undocumented blocks that share a leaf name are each reported under
 // their own path: findings are keyed by path, never by leaf (#77). Before #77 a
 // leaf-keyed dedup kept one representative, and before #65 that representative
@@ -1589,7 +1651,10 @@ func TestCoverage_UndocumentedSiblingBlocksDeterministic(t *testing.T) {
 	// the check many times in one process exercises many orderings.
 	first := coverageMissingBlockMsgs(t, src, rs)
 
-	want := []string{`block "bar.thing" is not documented`, `block "foo.thing" is not documented`}
+	want := []string{
+		`block "bar.thing" is not documented (1 other undocumented path shares the name "thing")`,
+		`block "foo.thing" is not documented (1 other undocumented path shares the name "thing")`,
+	}
 	if !slices.Equal(first, want) {
 		t.Fatalf("missing-block findings = %q, want %q", first, want)
 	}

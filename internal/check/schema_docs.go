@@ -158,6 +158,7 @@ func (r *SchemaDocsRule) checkCoverage(ctx CheckContext) []Result {
 	}
 
 	var results []Result
+	missing := r.undocumentedBlocks(ctx)
 
 	// Findings are keyed by schema path, never by leaf name: same-named blocks
 	// under different parents are different defects (#77). Sorted iteration
@@ -171,10 +172,10 @@ func (r *SchemaDocsRule) checkCoverage(ctx CheckContext) []Result {
 		docBlocks := resolveSections(rs, ctx.Doc, blockPath)
 
 		if len(docBlocks) == 0 {
-			if hasConfigurableAttributes(schemaBlock) {
+			if msg, ok := missing.message(blockPath); ok {
 				results = append(results, Result{
 					Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityError,
-					Message: fmt.Sprintf("block %q is not documented", displayPath(blockPath)),
+					Message: msg,
 					Block:   blockPath,
 				})
 			}
@@ -262,6 +263,71 @@ func (r *SchemaDocsRule) checkCoverage(ctx CheckContext) []Result {
 	results = append(results, r.checkPhantomBlocks(ctx)...)
 
 	return results
+}
+
+// undocumented is the set of schema paths with configurable fields and no
+// section in either reference section.
+type undocumented map[string]bool
+
+func (r *SchemaDocsRule) undocumentedBlocks(ctx CheckContext) undocumented {
+	m := make(undocumented)
+	for p, b := range ctx.Schema.Blocks {
+		if p == "" || slices.Contains(r.skipBlocks(), p) || !hasConfigurableAttributes(b) {
+			continue
+		}
+		if len(resolveSections(ctx.Schema, ctx.Doc, p)) == 0 {
+			m[p] = true
+		}
+	}
+	return m
+}
+
+// message returns the missing-block finding for p, or false when p is beneath
+// another undocumented block. Only the shallowest undocumented block in a
+// subtree is reported: its descendants can't be reached from the docs, so the
+// real defect is the missing ancestor section, and once it exists the next run
+// reports them (docs/rules/coverage-path-resolution.md §6). Ancestors without
+// configurable fields are never reported, so they never absorb descendants.
+// The message carries both counts so no work is hidden.
+func (u undocumented) message(p string) (string, bool) {
+	if !u[p] {
+		return "", false
+	}
+	for a := p; strings.Contains(a, "."); {
+		a = a[:strings.LastIndex(a, ".")]
+		if u[a] {
+			return "", false
+		}
+	}
+	leaf := leafName(p)
+	beneath, sameName := 0, 0
+	for q := range u {
+		if strings.HasPrefix(q, p+".") {
+			beneath++
+		}
+		if q != p && leafName(q) == leaf {
+			sameName++
+		}
+	}
+	msg := fmt.Sprintf("block %q is not documented", displayPath(p))
+	var notes []string
+	if beneath > 0 {
+		notes = append(notes, fmt.Sprintf("%d %s beneath it %s also undocumented", beneath, plural(beneath, "path", "paths"), plural(beneath, "is", "are")))
+	}
+	if sameName > 0 {
+		notes = append(notes, fmt.Sprintf("%d other undocumented %s %s the name %q", sameName, plural(sameName, "path", "paths"), plural(sameName, "shares", "share"), leaf))
+	}
+	if len(notes) > 0 {
+		msg += " (" + strings.Join(notes, "; ") + ")"
+	}
+	return msg, true
+}
+
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return one
+	}
+	return many
 }
 
 // checkPhantomBlocks reports doc blocks in the Argument Reference section
