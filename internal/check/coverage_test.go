@@ -1558,6 +1558,74 @@ func coverageMissingBlockMsgs(t *testing.T, src string, rs *schema.ResourceSchem
 	return msgs
 }
 
+// TestCoverage_OrphanedBullets: headings the parser can't read, and lists
+// introduced by prose, leave their bullets in no section. Coverage reports
+// them so those fields aren't silently unchecked, and suggests a heading when
+// the text names a schema block (#77).
+func TestCoverage_OrphanedBullets(t *testing.T) {
+	t.Parallel()
+
+	rs := &schema.ResourceSchema{Blocks: map[string]*schema.Block{
+		"":                             {Attributes: []schema.Attribute{{Name: "name", Required: true}}, ChildBlocks: []string{"source", "secondary_sources", "action", "error_action"}},
+		"source":                       {Attributes: optional("location"), ChildBlocks: []string{"source.auth"}},
+		"source.auth":                  {Attributes: optional("resource")},
+		"secondary_sources":            {Attributes: optional("location"), ChildBlocks: []string{"secondary_sources.auth"}},
+		"secondary_sources.auth":       {Attributes: optional("resource")},
+		"action":                       {ChildBlocks: []string{"action.cloudwatch_logs"}},
+		"action.cloudwatch_logs":       {Attributes: optional("role_arn")},
+		"error_action":                 {ChildBlocks: []string{"error_action.cloudwatch_logs"}},
+		"error_action.cloudwatch_logs": {Attributes: optional("role_arn")},
+	}}
+	page := func(body string) string {
+		return "## Argument Reference\n\n* `name` - (Required) Name.\n\n" + body
+	}
+
+	testCases := map[string]struct {
+		md   string
+		want []string // orphan findings
+	}{
+		"unparseable heading naming a qualified block": {
+			md:   page("### source: auth\n\n* `resource` - (Optional) Resource.\n"),
+			want: []string{"heading \"source: auth\" in Argument Reference isn't a recognized block heading, so its bullets aren't checked against the schema; use a block heading, e.g. \"`source.auth` Block\""},
+		},
+		"unparseable heading naming no block": {
+			md:   page("### Waiting for Capacity\n\n* `resource` - (Optional) Resource.\n"),
+			want: []string{"heading \"Waiting for Capacity\" in Argument Reference isn't a recognized block heading, so its bullets aren't checked against the schema"},
+		},
+		// The list holds the section's own fields, so it continues the
+		// section: no finding, and the fields stay documented.
+		"prose continuing the section": {
+			md: page("* `source` - (Optional) Source.\n\nThis resource supports the same arguments as `aws_instance`, with the addition of:\n\n* `action` - (Optional) Action.\n"),
+		},
+		"prose naming a leaf shared by several blocks": {
+			md:   page("The `cloudwatch_logs` object takes the following arguments:\n\n* `role_arn` - (Optional) Role.\n"),
+			want: []string{"list introduced by prose (\"The `cloudwatch_logs` object takes the following arguments:\") in Argument Reference has no block heading, so its bullets aren't checked against the schema; use a block heading, e.g. \"`cloudwatch_logs` Block\""},
+		},
+	}
+	for name, tc := range testCases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			d, err := doc.ParseWithTemplates([]byte(tc.md), "aws_thing", doc.HeadingTemplates{"`{Path}` Block", "`{Block}` Block"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			results := (&check.SchemaDocsRule{IgnoreDeprecated: true}).Check(check.CheckContext{Resource: "aws_thing", Schema: rs, Doc: d})
+			var got []string
+			for _, r := range results {
+				if strings.Contains(r.Message, "aren't checked against the schema") {
+					got = append(got, r.Message)
+				}
+				if strings.Contains(r.Message, `"(root)" does not exist`) {
+					t.Errorf("orphaned bullet credited to the root: %s", r.Message)
+				}
+			}
+			if !slices.Equal(got, tc.want) {
+				t.Errorf("orphan findings =\n  %q\nwant\n  %q", got, tc.want)
+			}
+		})
+	}
+}
+
 // TestCoverage_UndocumentedSubtreeReportsShallowest: only the shallowest
 // undocumented block in a subtree is reported, with the count of undocumented
 // paths beneath it. Descendants can't be reached from the docs, so the real

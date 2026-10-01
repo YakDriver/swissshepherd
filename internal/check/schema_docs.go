@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"fmt"
 	"maps"
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -120,6 +121,9 @@ func enabled(b *bool) bool { return b == nil || *b }
 
 func (r *SchemaDocsRule) Check(ctx CheckContext) []Result {
 	var results []Result
+	if ctx.Doc != nil {
+		ctx.Doc = withoutOrphanProse(ctx.Schema, ctx.Doc)
+	}
 
 	if enabled(r.Coverage) {
 		results = append(results, r.checkCoverage(ctx)...)
@@ -261,8 +265,208 @@ func (r *SchemaDocsRule) checkCoverage(ctx CheckContext) []Result {
 	results = append(results, r.checkAttributeCoverage(ctx)...)
 
 	results = append(results, r.checkPhantomBlocks(ctx)...)
+	results = append(results, r.checkOrphans(ctx)...)
 
 	return results
+}
+
+// checkOrphans reports headings and prose lists whose bullets belong to no
+// section, so their fields are compared against nothing (docs/rules/coverage-
+// path-resolution.md §5). When the text names a schema block, the finding
+// suggests a heading for it. The suggestion is advisory: an unparseable
+// heading still documents nothing, so this doesn't loosen headings-only
+// resolution.
+func (r *SchemaDocsRule) checkOrphans(ctx CheckContext) []Result {
+	var results []Result
+	add := func(line int, msg string, names []string) {
+		if key := suggestHeadingKey(ctx.Schema, names); key != "" {
+			msg += fmt.Sprintf("; use a block heading, e.g. %q", doc.RenderHeading(r.pathTemplate(), key))
+		}
+		results = append(results, Result{Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityWarning, Message: msg, Line: line})
+	}
+	for _, o := range ctx.Doc.Orphans {
+		add(o.Line, fmt.Sprintf("heading %q in %s isn't a recognized block heading, so its bullets aren't checked against the schema", o.Text, referenceName(o.InAttributes)), headingNames(o.Text))
+	}
+	for _, pl := range orphanProse(ctx.Schema, ctx.Doc) {
+		add(pl.Line, fmt.Sprintf("list introduced by prose (%q) in %s has no block heading, so its bullets aren't checked against the schema", truncate(pl.Text, 80), referenceName(pl.InAttributes)), backtickedNames(pl.Text))
+	}
+	slices.SortFunc(results, func(a, b Result) int { return a.Line - b.Line })
+	return results
+}
+
+func referenceName(inAttributes bool) string {
+	if inAttributes {
+		return "Attribute Reference"
+	}
+	return "Argument Reference"
+}
+
+// orphanProse returns the prose lead-ins whose list certainly documents some
+// other block: the prose names a schema block in backticks, and none of the
+// list's bullets is a field at any path the section's key could document.
+// Prose that continues the section ("…supports the same arguments as
+// `aws_instance`, with the addition of:") lists the section's own fields and is
+// left alone; deciding which block a mixed list belongs to would be a guess.
+func orphanProse(rs *schema.ResourceSchema, d *doc.Document) []doc.ProseLeadIn {
+	if rs == nil {
+		return nil
+	}
+	var out []doc.ProseLeadIn
+	for _, pl := range d.ProseLeadIns {
+		if len(pl.Bullets) == 0 || suggestHeadingKey(rs, backtickedNames(pl.Text)) == "" {
+			continue
+		}
+		own := false
+		for p, b := range rs.Blocks {
+			if p != pl.Section && (pl.Section == "" || leafName(p) != leafName(pl.Section)) {
+				continue
+			}
+			for _, a := range pl.Bullets {
+				if blockHasField(b, a.Name) {
+					own = true
+				}
+			}
+		}
+		if !own {
+			out = append(out, pl)
+		}
+	}
+	return out
+}
+
+func blockHasField(b *schema.Block, name string) bool {
+	for _, a := range b.Attributes {
+		if a.Name == name {
+			return true
+		}
+	}
+	return slices.ContainsFunc(b.ChildBlocks, func(c string) bool { return leafName(c) == name })
+}
+
+// withoutOrphanProse returns d with the bullets of orphaned prose lists
+// (orphanProse) removed from the sections they were credited to, so every
+// sub-check treats them as belonging to no section, as the parser does for
+// unparseable headings. d itself is not modified.
+func withoutOrphanProse(rs *schema.ResourceSchema, d *doc.Document) *doc.Document {
+	orphans := orphanProse(rs, d)
+	if len(orphans) == 0 {
+		return d
+	}
+	drop := map[bool]map[string]map[int]bool{false: {}, true: {}}
+	for _, pl := range orphans {
+		byKey := drop[pl.InAttributes]
+		if byKey[pl.Section] == nil {
+			byKey[pl.Section] = make(map[int]bool)
+		}
+		for _, a := range pl.Bullets {
+			byKey[pl.Section][a.Line] = true
+		}
+	}
+	filter := func(blocks map[string]*doc.DocBlock, byKey map[string]map[int]bool) map[string]*doc.DocBlock {
+		out := maps.Clone(blocks)
+		for key, lines := range byKey {
+			b := blocks[key]
+			if b == nil {
+				continue
+			}
+			c := *b
+			c.Attributes = slices.DeleteFunc(slices.Clone(b.Attributes), func(a doc.DocAttribute) bool { return lines[a.Line] })
+			out[key] = &c
+		}
+		return out
+	}
+	c := *d
+	c.ArgumentBlocks = filter(d.ArgumentBlocks, drop[false])
+	c.AttributeBlocks = filter(d.AttributeBlocks, drop[true])
+	return &c
+}
+
+// pathTemplate is the first preferred heading style that takes a path, as
+// checkHeadings uses for its suggestions.
+func (r *SchemaDocsRule) pathTemplate() string {
+	for _, t := range r.Preferred {
+		if strings.Contains(t, "{Path}") {
+			return t
+		}
+	}
+	return "`{Path}` Block"
+}
+
+var headingNameRe = regexp.MustCompile(`[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)*`)
+
+// headingNames returns the lower-case identifiers in a heading, backticked or
+// not: "source: auth" -> [source auth].
+func headingNames(text string) []string {
+	return headingNameRe.FindAllString(strings.ToLower(text), -1)
+}
+
+// backtickedNames returns the identifiers quoted in backticks, with array
+// indexers stripped.
+func backtickedNames(text string) []string {
+	var out []string
+	for i, part := range strings.Split(text, "`") {
+		if i%2 == 0 {
+			continue
+		}
+		if name, ok := doc.NormalizeDotPath(part); ok {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
+// suggestHeadingKey picks the heading key for the block that names refer to,
+// or "" when no name is a schema block. Candidates are schema paths ending in
+// one of the names; the ones containing the most of the other names as
+// segments win ("source: auth" prefers source.auth over
+// secondary_sources.auth). A single winner is suggested by leaf when that
+// leaf is unique in the schema, else by full path. Several winners sharing a
+// leaf are suggested by that leaf: one shared section, which coverage then
+// checks path by path.
+func suggestHeadingKey(rs *schema.ResourceSchema, names []string) string {
+	if rs == nil || len(names) == 0 {
+		return ""
+	}
+	best, bestScore := []string(nil), -1
+	for _, p := range slices.Sorted(maps.Keys(rs.Blocks)) {
+		if p == "" {
+			continue
+		}
+		segs := strings.Split(p, ".")
+		for _, n := range names {
+			if p != n && !strings.HasSuffix(p, "."+n) {
+				continue
+			}
+			score := 0
+			for _, other := range names {
+				if other != n && slices.Contains(segs, other) {
+					score++
+				}
+			}
+			switch {
+			case score > bestScore:
+				best, bestScore = []string{p}, score
+			case score == bestScore && !slices.Contains(best, p):
+				best = append(best, p)
+			}
+		}
+	}
+	if len(best) == 0 {
+		return ""
+	}
+	leaf := leafName(best[0])
+	for _, p := range best[1:] {
+		if leafName(p) != leaf {
+			return ""
+		}
+	}
+	if len(best) > 1 {
+		return leaf
+	}
+	if _, unique := uniqueSchemaPathForLeaf(rs, leaf); unique {
+		return leaf
+	}
+	return best[0]
 }
 
 // undocumented is the set of schema paths with configurable fields and no

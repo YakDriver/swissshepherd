@@ -293,3 +293,80 @@ func TestBlocks_UnparseableHeadingOrphansBullets(t *testing.T) {
 		})
 	}
 }
+
+// TestBlocks_ProseLeadInCandidates: after a section's own bullets, a
+// colon-terminated paragraph naming something in backticks may introduce a
+// list for another block. The parser records it with the list's bullets and
+// leaves the bullets in the section; only the schema can say whether they
+// belong to another block (#77).
+func TestBlocks_ProseLeadInCandidates(t *testing.T) {
+	t.Parallel()
+
+	testCases := map[string]struct {
+		body        string
+		wantRoot    []string
+		wantBullets []string // bullets of the recorded candidate; nil for none
+	}{
+		"prose naming another block": {
+			body:        "* `name` - (Required) Name.\n\nThe `cloudwatch_logs` object takes the following arguments:\n\n* `role_arn` - (Required) Role.\n",
+			wantRoot:    []string{"name", "role_arn"},
+			wantBullets: []string{"role_arn"},
+		},
+		"byline before the first list": {
+			body:     "The following arguments are required:\n\n* `name` - (Required) Name.\n",
+			wantRoot: []string{"name"},
+		},
+		"second byline without a block name": {
+			body:     "* `name` - (Required) Name.\n\nThe following arguments are optional:\n\n* `tags` - (Optional) Tags.\n",
+			wantRoot: []string{"name", "tags"},
+		},
+		"prose without a trailing colon": {
+			body:     "* `name` - (Required) Name.\n\nSee `cloudwatch_logs` below.\n\n* `tags` - (Optional) Tags.\n",
+			wantRoot: []string{"name", "tags"},
+		},
+	}
+	for name, tc := range testCases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			d, err := doc.Parse([]byte("# Resource: test\n\n## Argument Reference\n\n"+tc.body), "test")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got []string
+			for _, a := range d.ArgumentBlocks[""].Attributes {
+				got = append(got, a.Name)
+			}
+			if !slices.Equal(got, tc.wantRoot) {
+				t.Errorf("root bullets = %v, want %v", got, tc.wantRoot)
+			}
+			var bullets []string
+			for _, pl := range d.ProseLeadIns {
+				for _, a := range pl.Bullets {
+					bullets = append(bullets, a.Name)
+				}
+			}
+			if !slices.Equal(bullets, tc.wantBullets) {
+				t.Errorf("candidate bullets = %v, want %v", bullets, tc.wantBullets)
+			}
+		})
+	}
+}
+
+// TestBlocks_ProseContinuingCurrentBlockIsNotOrphaned: prose that names the
+// current section's own block continues that section.
+func TestBlocks_ProseContinuingCurrentBlockIsNotOrphaned(t *testing.T) {
+	t.Parallel()
+
+	d, err := doc.Parse([]byte("# Resource: test\n\n## Argument Reference\n\n"+
+		"### `rule` Block\n\n* `a` - (Optional) A.\n\nThe `rule` block also supports:\n\n* `b` - (Optional) B.\n"), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, a := range d.ArgumentBlocks["rule"].Attributes {
+		got = append(got, a.Name)
+	}
+	if !slices.Equal(got, []string{"a", "b"}) || len(d.ProseLeadIns) != 0 {
+		t.Errorf("rule bullets = %v, prose lead-ins = %+v; want [a b] and none", got, d.ProseLeadIns)
+	}
+}
