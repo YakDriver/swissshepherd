@@ -246,9 +246,6 @@ func (r *SchemaDocsRule) checkCoverage(ctx CheckContext) []Result {
 
 		for _, docAttr := range allDocAttrs {
 			if !schemaAttrNames[docAttr.Name] && !slices.Contains(r.phantom(), docAttr.Name) {
-				if existsInSiblingBlock(rs, leafName(blockPath), docAttr.Name) {
-					continue
-				}
 				key := docBlockName + "." + docAttr.Name
 				if reportedExtraAttrs[key] {
 					continue
@@ -1776,28 +1773,6 @@ func resolveSections(rs *schema.ResourceSchema, d *doc.Document, p string) []*do
 		out = append(out, b)
 	}
 	return out
-}
-
-func existsInSiblingBlock(rs *schema.ResourceSchema, leaf, attrName string) bool {
-	for path, block := range rs.Blocks {
-		if leafName(path) != leaf {
-			continue
-		}
-		for _, attr := range block.Attributes {
-			if attr.Name == attrName {
-				return true
-			}
-		}
-		if slices.Contains(block.ChildBlocks, attrName) {
-			return true
-		}
-		for _, child := range block.ChildBlocks {
-			if leafName(child) == attrName {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 func leafName(path string) string {
