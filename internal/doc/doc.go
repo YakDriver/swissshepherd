@@ -351,7 +351,8 @@ func matchTemplate(tmpl, heading string) string {
 type Orphan struct {
 	Line         int
 	Text         string
-	InAttributes bool // in Attribute Reference rather than Argument Reference
+	InAttributes bool           // in Attribute Reference rather than Argument Reference
+	Bullets      []DocAttribute // bullets under the heading, checked only for block-independent style
 }
 
 // ProseLeadIn is a paragraph that may introduce a list for a block other than
@@ -708,6 +709,8 @@ func extractBlocks(tree ast.Node, source []byte, idx *lineIndex, doc *Document, 
 	var listSinceHeading bool
 	// pendingProse is the index in doc.ProseLeadIns whose list comes next, or -1.
 	pendingProse := -1
+	// orphanIdx is the index in doc.Orphans of the heading now in effect, or -1.
+	orphanIdx := -1
 	var currentSection *Section
 	var inArguments, inAttributes bool
 	var sawRequiredByline bool // true between a "required:" byline and the next list
@@ -832,6 +835,7 @@ func extractBlocks(tree ast.Node, source []byte, idx *lineIndex, doc *Document, 
 					doc.Orphans = append(doc.Orphans, Orphan{
 						Line: nodeLineNumber(n, idx), Text: headingText, InAttributes: inAttributes,
 					})
+					orphanIdx = len(doc.Orphans) - 1
 				}
 				if len(blockNames) > 0 {
 					currentBlockName = blockNames[0]
@@ -989,6 +993,9 @@ func extractBlocks(tree ast.Node, source []byte, idx *lineIndex, doc *Document, 
 						block.Attributes = append(block.Attributes, attr)
 						if prose >= 0 {
 							doc.ProseLeadIns[prose].Bullets = append(doc.ProseLeadIns[prose].Bullets, attr)
+						}
+						if orphaned && orphanIdx >= 0 {
+							doc.Orphans[orphanIdx].Bullets = append(doc.Orphans[orphanIdx].Bullets, attr)
 						}
 						// Flag attributes with malformed separator (e.g. `mode`- instead of `mode` -).
 						if hasMalformedSeparator(li, source, attr.Name) {

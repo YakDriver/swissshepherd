@@ -804,6 +804,30 @@ func (r *SchemaDocsRule) checkDescriptions(ctx CheckContext) []Result {
 	var results []Result
 	results = append(results, checkDescriptionBlocks(ctx.Resource, r.Name(), r.prefixes(), ctx.Doc.ArgumentBlocks, seen)...)
 	results = append(results, checkDescriptionBlocks(ctx.Resource, r.Name(), r.prefixes(), ctx.Doc.AttributeBlocks, seen)...)
+
+	// Bullets that belong to no section still get the description check: it
+	// doesn't depend on which block they document. The finding names the
+	// heading or prose instead of a block.
+	check := func(attrs []doc.DocAttribute, where string) {
+		for _, attr := range attrs {
+			for _, prefix := range r.prefixes() {
+				if attr.Description != "" && strings.HasPrefix(attr.Description, prefix) {
+					results = append(results, Result{
+						Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityError,
+						Message: fmt.Sprintf("attribute %q description should not start with %q (%s)", attr.Name, strings.TrimSpace(prefix), where),
+						Line:    attr.Line,
+					})
+					break
+				}
+			}
+		}
+	}
+	for _, o := range ctx.Doc.Orphans {
+		check(o.Bullets, fmt.Sprintf("under heading %q", o.Text))
+	}
+	for _, pl := range orphanProse(ctx.Schema, ctx.Doc) {
+		check(pl.Bullets, fmt.Sprintf("in the list introduced by prose at line %d", pl.Line))
+	}
 	return results
 }
 
