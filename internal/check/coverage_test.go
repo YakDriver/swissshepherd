@@ -4,6 +4,8 @@
 package check_test
 
 import (
+	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"testing"
@@ -1751,4 +1753,415 @@ func TestCoverage_UndocumentedSiblingBlocksDeterministic(t *testing.T) {
 			t.Fatalf("coverage output is nondeterministic across runs:\n run0 = %v\n run%d = %v", first, i, got)
 		}
 	}
+}
+
+// The acceptance cases in docs/rules/coverage-path-resolution.md (#77). Two
+// same-named blocks, z at x.y.z and z at t.u.z:
+//
+//   - case 1: different fields; flag unless each is documented exactly.
+//   - case 2: identical fields; one shared section passes, duplicate
+//     headings are still reported.
+//   - case 3: identical names, but child block a3 differs below; flag.
+//
+// Expectations are stated as severity counts, not message text, so they hold
+// while the messages are being redesigned.
+
+// want is the expected outcome of one acceptance row.
+type want int
+
+const (
+	wantNone     want = iota // no findings at all
+	wantErrors               // at least one error and at least one warning
+	wantError                // at least one error
+	wantWarnOnly             // at least one warning, no errors
+)
+
+func (w want) String() string {
+	return [...]string{"no findings", "errors and a warning", "an error", "warnings only"}[w]
+}
+
+// section is one H3 heading in Argument Reference and the fields it lists.
+type section struct {
+	heading string
+	fields  []string
+}
+
+func renderAcceptanceDoc(root []string, sections []section) string {
+	var b strings.Builder
+	b.WriteString("## Argument Reference\n\nThis resource supports the following arguments:\n\n")
+	for _, f := range root {
+		fmt.Fprintf(&b, "* `%s` - (Optional) %s.\n", f, f)
+	}
+	for _, s := range sections {
+		fmt.Fprintf(&b, "\n### `%s` Block\n\n", s.heading)
+		for _, f := range s.fields {
+			fmt.Fprintf(&b, "* `%s` - (Optional) %s.\n", f, f)
+		}
+	}
+	b.WriteString("\n## Attribute Reference\n\nThis resource exports no additional attributes.\n")
+	return b.String()
+}
+
+func optional(names ...string) []schema.Attribute {
+	attrs := make([]schema.Attribute, 0, len(names))
+	for _, n := range names {
+		attrs = append(attrs, schema.Attribute{Name: n, Optional: true})
+	}
+	return attrs
+}
+
+// twoZSchema builds root -> x -> x.y -> x.y.z and root -> t -> t.u -> t.u.z,
+// with the given attributes on each z and optional extra blocks below them.
+func twoZSchema(xyz, tuz *schema.Block, extra map[string]*schema.Block) *schema.ResourceSchema {
+	blocks := map[string]*schema.Block{
+		"":      {ChildBlocks: []string{"x", "t"}},
+		"x":     {ChildBlocks: []string{"x.y"}},
+		"x.y":   {ChildBlocks: []string{"x.y.z"}},
+		"t":     {ChildBlocks: []string{"t.u"}},
+		"t.u":   {ChildBlocks: []string{"t.u.z"}},
+		"x.y.z": xyz,
+		"t.u.z": tuz,
+	}
+	maps.Copy(blocks, extra)
+	return &schema.ResourceSchema{Name: "aws_test", Blocks: blocks}
+}
+
+// twoZParents documents the ancestors of both z blocks, each under its exact
+// path, so every row differs only in how z (and its children) are documented.
+var twoZParents = []section{
+	{heading: "x", fields: []string{"y"}},
+	{heading: "x.y", fields: []string{"z"}},
+	{heading: "t", fields: []string{"u"}},
+	{heading: "t.u", fields: []string{"z"}},
+}
+
+func runAcceptance(t *testing.T, rs *schema.ResourceSchema, root []string, sections []section) []check.Result {
+	t.Helper()
+	d, err := doc.Parse([]byte(renderAcceptanceDoc(root, sections)), rs.Name)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	off := false
+	rule := &check.SchemaDocsRule{
+		IgnoreDeprecated: true,
+		Ordering:         &off,
+		Description:      &off,
+		Format:           &off,
+		Byline:           &off,
+		// The shared-section finding moves from `heading` into `coverage`
+		// (design §6), so these cases must pass or fail on coverage alone.
+		Heading: &off,
+	}
+	return rule.Check(check.CheckContext{Resource: rs.Name, Schema: rs, Doc: d})
+}
+
+func assertWant(t *testing.T, results []check.Result, w want) {
+	t.Helper()
+	var errs, warns []string
+	for _, r := range results {
+		if r.Severity == check.SeverityError {
+			errs = append(errs, r.Message)
+		} else {
+			warns = append(warns, r.Message)
+		}
+	}
+	ok := false
+	switch w {
+	case wantNone:
+		ok = len(errs) == 0 && len(warns) == 0
+	case wantErrors:
+		ok = len(errs) > 0 && len(warns) > 0
+	case wantError:
+		ok = len(errs) > 0
+	case wantWarnOnly:
+		ok = len(errs) == 0 && len(warns) > 0
+	}
+	if !ok {
+		t.Errorf("want %s; got %d error(s), %d warning(s)\n  errors:   %s\n  warnings: %s",
+			w, len(errs), len(warns), strings.Join(errs, "\n            "), strings.Join(warns, "\n            "))
+	}
+}
+
+func withParents(rows ...section) []section {
+	return append(slices.Clone(twoZParents), rows...)
+}
+
+// reversedZ returns sections with the z occurrences (heading "z") in reverse
+// order, leaving every other section in place. Duplicate headings must not be
+// resolved by position (design §5), so every result has to survive this.
+func reversedZ(sections []section) []section {
+	out := slices.Clone(sections)
+	var idx []int
+	for i, s := range out {
+		if s.heading == "z" {
+			idx = append(idx, i)
+		}
+	}
+	for i, j := 0, len(idx)-1; i < j; i, j = i+1, j-1 {
+		out[idx[i]], out[idx[j]] = out[idx[j]], out[idx[i]]
+	}
+	return out
+}
+
+func hasDuplicateZ(sections []section) bool {
+	n := 0
+	for _, s := range sections {
+		if s.heading == "z" {
+			n++
+		}
+	}
+	return n > 1
+}
+
+func TestCoverageAcceptance_case1DifferentFields(t *testing.T) {
+	t.Parallel()
+
+	rs := twoZSchema(
+		&schema.Block{Attributes: optional("a1", "a2", "a3")},
+		&schema.Block{Attributes: optional("a3", "a4", "a5")},
+		nil,
+	)
+
+	testCases := map[string]struct {
+		sections []section
+		want     want
+	}{
+		"one z section listing the union": {
+			sections: withParents(section{heading: "z", fields: []string{"a1", "a2", "a3", "a4", "a5"}}),
+			want:     wantErrors,
+		},
+		"one z section listing only x.y.z's fields": {
+			sections: withParents(section{heading: "z", fields: []string{"a1", "a2", "a3"}}),
+			want:     wantErrors,
+		},
+		"qualified sections, each exact": {
+			sections: withParents(
+				section{heading: "x.y.z", fields: []string{"a1", "a2", "a3"}},
+				section{heading: "t.u.z", fields: []string{"a3", "a4", "a5"}},
+			),
+			want: wantNone,
+		},
+		"two z headings, each exact for one path": {
+			sections: withParents(
+				section{heading: "z", fields: []string{"a1", "a2", "a3"}},
+				section{heading: "z", fields: []string{"a3", "a4", "a5"}},
+			),
+			want: wantWarnOnly,
+		},
+		"two z headings, second fits no path": {
+			sections: withParents(
+				section{heading: "z", fields: []string{"a1", "a2", "a3"}},
+				section{heading: "z", fields: []string{"a1", "a2", "a3", "a4"}},
+			),
+			want: wantError,
+		},
+		"two z headings, both x.y.z's fields": {
+			sections: withParents(
+				section{heading: "z", fields: []string{"a1", "a2", "a3"}},
+				section{heading: "z", fields: []string{"a1", "a2", "a3"}},
+			),
+			want: wantError,
+		},
+	}
+
+	for name, tc := range testCases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			assertWant(t, runAcceptance(t, rs, []string{"t", "x"}, tc.sections), tc.want)
+		})
+		if !hasDuplicateZ(tc.sections) {
+			continue
+		}
+		t.Run(name+" (z headings reversed)", func(t *testing.T) {
+			t.Parallel()
+			assertWant(t, runAcceptance(t, rs, []string{"t", "x"}, reversedZ(tc.sections)), tc.want)
+		})
+	}
+}
+
+func TestCoverageAcceptance_case2IdenticalFields(t *testing.T) {
+	t.Parallel()
+
+	rs := twoZSchema(
+		&schema.Block{Attributes: optional("a1", "a2", "a3")},
+		&schema.Block{Attributes: optional("a1", "a2", "a3")},
+		nil,
+	)
+
+	testCases := map[string]struct {
+		sections []section
+		want     want
+	}{
+		"one z section": {
+			sections: withParents(section{heading: "z", fields: []string{"a1", "a2", "a3"}}),
+			want:     wantNone,
+		},
+		"qualified sections": {
+			sections: withParents(
+				section{heading: "x.y.z", fields: []string{"a1", "a2", "a3"}},
+				section{heading: "t.u.z", fields: []string{"a1", "a2", "a3"}},
+			),
+			want: wantNone,
+		},
+		"two z headings, second fits no path": {
+			sections: withParents(
+				section{heading: "z", fields: []string{"a1", "a2", "a3"}},
+				section{heading: "z", fields: []string{"a1", "a2", "a3", "a4"}},
+			),
+			want: wantError,
+		},
+		// A duplicated key is always reported, even when every occurrence fits
+		// every path: a reader can't tell which block each heading documents.
+		"two z headings, both exact": {
+			sections: withParents(
+				section{heading: "z", fields: []string{"a1", "a2", "a3"}},
+				section{heading: "z", fields: []string{"a1", "a2", "a3"}},
+			),
+			want: wantWarnOnly,
+		},
+	}
+
+	for name, tc := range testCases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			assertWant(t, runAcceptance(t, rs, []string{"t", "x"}, tc.sections), tc.want)
+		})
+		if !hasDuplicateZ(tc.sections) {
+			continue
+		}
+		t.Run(name+" (z headings reversed)", func(t *testing.T) {
+			t.Parallel()
+			assertWant(t, runAcceptance(t, rs, []string{"t", "x"}, reversedZ(tc.sections)), tc.want)
+		})
+	}
+}
+
+func TestCoverageAcceptance_case3DifferentChildren(t *testing.T) {
+	t.Parallel()
+
+	// z has a1, a2, and child block a3 at both paths. differs controls whether
+	// a3's contents differ below (b1 vs b2) or match (b1 at both).
+	schemaFor := func(differs bool) *schema.ResourceSchema {
+		tuA3 := optional("b2")
+		if !differs {
+			tuA3 = optional("b1")
+		}
+		return twoZSchema(
+			&schema.Block{Attributes: optional("a1", "a2"), ChildBlocks: []string{"x.y.z.a3"}},
+			&schema.Block{Attributes: optional("a1", "a2"), ChildBlocks: []string{"t.u.z.a3"}},
+			map[string]*schema.Block{
+				"x.y.z.a3": {Attributes: optional("b1")},
+				"t.u.z.a3": {Attributes: tuA3},
+			},
+		)
+	}
+	zFields := []string{"a1", "a2", "a3"}
+
+	testCases := map[string]struct {
+		differs  bool
+		sections []section
+		want     want
+	}{
+		"one z section, one a3 section listing b1": {
+			differs: true,
+			sections: withParents(
+				section{heading: "z", fields: zFields},
+				section{heading: "a3", fields: []string{"b1"}},
+			),
+			want: wantErrors,
+		},
+		// The row a same-level comparison misses: every section's fields are
+		// correct, but the shared z section's a3 bullet can lead to only one
+		// version of a3.
+		"one z section, qualified a3 sections": {
+			differs: true,
+			sections: withParents(
+				section{heading: "z", fields: zFields},
+				section{heading: "x.y.z.a3", fields: []string{"b1"}},
+				section{heading: "t.u.z.a3", fields: []string{"b2"}},
+			),
+			want: wantWarnOnly,
+		},
+		"everything qualified": {
+			differs: true,
+			sections: withParents(
+				section{heading: "x.y.z", fields: zFields},
+				section{heading: "t.u.z", fields: zFields},
+				section{heading: "x.y.z.a3", fields: []string{"b1"}},
+				section{heading: "t.u.z.a3", fields: []string{"b2"}},
+			),
+			want: wantNone,
+		},
+		"two z headings, qualified a3 sections": {
+			differs: true,
+			sections: withParents(
+				section{heading: "z", fields: zFields},
+				section{heading: "z", fields: zFields},
+				section{heading: "x.y.z.a3", fields: []string{"b1"}},
+				section{heading: "t.u.z.a3", fields: []string{"b2"}},
+			),
+			want: wantWarnOnly,
+		},
+		// Negative twin: identical at every depth.
+		"one z section, one a3 section, a3 identical at both paths": {
+			differs: false,
+			sections: withParents(
+				section{heading: "z", fields: zFields},
+				section{heading: "a3", fields: []string{"b1"}},
+			),
+			want: wantNone,
+		},
+	}
+
+	for name, tc := range testCases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			assertWant(t, runAcceptance(t, schemaFor(tc.differs), []string{"t", "x"}, tc.sections), tc.want)
+		})
+		if !hasDuplicateZ(tc.sections) {
+			continue
+		}
+		t.Run(name+" (z headings reversed)", func(t *testing.T) {
+			t.Parallel()
+			assertWant(t, runAcceptance(t, schemaFor(tc.differs), []string{"t", "x"}, reversedZ(tc.sections)), tc.want)
+		})
+	}
+}
+
+// TestCoverageAcceptance_nonTransitive guards the evaluation strategy in
+// design §6: agreement between served paths isn't transitive, so comparing
+// each path to one representative misses conflicts. Child block k of a shared
+// p section has field x as Optional+Computed at a.p.k (home: either), absent
+// at b.p.k, and Optional at c.p.k (home: Argument Reference). a agrees with b
+// and with c, but b and c conflict. Every k section is qualified and correct,
+// so only the shared p section's disjunct 4 can report it.
+func TestCoverageAcceptance_nonTransitive(t *testing.T) {
+	t.Parallel()
+
+	rs := &schema.ResourceSchema{
+		Name: "aws_test",
+		Blocks: map[string]*schema.Block{
+			"":      {ChildBlocks: []string{"a", "b", "c"}},
+			"a":     {ChildBlocks: []string{"a.p"}},
+			"b":     {ChildBlocks: []string{"b.p"}},
+			"c":     {ChildBlocks: []string{"c.p"}},
+			"a.p":   {ChildBlocks: []string{"a.p.k"}},
+			"b.p":   {ChildBlocks: []string{"b.p.k"}},
+			"c.p":   {ChildBlocks: []string{"c.p.k"}},
+			"a.p.k": {Attributes: []schema.Attribute{{Name: "w", Optional: true}, {Name: "x", Optional: true, Computed: true}}},
+			"b.p.k": {Attributes: optional("w")},
+			"c.p.k": {Attributes: optional("w", "x")},
+		},
+	}
+	sections := []section{
+		{heading: "a", fields: []string{"p"}},
+		{heading: "b", fields: []string{"p"}},
+		{heading: "c", fields: []string{"p"}},
+		{heading: "p", fields: []string{"k"}},
+		{heading: "a.p.k", fields: []string{"w", "x"}},
+		{heading: "b.p.k", fields: []string{"w"}},
+		{heading: "c.p.k", fields: []string{"w", "x"}},
+	}
+
+	assertWant(t, runAcceptance(t, rs, []string{"a", "b", "c"}, sections), wantWarnOnly)
 }
