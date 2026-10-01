@@ -279,8 +279,77 @@ func (r *SchemaDocsRule) checkCoverage(ctx CheckContext) []Result {
 	results = append(results, r.checkPhantomBlocks(ctx)...)
 	results = append(results, r.checkOrphans(ctx)...)
 	results = append(results, r.checkDuplicateHeadings(ctx)...)
+	results = append(results, r.checkUnresolvedSections(ctx)...)
 
 	return results
+}
+
+// checkUnresolvedSections reports parsed headings that no schema path
+// resolves to, so their fields are compared against nothing
+// (docs/rules/coverage-path-resolution.md §5). Excluded, to avoid reporting a
+// heading twice: Argument Reference headings whose name is no schema block,
+// which checkPhantomBlocks reports, and Attribute Reference headings naming an
+// object-typed attribute, which checkPhantomBlocks deliberately allows.
+func (r *SchemaDocsRule) checkUnresolvedSections(ctx CheckContext) []Result {
+	rs := ctx.Schema
+	if rs == nil {
+		return nil
+	}
+	leaves := make(map[string]bool, len(rs.Blocks))
+	for p := range rs.Blocks {
+		if p != "" {
+			leaves[leafName(p)] = true
+		}
+	}
+	objectLeaves := nestedAttributeLeaves(rs)
+
+	var results []Result
+	for _, inAttrs := range []bool{false, true} {
+		blocks := ctx.Doc.ArgumentBlocks
+		if inAttrs {
+			blocks = ctx.Doc.AttributeBlocks
+		}
+		served := make(map[*doc.DocBlock]bool)
+		for p := range rs.Blocks {
+			if b := resolveSection(rs, blocks, p); b != nil {
+				served[b] = true
+			}
+		}
+		for _, key := range slices.Sorted(maps.Keys(blocks)) {
+			b := blocks[key]
+			// A heading with no bullets hides no unchecked fields.
+			if key == "" || b.Heading == "" || served[b] || (len(b.Attributes) == 0 && len(b.MalformedAttributes) == 0) {
+				continue
+			}
+			leaf := leafName(key)
+			if objectLeaves[leaf] || (!inAttrs && !leaves[leaf]) {
+				continue
+			}
+			why := "no schema block has that name"
+			if leaves[leaf] {
+				why = fmt.Sprintf("every block named %q resolves to another heading", leaf)
+				if strings.Contains(key, ".") && !keyMatchesSomePath(rs, key) {
+					why = fmt.Sprintf("no block named %q sits under %q", leaf, key[:strings.LastIndex(key, ".")])
+				}
+			}
+			results = append(results, Result{
+				Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityWarning, Line: b.HeadingLine,
+				Message: fmt.Sprintf("heading %q in %s documents no block (%s), so its fields aren't checked against the schema", b.Heading, referenceName(inAttrs), why),
+			})
+		}
+	}
+	return results
+}
+
+// keyMatchesSomePath reports whether key is a candidate heading key for any
+// schema path.
+func keyMatchesSomePath(rs *schema.ResourceSchema, key string) bool {
+	for p := range rs.Blocks {
+		if p != "" && slices.Contains(sectionKeyCandidates(p), key) {
+			return true
+		}
+	}
+	return false
 }
 
 // duplicated reports whether a section's key has more than one heading.

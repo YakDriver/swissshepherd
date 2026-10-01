@@ -1722,6 +1722,76 @@ func TestCoverage_DuplicateHeadingFitSortsDifferences(t *testing.T) {
 	}
 }
 
+// TestCoverage_UnresolvedSections: a parsed heading that no schema path
+// resolves to has its fields compared against nothing, so it's reported
+// (#77). Not reported: headings with no bullets, Argument Reference headings
+// checkPhantomBlocks already reports, and Attribute Reference headings naming
+// object-typed attributes.
+func TestCoverage_UnresolvedSections(t *testing.T) {
+	t.Parallel()
+
+	rs := &schema.ResourceSchema{Blocks: map[string]*schema.Block{
+		"": {Attributes: []schema.Attribute{
+			{Name: "name", Required: true},
+			{Name: "endpoints", Computed: true, Children: []schema.Attribute{{Name: "dns_name", Computed: true}}},
+		}, ChildBlocks: []string{"a", "b"}},
+		"a":       {Attributes: optional("x"), ChildBlocks: []string{"a.match"}},
+		"a.match": {Attributes: optional("y")},
+		"b":       {Attributes: optional("x")},
+	}}
+	page := func(args, attrs string) string {
+		return "## Argument Reference\n\n* `name` - (Required) Name.\n* `a` - (Optional) A.\n* `b` - (Optional) B.\n\n" + args +
+			"## Attribute Reference\n\n" + attrs
+	}
+	const exact = "### `a` Block\n\n* `x` - (Optional) X.\n* `match` - (Optional) M.\n\n### `a.match` Block\n\n* `y` - (Optional) Y.\n\n### `b` Block\n\n* `x` - (Optional) X.\n\n"
+
+	testCases := map[string]struct {
+		md   string
+		want []string
+	}{
+		"titled heading in Attribute Reference": {
+			md:   page(exact, "### Disk IOPS\n\n* `mode` - Mode.\n"),
+			want: []string{`heading "Disk IOPS" in Attribute Reference documents no block (no schema block has that name), so its fields aren't checked against the schema`},
+		},
+		"heading with no bullets": {
+			md: page(exact, "### GuardDuty Cleanup Permissions\n\nSome prose.\n"),
+		},
+		"bare leaf whose only path has a more specific heading": {
+			md:   page(exact+"### `match` Block\n\n* `y` - (Optional) Y.\n\n", ""),
+			want: []string{`heading "match Block" in Argument Reference documents no block (every block named "match" resolves to another heading), so its fields aren't checked against the schema`},
+		},
+		"dotted key with no such path": {
+			md:   page(exact+"### `b.match` Block\n\n* `y` - (Optional) Y.\n\n", ""),
+			want: []string{`heading "b.match Block" in Argument Reference documents no block (no block named "match" sits under "b"), so its fields aren't checked against the schema`},
+		},
+		"object-typed attribute heading in Attribute Reference": {
+			md: page(exact, "### `endpoints` Block\n\n* `dns_name` - DNS name.\n"),
+		},
+		"Argument Reference heading with no schema block (checkPhantomBlocks reports it)": {
+			md: page(exact+"### `nope` Block\n\n* `z` - (Optional) Z.\n\n", ""),
+		},
+	}
+	for name, tc := range testCases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			d, err := doc.ParseWithTemplates([]byte(tc.md), "aws_thing", doc.HeadingTemplates{"`{Path}` Block", "`{Block}` Block", "{Title}"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			results := (&check.SchemaDocsRule{IgnoreDeprecated: true}).Check(check.CheckContext{Resource: "aws_thing", Schema: rs, Doc: d})
+			var got []string
+			for _, r := range results {
+				if strings.Contains(r.Message, "documents no block (") {
+					got = append(got, r.Message)
+				}
+			}
+			if !slices.Equal(got, tc.want) {
+				t.Errorf("unresolved findings =\n  %q\nwant\n  %q", got, tc.want)
+			}
+		})
+	}
+}
+
 // TestCoverage_UndocumentedSubtreeReportsShallowest: only the shallowest
 // undocumented block in a subtree is reported, with the count of undocumented
 // paths beneath it. Descendants can't be reached from the docs, so the real
