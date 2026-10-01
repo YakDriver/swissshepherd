@@ -21,7 +21,7 @@ func TestBlocks_CombinedHeading_SharedAttributes(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	blocks := d.Blocks()
+	blocks := d.ArgumentBlocks
 	for _, name := range []string{"publish_auth_mode", "subscribe_auth_mode"} {
 		b, ok := blocks[name]
 		if !ok {
@@ -52,7 +52,7 @@ func TestBlocks_CombinedHeading_NestedUnderParent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	blocks := d.Blocks()
+	blocks := d.ArgumentBlocks
 
 	// handler_configs should have on_publish and on_subscribe as attributes
 	hc := blocks["handler_configs"]
@@ -105,7 +105,7 @@ func TestBlocks_SingleWordTitleCase_NotSwallowedByPreviousBlock(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	blocks := d.Blocks()
+	blocks := d.ArgumentBlocks
 
 	// lambda_conflict_handler_config must NOT contain name/runtime_version
 	lc := blocks["lambda_conflict_handler_config"]
@@ -147,7 +147,7 @@ func TestBlocks_CombinedHeading_ThreeBlocks(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	blocks := d.Blocks()
+	blocks := d.ArgumentBlocks
 	for _, name := range []string{"a", "b", "c"} {
 		b, ok := blocks[name]
 		if !ok {
@@ -177,7 +177,7 @@ func TestBlocks_CombinedHeading_DoesNotPolluteNextBlock(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	blocks := d.Blocks()
+	blocks := d.ArgumentBlocks
 
 	// x and y should have "shared" but NOT "unique"
 	for _, name := range []string{"x", "y"} {
@@ -224,7 +224,7 @@ func TestBlocks_UsageBasedPricingTerm(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	blocks := d.Blocks()
+	blocks := d.AttributeBlocks
 
 	// Validate usage_based_pricing_term block
 	usageTermBlock := blocks["usage_based_pricing_term"]

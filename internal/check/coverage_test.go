@@ -1383,15 +1383,17 @@ func TestSchemaDocsRule_NoFalseComputedMisplacement(t *testing.T) {
 	}
 }
 
-// TestSharedSubsection_SiblingsResolve: two structurally-identical sibling
-// blocks documented once under a shared subsection, linked from both bullets,
-// each satisfy Read-Only coverage (issue #51).
-func TestSharedSubsection_SiblingsResolve(t *testing.T) {
+// TestSharedSubsection_HeadingsOnly: sibling blocks may share one
+// subsection, but only through its heading. A link from each sibling bullet
+// to a differently named subsection doesn't document the siblings, because a
+// reader at that subsection can't tell which blocks it covers
+// (docs/rules/coverage-path-resolution.md §4). This reverses issue #51's
+// link-following. A combined heading naming every sibling does share.
+func TestSharedSubsection_HeadingsOnly(t *testing.T) {
 	t.Parallel()
 
-	rs := &schema.ResourceSchema{
-		Name: "aws_test",
-		Blocks: map[string]*schema.Block{
+	endpoints := func() *schema.ResourceSchema {
+		return &schema.ResourceSchema{Name: "aws_test", Blocks: map[string]*schema.Block{
 			"": {Path: "", Attributes: []schema.Attribute{
 				{Name: "endpoints", Computed: true, Children: []schema.Attribute{
 					{Name: "management", Computed: true, Children: []schema.Attribute{
@@ -1404,63 +1406,83 @@ func TestSharedSubsection_SiblingsResolve(t *testing.T) {
 					}},
 				}},
 			}},
-		},
+		}}
 	}
-	schema.ExpandObjectAttributes(&schema.ProviderSchema{
-		DataSources: map[string]*schema.ResourceSchema{"aws_test": rs},
-	})
-
-	md := "## Attribute Reference\n\n" +
-		"* `endpoints` - Endpoints. See [`endpoints`](#endpoints-block) below.\n\n" +
-		"### `endpoints` Block\n\n" +
-		"* `intercluster` - Endpoint. See [Endpoint](#endpoint).\n" +
-		"* `management` - Endpoint. See [Endpoint](#endpoint).\n\n" +
-		"#### Endpoint\n\n" +
-		"* `dns_name` - DNS name.\n" +
-		"* `ip_addresses` - IP addresses.\n"
-
-	d, err := doc.ParseWithOptions([]byte(md), "aws_test", doc.DefaultHeadingTemplates(), doc.ParseOptions{CaptureNestedAttributes: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	results := (&check.SchemaDocsRule{}).Check(check.CheckContext{Resource: "aws_test", Schema: rs, Doc: d})
-	if hasMessage(results, "should be documented") {
-		t.Errorf("shared subsection should satisfy coverage for both siblings, got:\n  %s", joinMessages(results))
-	}
-}
-
-// TestSharedSubsection_DifferentlyNamedSiblings: siblings with different names
-// sharing one subsection (available_labels/consumed_labels -> Labels), the
-// wafv2 variant from issue #51's comment.
-func TestSharedSubsection_DifferentlyNamedSiblings(t *testing.T) {
-	t.Parallel()
-
-	rs := &schema.ResourceSchema{
-		Name: "aws_test",
-		Blocks: map[string]*schema.Block{
+	labels := func() *schema.ResourceSchema {
+		return &schema.ResourceSchema{Name: "aws_test", Blocks: map[string]*schema.Block{
 			"": {Path: "", Attributes: []schema.Attribute{
 				{Name: "available_labels", Computed: true, Children: []schema.Attribute{{Name: "name", Computed: true}}},
 				{Name: "consumed_labels", Computed: true, Children: []schema.Attribute{{Name: "name", Computed: true}}},
 			}},
+		}}
+	}
+	endpointsDoc := func(heading string) string {
+		return "## Attribute Reference\n\n" +
+			"* `endpoints` - Endpoints. See [`endpoints`](#endpoints-block) below.\n\n" +
+			"### `endpoints` Block\n\n" +
+			"* `intercluster` - Endpoint. See [Endpoint](#endpoint).\n" +
+			"* `management` - Endpoint. See [Endpoint](#endpoint).\n\n" +
+			"#### " + heading + "\n\n" +
+			"* `dns_name` - DNS name.\n" +
+			"* `ip_addresses` - IP addresses.\n"
+	}
+	labelsDoc := func(heading string) string {
+		return "## Attribute Reference\n\n" +
+			"* `available_labels` - Labels. See [Labels](#labels) below.\n" +
+			"* `consumed_labels` - Labels. See [Labels](#labels) below.\n\n" +
+			"### " + heading + "\n\n" +
+			"* `name` - Label name.\n"
+	}
+
+	testCases := map[string]struct {
+		schema     func() *schema.ResourceSchema
+		md         string
+		wantMisses []string // paths reported as missing Read-Only fields
+	}{
+		"same-named siblings, linked to a differently named subsection": {
+			schema:     endpoints,
+			md:         endpointsDoc("Endpoint"),
+			wantMisses: []string{"endpoints.intercluster", "endpoints.management"},
+		},
+		"same-named siblings, combined heading": {
+			schema: endpoints,
+			md:     endpointsDoc("`intercluster` and `management`"),
+		},
+		"differently named siblings, linked to a shared subsection": {
+			schema:     labels,
+			md:         labelsDoc("Labels"),
+			wantMisses: []string{"available_labels", "consumed_labels"},
+		},
+		"differently named siblings, combined heading": {
+			schema: labels,
+			md:     labelsDoc("`available_labels` and `consumed_labels`"),
 		},
 	}
-	schema.ExpandObjectAttributes(&schema.ProviderSchema{
-		DataSources: map[string]*schema.ResourceSchema{"aws_test": rs},
-	})
 
-	md := "## Attribute Reference\n\n" +
-		"* `available_labels` - Labels. See [Labels](#labels) below.\n" +
-		"* `consumed_labels` - Labels. See [Labels](#labels) below.\n\n" +
-		"### Labels\n\n" +
-		"* `name` - Label name.\n"
-
-	d, err := doc.ParseWithOptions([]byte(md), "aws_test", doc.DefaultHeadingTemplates(), doc.ParseOptions{CaptureNestedAttributes: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	results := (&check.SchemaDocsRule{}).Check(check.CheckContext{Resource: "aws_test", Schema: rs, Doc: d})
-	if hasMessage(results, "should be documented") {
-		t.Errorf("shared Labels subsection should satisfy coverage for both siblings, got:\n  %s", joinMessages(results))
+	for name, tc := range testCases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			rs := tc.schema()
+			schema.ExpandObjectAttributes(&schema.ProviderSchema{
+				DataSources: map[string]*schema.ResourceSchema{"aws_test": rs},
+			})
+			d, err := doc.ParseWithOptions([]byte(tc.md), "aws_test", doc.DefaultHeadingTemplates(), doc.ParseOptions{CaptureNestedAttributes: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			results := (&check.SchemaDocsRule{}).Check(check.CheckContext{Resource: "aws_test", Schema: rs, Doc: d})
+			var got []string
+			for _, r := range results {
+				if strings.Contains(r.Message, "should be documented") {
+					got = append(got, r.Block)
+				}
+			}
+			slices.Sort(got)
+			got = slices.Compact(got)
+			if !slices.Equal(got, tc.wantMisses) {
+				t.Errorf("paths missing Read-Only fields = %v, want %v\n  %s", got, tc.wantMisses, joinMessages(results))
+			}
+		})
 	}
 }
 

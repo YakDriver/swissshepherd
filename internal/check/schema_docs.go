@@ -174,7 +174,7 @@ func (r *SchemaDocsRule) checkCoverage(ctx CheckContext) []Result {
 		}
 
 		docBlockName := leafName(blockPath)
-		docBlocks := findAllDocBlocksIn(ctx.Doc.Blocks(), docBlockName, blockPath, nil)
+		docBlocks := resolveSections(rs, ctx.Doc, blockPath)
 
 		if len(docBlocks) == 0 {
 			if hasConfigurableAttributes(schemaBlock) {
@@ -296,9 +296,8 @@ func (r *SchemaDocsRule) checkCoverage(ctx CheckContext) []Result {
 // false positives on standard provider doc patterns.
 //
 // A doc block name matches the schema if any schema block path has the
-// same leaf name. (Matching by leaf alone is consistent with how the
-// rest of the rule resolves doc blocks against the schema, including
-// findDocBlock and existsInSiblingBlock.)
+// same leaf name. (resolveSection's candidate keys always end in the leaf,
+// so a heading whose leaf matches no schema block can't document anything.)
 func (r *SchemaDocsRule) checkPhantomBlocks(ctx CheckContext) []Result {
 	if ctx.Schema == nil {
 		return nil
@@ -409,8 +408,8 @@ func (r *SchemaDocsRule) checkAttributeCoverage(ctx CheckContext) []Result {
 			continue
 		}
 
-		argDocs := findAllDocBlocksIn(ctx.Doc.ArgumentBlocks, leafName(blockPath), blockPath, ctx.Doc.BlockAnchors)
-		attrDocs := findAllDocBlocksIn(ctx.Doc.AttributeBlocks, leafName(blockPath), blockPath, ctx.Doc.BlockAnchors)
+		argDoc := resolveSection(ctx.Schema, ctx.Doc.ArgumentBlocks, blockPath)
+		attrDoc := resolveSection(ctx.Schema, ctx.Doc.AttributeBlocks, blockPath)
 
 		for _, attr := range schemaBlock.Attributes {
 			// Only Read-Only (computed-only) attributes are covered here.
@@ -425,8 +424,8 @@ func (r *SchemaDocsRule) checkAttributeCoverage(ctx CheckContext) []Result {
 				continue
 			}
 
-			inAttrs := anyDocBlockHasAttr(attrDocs, attr.Name)
-			inArgs := anyDocBlockHasAttr(argDocs, attr.Name)
+			inAttrs := docBlockHasAttr(attrDoc, attr.Name)
+			inArgs := docBlockHasAttr(argDoc, attr.Name)
 
 			// Documented in Attribute Reference always satisfies the rule.
 			// Documented inline in Argument Reference satisfies the rule
@@ -478,15 +477,6 @@ func docBlockHasAttr(b *doc.DocBlock, name string) bool {
 	}
 	for _, a := range b.Attributes {
 		if a.Name == name {
-			return true
-		}
-	}
-	return false
-}
-
-func anyDocBlockHasAttr(blocks []*doc.DocBlock, name string) bool {
-	for _, b := range blocks {
-		if docBlockHasAttr(b, name) {
 			return true
 		}
 	}
@@ -632,7 +622,7 @@ func (r *SchemaDocsRule) checkHeadings(ctx CheckContext) []Result {
 			// heading can be in a perfectly preferred style and still
 			// collide with multiple schema blocks sharing its leaf. The
 			// only safe disambiguator is a doc key that resolves to
-			// exactly one schema block under findAllDocBlocksIn.
+			// exactly one schema block under resolveSection.
 			//
 			// Skipping by "block.Name contains a dot" is too coarse —
 			// {Parent}-template composites and other partial-path keys
@@ -742,18 +732,10 @@ func blockSignature(block *schema.Block) string {
 // — a 1-element result means yes, ≥2 means the key genuinely covers
 // multiple schema blocks and is ambiguous.
 //
-// The most-specific qualifier is essential. findAllDocBlocksIn matches a
-// schema path not only against an exact-path doc key but also against
-// non-contiguous composites (e.g. parts[0].parts[1].leaf) and the bare
-// leaf. Evaluating docKey in isolation therefore over-counts: a parent
-// heading like "spec.http2_route.match" would appear to also "resolve" a
-// descendant like "spec.http2_route.match.header.match" via the
-// composite matcher, even when that descendant has its own exact
-// full-path heading that should own it. By consulting the real
-// docBlocks and taking findAllDocBlocksIn's most-specific match
-// (returned first), a path counts toward docKey only when no more
-// specific heading claims it — eliminating the phantom, self-suggesting
-// ambiguity warnings.
+// It is the reverse of resolveSection: a path counts toward docKey only when
+// resolveSection picks docKey's section for it, so a parent heading like
+// "spec.http2_route.match" doesn't also count a descendant such as
+// "spec.http2_route.match.header.match" that has its own heading.
 func schemaPathsResolvedByDocKey(rs *schema.ResourceSchema, docBlocks map[string]*doc.DocBlock, docKey string) []string {
 	if rs == nil || docKey == "" {
 		return nil
@@ -767,10 +749,7 @@ func schemaPathsResolvedByDocKey(rs *schema.ResourceSchema, docBlocks map[string
 		if leafName(path) != docLeaf {
 			continue
 		}
-		// The heading that owns this schema path is its most-specific
-		// match, which findAllDocBlocksIn returns first. Count the path
-		// toward docKey only when docKey is that owner.
-		if best := findAllDocBlocksIn(docBlocks, leafName(path), path, nil); len(best) > 0 && best[0].Name == docKey {
+		if b := resolveSection(rs, docBlocks, path); b != nil && b.Name == docKey {
 			matches = append(matches, path)
 		}
 	}
@@ -1740,93 +1719,63 @@ func severity(attr schema.Attribute) Severity {
 	return SeverityError
 }
 
-func findDocBlock(d *doc.Document, leaf string, fullPath string) *doc.DocBlock {
-	return findDocBlockIn(d.Blocks(), leaf, fullPath)
-}
-
-// findDocBlockIn applies the same composite-path resolution as findDocBlock
-// but against a caller-supplied map. Used to resolve a path within the
-// AttributeBlocks-only or ArgumentBlocks-only view when a check needs to
-// distinguish where a documented attribute lives.
-//
-// Returns the first matching block. For coverage checks that need the full
-// set of documented attributes for a schema path (which can be split
-// across multiple doc blocks — e.g. a leaf-keyed `### \`probabilistic\“
-// heading and a dot-notation-routed `rule.probabilistic` block from a
-// reference like `rule[*].probabilistic[*].x` in the attribute section),
-// use findAllDocBlocksIn.
-func findDocBlockIn(blocks map[string]*doc.DocBlock, leaf string, fullPath string) *doc.DocBlock {
-	matches := findAllDocBlocksIn(blocks, leaf, fullPath, nil)
-	if len(matches) == 0 {
-		return nil
+// resolveSection returns the one section in blocks (a single reference
+// section: Argument or Attribute Reference) that documents schema path p, or
+// nil. Resolution uses heading keys only, never links or position
+// (docs/rules/coverage-path-resolution.md §4). The first key that names a
+// section wins, in this order: the exact path; three-segment composites
+// a.b.leaf, nearest adjacent ancestors first; two-segment composites a.leaf,
+// nearest ancestor first; the bare leaf. A dotted partial key that is itself a
+// different schema path claims only that path, so it is skipped: a heading
+// naming a.b documents a.b, not an undocumented a.x.b. The bare leaf is never
+// skipped, even when it is also a root-level path: it is a leaf-name heading
+// and serves every path with that leaf, and whether that is correct is decided
+// per path by the field checks.
+func resolveSection(rs *schema.ResourceSchema, blocks map[string]*doc.DocBlock, p string) *doc.DocBlock {
+	if p == "" {
+		return blocks[""]
 	}
-	return matches[0]
-}
-
-// findAllDocBlocksIn returns every DocBlock that the schema path could
-// resolve to: full path, then 3- and 2-segment composites suffixed by
-// leaf, then leaf alone. Order matters for the single-block consumer
-// (findDocBlockIn returns the first), but for coverage-style checks the
-// caller should iterate all of them so attributes documented under
-// alternative key shapes (e.g. leaf vs full path) are all counted.
-//
-// anchors (Document.BlockAnchors) enables shared-subsection resolution: when
-// the parent block documents this leaf with a bullet that links to another
-// subsection (`management` - ... See [Endpoint](#endpoint)), that subsection's
-// block is included too. This is precise — anchored on the exact parent+leaf
-// bullet — so it never mis-credits sibling paths. Pass nil to disable.
-func findAllDocBlocksIn(blocks map[string]*doc.DocBlock, leaf string, fullPath string, anchors map[string]string) []*doc.DocBlock {
-	if fullPath == "" {
-		if b := blocks[""]; b != nil {
-			return []*doc.DocBlock{b}
+	for _, key := range sectionKeyCandidates(p) {
+		b := blocks[key]
+		if b == nil {
+			continue
 		}
-		return nil
-	}
-
-	seen := make(map[*doc.DocBlock]bool)
-	var matches []*doc.DocBlock
-	add := func(b *doc.DocBlock) {
-		if b == nil || seen[b] {
-			return
-		}
-		seen[b] = true
-		matches = append(matches, b)
-	}
-
-	add(blocks[fullPath])
-	parts := strings.Split(fullPath, ".")
-	if len(parts) >= 3 {
-		for i := len(parts) - 3; i >= 0; i-- {
-			add(blocks[parts[i]+"."+parts[i+1]+"."+leaf])
-		}
-	}
-	if len(parts) >= 2 {
-		for i := len(parts) - 2; i >= 0; i-- {
-			add(blocks[parts[i]+"."+leaf])
-		}
-	}
-	add(blocks[leaf])
-
-	// Shared-subsection link: locate the bullet for this leaf in the parent
-	// block and, if it links to a differently-named subsection, include that
-	// subsection's block. Only the leaf's own bullet is followed, so a
-	// structurally-identical sibling (endpoints.management vs
-	// endpoints.intercluster) each resolves to the shared block, while
-	// unrelated paths are untouched. The parent of a single-segment path is
-	// the root block ("").
-	if anchors != nil {
-		parent := strings.Join(parts[:len(parts)-1], ".")
-		for _, pb := range findAllDocBlocksIn(blocks, leafName(parent), parent, nil) {
-			for _, a := range pb.Attributes {
-				if a.Name == leaf && a.LinkAnchor != "" {
-					if target, ok := anchors[a.LinkAnchor]; ok && target != leaf {
-						add(blocks[target])
-					}
-				}
+		if key != p && strings.Contains(key, ".") && rs != nil {
+			if _, isPath := rs.Blocks[key]; isPath {
+				continue
 			}
 		}
+		return b
 	}
-	return matches
+	return nil
+}
+
+// sectionKeyCandidates lists the heading keys that can document path p, in
+// resolution order.
+func sectionKeyCandidates(p string) []string {
+	parts := strings.Split(p, ".")
+	leaf := parts[len(parts)-1]
+	keys := []string{p}
+	for i := len(parts) - 3; i >= 0; i-- {
+		keys = append(keys, parts[i]+"."+parts[i+1]+"."+leaf)
+	}
+	for i := len(parts) - 2; i >= 0; i-- {
+		keys = append(keys, parts[i]+"."+leaf)
+	}
+	return append(keys, leaf)
+}
+
+// resolveSections returns the sections documenting p in Argument and
+// Attribute Reference, skipping either that doesn't resolve.
+func resolveSections(rs *schema.ResourceSchema, d *doc.Document, p string) []*doc.DocBlock {
+	var out []*doc.DocBlock
+	if b := resolveSection(rs, d.ArgumentBlocks, p); b != nil {
+		out = append(out, b)
+	}
+	if b := resolveSection(rs, d.AttributeBlocks, p); b != nil {
+		out = append(out, b)
+	}
+	return out
 }
 
 func existsInSiblingBlock(rs *schema.ResourceSchema, leaf, attrName string) bool {
@@ -2018,9 +1967,10 @@ func (r *SchemaDocsRule) checkDeprecated(ctx CheckContext) []Result {
 	}
 
 	var results []Result
-	for blockPath, schemaBlock := range ctx.Schema.Blocks {
-		docBlock := findDocBlock(ctx.Doc, leafName(blockPath), blockPath)
-		if docBlock == nil {
+	for _, blockPath := range slices.Sorted(maps.Keys(ctx.Schema.Blocks)) {
+		schemaBlock := ctx.Schema.Blocks[blockPath]
+		sections := resolveSections(ctx.Schema, ctx.Doc, blockPath)
+		if len(sections) == 0 {
 			continue
 		}
 
@@ -2029,46 +1979,48 @@ func (r *SchemaDocsRule) checkDeprecated(ctx CheckContext) []Result {
 			schemaAttrs[a.Name] = a
 		}
 
-		docAttrs := make(map[string]*doc.DocAttribute, len(docBlock.Attributes))
-		for i := range docBlock.Attributes {
-			docAttrs[docBlock.Attributes[i].Name] = &docBlock.Attributes[i]
-		}
+		for _, docBlock := range sections {
+			docAttrs := make(map[string]*doc.DocAttribute, len(docBlock.Attributes))
+			for i := range docBlock.Attributes {
+				docAttrs[docBlock.Attributes[i].Name] = &docBlock.Attributes[i]
+			}
 
-		// Schema deprecated but doc not marked.
-		for _, attr := range schemaBlock.Attributes {
-			if !attr.Deprecated {
-				continue
+			// Schema deprecated but doc not marked.
+			for _, attr := range schemaBlock.Attributes {
+				if !attr.Deprecated {
+					continue
+				}
+				da, ok := docAttrs[attr.Name]
+				if !ok {
+					continue // not documented here — coverage handles absence
+				}
+				if !da.Deprecated {
+					results = append(results, Result{
+						Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityWarning,
+						Message: fmt.Sprintf("attribute %q in block %q is deprecated in schema but not marked as deprecated in docs", attr.Name, displayPath(blockPath)),
+						Block:   blockPath,
+						Line:    da.Line,
+					})
+				}
 			}
-			da, ok := docAttrs[attr.Name]
-			if !ok {
-				continue // not documented — coverage check handles this
-			}
-			if !da.Deprecated {
-				results = append(results, Result{
-					Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityWarning,
-					Message: fmt.Sprintf("attribute %q in block %q is deprecated in schema but not marked as deprecated in docs", attr.Name, displayPath(blockPath)),
-					Block:   blockPath,
-					Line:    da.Line,
-				})
-			}
-		}
 
-		// Doc marked deprecated but schema is not.
-		for _, da := range docBlock.Attributes {
-			if !da.Deprecated {
-				continue
-			}
-			sa, ok := schemaAttrs[da.Name]
-			if !ok {
-				continue // phantom — coverage check handles this
-			}
-			if !sa.Deprecated {
-				results = append(results, Result{
-					Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityWarning,
-					Message: fmt.Sprintf("attribute %q in block %q is marked deprecated in docs but not in schema; either mark as deprecated in schema or remove the deprecation notice", da.Name, displayPath(blockPath)),
-					Block:   blockPath,
-					Line:    da.Line,
-				})
+			// Doc marked deprecated but schema is not.
+			for _, da := range docBlock.Attributes {
+				if !da.Deprecated {
+					continue
+				}
+				sa, ok := schemaAttrs[da.Name]
+				if !ok {
+					continue // phantom — coverage check handles this
+				}
+				if !sa.Deprecated {
+					results = append(results, Result{
+						Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityWarning,
+						Message: fmt.Sprintf("attribute %q in block %q is marked deprecated in docs but not in schema; either mark as deprecated in schema or remove the deprecation notice", da.Name, displayPath(blockPath)),
+						Block:   blockPath,
+						Line:    da.Line,
+					})
+				}
 			}
 		}
 	}

@@ -82,21 +82,21 @@ For the full rationale behind the parent-configurability model and the `ConfigUn
 
 ### Nested fields documented under a shared or prose-introduced subsection
 
-Two long-standing documentation conventions attach a nested block's fields to it without a dedicated per-path heading. When `nested_object_attributes` is enabled, coverage understands both:
+Coverage decides which section documents a block from section headings alone, never from links or position, because a reader looking at a section can't see what links to it (see [Coverage: one section per path](coverage-path-resolution.md)). Two conventions attach a nested block's fields to it without a dedicated per-path heading:
 
-- **Shared subsection.** Structurally-identical sibling blocks are often documented once under a single subsection that each sibling links to, e.g.
+- **Shared subsection.** Structurally identical sibling blocks can be documented once, under a heading that names each of them:
 
   ```markdown
-  * `management` - Endpoint ... See [Endpoint](#endpoint).
-  * `intercluster` - Endpoint ... See [Endpoint](#endpoint).
+  * `management` - Endpoint ... See [`intercluster` and `management`](#intercluster-and-management).
+  * `intercluster` - Endpoint ... See [`intercluster` and `management`](#intercluster-and-management).
 
-  #### Endpoint
+  #### `intercluster` and `management`
 
   * `dns_name` - ...
   * `ip_addresses` - ...
   ```
 
-  Coverage follows each sibling bullet's in-page link to the shared subsection, so both `endpoints.management` and `endpoints.intercluster` are credited with the `Endpoint` block's fields. The link is followed only for the sibling's own bullet, so unrelated paths are never mis-credited. Siblings with different names sharing one subsection (e.g. `available_labels`/`consumed_labels` under `### Labels`) work the same way.
+  A subsection with a heading that doesn't name the blocks, such as `#### Endpoint` linked from both bullets, doesn't document them: the bullets' links are navigation, and coverage reports the blocks' fields as undocumented. Earlier versions followed such links (issue #51); that was reversed in #77.
 
 - **Legacy indexed prose lead-in.** Older docs introduce a nested block's fields with a sentence instead of a heading:
 
