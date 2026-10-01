@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/YakDriver/swissshepherd/internal/doc"
@@ -191,6 +192,11 @@ func (r *SchemaDocsRule) checkCoverage(ctx CheckContext) []Result {
 		// its leaf name (e.g. `### \`probabilistic\`` Block), under its
 		// full path (e.g. via a dot-notation reference like
 		// `rule[*].probabilistic[*].x` routed during parsing), or both.
+		//
+		// A section whose key has several headings is judged by the fit rule
+		// (checkDuplicateHeadings) instead: its fields aren't checked for
+		// existence here, and fields whose only home is its reference section
+		// aren't checked for absence.
 		documented := make(map[string]bool)
 		var malformed []doc.MalformedAttr
 		var allDocAttrs []doc.DocAttribute
@@ -199,11 +205,17 @@ func (r *SchemaDocsRule) checkCoverage(ctx CheckContext) []Result {
 				documented[attr.Name] = true
 			}
 			malformed = append(malformed, b.MalformedAttributes...)
-			allDocAttrs = append(allDocAttrs, b.Attributes...)
+			if !duplicated(b) {
+				allDocAttrs = append(allDocAttrs, b.Attributes...)
+			}
 		}
+		argDuplicated := duplicated(resolveSection(rs, ctx.Doc.ArgumentBlocks, blockPath))
 
 		for _, attr := range schemaBlock.Attributes {
 			if r.shouldSkipAttribute(attr) {
+				continue
+			}
+			if argDuplicated && !schemaBlock.ConfigUnknown && !attr.Computed {
 				continue
 			}
 			if !documented[attr.Name] {
@@ -266,8 +278,223 @@ func (r *SchemaDocsRule) checkCoverage(ctx CheckContext) []Result {
 
 	results = append(results, r.checkPhantomBlocks(ctx)...)
 	results = append(results, r.checkOrphans(ctx)...)
+	results = append(results, r.checkDuplicateHeadings(ctx)...)
 
 	return results
+}
+
+// duplicated reports whether a section's key has more than one heading.
+func duplicated(b *doc.DocBlock) bool {
+	return b != nil && len(b.Occurrences) > 1
+}
+
+// checkDuplicateHeadings applies the fit rule to keys with several headings in
+// one reference section (docs/rules/coverage-path-resolution.md §5). Position
+// doesn't say which heading documents which path, so instead it asks whether
+// any assignment makes every block exact. An error when some served path has
+// no heading that fits it, or some heading fits no served path: then a block
+// lacks its exact fields whichever way they're matched. Otherwise a warning,
+// because a reader still can't tell from either heading which block it
+// documents. There is no passing case.
+func (r *SchemaDocsRule) checkDuplicateHeadings(ctx CheckContext) []Result {
+	rs := ctx.Schema
+	if rs == nil {
+		return nil
+	}
+	var results []Result
+	for _, inAttrs := range []bool{false, true} {
+		blocks := ctx.Doc.ArgumentBlocks
+		if inAttrs {
+			blocks = ctx.Doc.AttributeBlocks
+		}
+		section := referenceName(inAttrs)
+		for _, key := range slices.Sorted(maps.Keys(blocks)) {
+			b := blocks[key]
+			if !duplicated(b) {
+				continue
+			}
+			var served []string
+			for _, p := range slices.Sorted(maps.Keys(rs.Blocks)) {
+				if p != "" && !slices.Contains(r.skipBlocks(), p) && resolveSection(rs, blocks, p) == b {
+					served = append(served, p)
+				}
+			}
+			if len(served) == 0 {
+				continue // resolves to nothing: the unresolved-section warning's job
+			}
+			var lines []string
+			for _, o := range b.Occurrences {
+				lines = append(lines, strconv.Itoa(o.Line))
+			}
+			lineList := strings.Join(lines, ", ")
+
+			// Only headings with bullets are fitted. A heading with none ("See
+			// `ebs_config` above.") documents nothing; flagging its fields as
+			// missing would name the wrong defect. It still counts as a
+			// duplicate below.
+			var occs []doc.Occurrence
+			for _, o := range b.Occurrences {
+				if len(o.Attributes) > 0 {
+					occs = append(occs, o)
+				}
+			}
+
+			// mis[i][j] lists how occurrence i fails to fit served path j.
+			mis := make([][][]string, len(occs))
+			for i, o := range occs {
+				mis[i] = make([][]string, len(served))
+				for j, p := range served {
+					mis[i][j] = r.fitMismatches(rs, o, p, inAttrs)
+				}
+			}
+			before := len(results)
+			for j, p := range served {
+				best := 0
+				for i := range mis {
+					if closer(mis[i][j], mis[best][j]) {
+						best = i
+					}
+				}
+				if len(occs) == 0 {
+					break
+				}
+				if d := mis[best][j]; len(d) > 0 {
+					results = append(results, Result{
+						Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityError, Block: p, Line: occs[best].Line,
+						Message: fmt.Sprintf("none of the %d headings for %q in %s (lines %s) documents block %q exactly; the closest, at line %d: %s",
+							len(b.Occurrences), key, section, lineList, displayPath(p), occs[best].Line, summarize(d)),
+					})
+				}
+			}
+			for i, o := range occs {
+				best := 0
+				for j := range served {
+					if closer(mis[i][j], mis[i][best]) {
+						best = j
+					}
+				}
+				if d := mis[i][best]; len(d) > 0 {
+					results = append(results, Result{
+						Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityError, Block: served[best], Line: o.Line,
+						Message: fmt.Sprintf("heading %q (line %d) in %s documents no block exactly; the closest is %q: %s",
+							o.Heading, o.Line, section, displayPath(served[best]), summarize(d)),
+					})
+				}
+			}
+			if len(results) > before {
+				continue
+			}
+			shown := served
+			more := ""
+			if len(shown) > 3 {
+				more = fmt.Sprintf(" and %d more", len(shown)-3)
+				shown = shown[:3]
+			}
+			results = append(results, Result{
+				Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityWarning, Line: b.Occurrences[0].Line,
+				Message: fmt.Sprintf("%d headings in %s normalize to %q (lines %s), so a reader can't tell which block each documents; give each the heading of the path it documents (%s%s)",
+					len(b.Occurrences), section, key, lineList, strings.Join(shown, ", "), more),
+			})
+		}
+	}
+	return results
+}
+
+// closer reports whether difference list a is a nearer fit than b: fewer
+// content differences (fields that don't exist or aren't listed) first, then
+// fewer differences overall. A heading whose fields are right but whose label
+// is wrong is nearer than one listing a field that isn't there.
+func closer(a, b []string) bool {
+	content := func(d []string) int {
+		n := 0
+		for _, s := range d {
+			if strings.HasSuffix(s, "doesn't exist there") || strings.HasSuffix(s, "isn't listed") {
+				n++
+			}
+		}
+		return n
+	}
+	if ca, cb := content(a), content(b); ca != cb {
+		return ca < cb
+	}
+	return len(a) < len(b)
+}
+
+// summarize joins up to three differences, with a count of the rest.
+func summarize(d []string) string {
+	if len(d) <= 3 {
+		return strings.Join(d, "; ")
+	}
+	return fmt.Sprintf("%s; and %d more", strings.Join(d[:3], "; "), len(d)-3)
+}
+
+// fitMismatches lists the ways occurrence o fails to document path p exactly
+// in one reference section: listed fields that don't exist at p, fields whose
+// only home is that section and that aren't listed, and listed fields whose
+// label or deprecation marker is wrong for p. None means o fits p. Uses
+// coverage's own filters, so a difference only in a skipped or allowed field
+// never counts.
+func (r *SchemaDocsRule) fitMismatches(rs *schema.ResourceSchema, o doc.Occurrence, p string, inAttrs bool) []string {
+	b := rs.Blocks[p]
+	var n []string
+	listed := make(map[string]bool, len(o.Attributes))
+	for _, a := range o.Attributes {
+		listed[a.Name] = true
+		if slices.Contains(r.phantom(), a.Name) {
+			continue
+		}
+		if !blockHasField(b, a.Name) {
+			n = append(n, fmt.Sprintf("%q doesn't exist there", a.Name))
+			continue
+		}
+		i := slices.IndexFunc(b.Attributes, func(sa schema.Attribute) bool { return sa.Name == a.Name })
+		if i < 0 {
+			continue // a child block bullet carries no label or marker to compare
+		}
+		sa := b.Attributes[i]
+		if a.Deprecated != sa.Deprecated && !(r.IgnoreDeprecated && sa.Deprecated) {
+			n = append(n, fmt.Sprintf("%q deprecation marker is wrong", a.Name))
+		}
+		if !inAttrs && !b.ConfigUnknown && (a.Required || a.Optional || a.ReadOnly) {
+			// The one schema-correct label, as labelCorrectness defines it.
+			wantOptional := sa.Optional && !sa.Required
+			wantReadOnly := !sa.Required && !sa.Optional
+			if a.Required != sa.Required || a.Optional != wantOptional || a.ReadOnly != wantReadOnly {
+				want := "(Read-Only)"
+				switch {
+				case sa.Required:
+					want = "(Required)"
+				case wantOptional:
+					want = "(Optional)"
+				}
+				n = append(n, fmt.Sprintf("%q should be %s", a.Name, want))
+			}
+		}
+	}
+	if b.ConfigUnknown {
+		slices.Sort(n)
+		return n
+	}
+	for _, sa := range b.Attributes {
+		if listed[sa.Name] || slices.Contains(r.implicit(), sa.Name) || (r.IgnoreDeprecated && sa.Deprecated) {
+			continue
+		}
+		pure := (sa.Required || sa.Optional) && !sa.Computed
+		computedOnly := sa.Computed && !sa.Required && !sa.Optional
+		if (!inAttrs && pure) || (inAttrs && computedOnly && !r.allowInlineReadOnly()) {
+			n = append(n, fmt.Sprintf("%q isn't listed", sa.Name))
+		}
+	}
+	if !inAttrs {
+		for _, c := range b.ChildBlocks {
+			if !listed[leafName(c)] && blockTreeHasPureConfigurable(rs, c, make(map[string]bool)) {
+				n = append(n, fmt.Sprintf("%q isn't listed", leafName(c)))
+			}
+		}
+	}
+	// Schema attribute order comes from map iteration; sort for stable output.
+	slices.Sort(n)
+	return n
 }
 
 // checkOrphans reports headings and prose lists whose bullets belong to no
@@ -370,7 +597,12 @@ func withoutOrphanProse(rs *schema.ResourceSchema, d *doc.Document) *doc.Documen
 				continue
 			}
 			c := *b
-			c.Attributes = slices.DeleteFunc(slices.Clone(b.Attributes), func(a doc.DocAttribute) bool { return lines[a.Line] })
+			drop := func(a doc.DocAttribute) bool { return lines[a.Line] }
+			c.Attributes = slices.DeleteFunc(slices.Clone(b.Attributes), drop)
+			c.Occurrences = slices.Clone(b.Occurrences)
+			for i := range c.Occurrences {
+				c.Occurrences[i].Attributes = slices.DeleteFunc(slices.Clone(c.Occurrences[i].Attributes), drop)
+			}
 			out[key] = &c
 		}
 		return out
@@ -676,6 +908,9 @@ func (r *SchemaDocsRule) checkAttributeCoverage(ctx CheckContext) []Result {
 				continue
 			}
 
+			if duplicated(attrDoc) && !allowInline && !schemaBlock.ConfigUnknown {
+				continue // judged by the fit rule (checkDuplicateHeadings)
+			}
 			inAttrs := docBlockHasAttr(attrDoc, attr.Name)
 			inArgs := docBlockHasAttr(argDoc, attr.Name)
 

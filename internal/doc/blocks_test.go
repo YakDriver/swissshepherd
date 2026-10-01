@@ -370,3 +370,31 @@ func TestBlocks_ProseContinuingCurrentBlockIsNotOrphaned(t *testing.T) {
 		t.Errorf("rule bullets = %v, prose lead-ins = %+v; want [a b] and none", got, d.ProseLeadIns)
 	}
 }
+
+// TestBlocks_DuplicateHeadingOccurrences: headings that normalize to the same
+// key are kept as separate occurrences, each with its own bullets, so coverage
+// can judge them one by one (#77). Content routed from elsewhere on the page
+// joins the merged entry but no occurrence.
+func TestBlocks_DuplicateHeadingOccurrences(t *testing.T) {
+	t.Parallel()
+
+	d, err := doc.Parse([]byte("# Resource: test\n\n## Argument Reference\n\n"+
+		"* `z[*].routed` - (Optional) Routed.\n\n"+
+		"### `z` Block\n\n* `a1` - (Optional) A1.\n\n"+
+		"### `z` Block\n\n* `a4` - (Optional) A4.\n"), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got [][]string
+	for _, o := range d.ArgumentBlocks["z"].Occurrences {
+		var names []string
+		for _, a := range o.Attributes {
+			names = append(names, a.Name)
+		}
+		got = append(got, names)
+	}
+	want := [][]string{{"a1"}, {"a4"}}
+	if !slices.EqualFunc(got, want, slices.Equal) {
+		t.Errorf("occurrences = %v, want %v", got, want)
+	}
+}

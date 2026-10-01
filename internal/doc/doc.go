@@ -60,6 +60,20 @@ type DocBlock struct {
 	// relocate all of it, so the misplacement rule must not collapse such an
 	// entry (it emits per-attribute moves instead).
 	SpansSubsections bool
+	// Occurrences lists each heading that normalized to this block's key, in
+	// document order, with the bullets written under it. Attributes is their
+	// merged union plus any content routed here from elsewhere on the page.
+	// With two or more occurrences a reader can't tell which block each
+	// heading documents, so coverage judges them one by one
+	// (docs/rules/coverage-path-resolution.md §5).
+	Occurrences []Occurrence
+}
+
+// Occurrence is one heading that normalized to a block key, with its bullets.
+type Occurrence struct {
+	Heading    string
+	Line       int
+	Attributes []DocAttribute
 }
 
 // HeadingTemplates defines patterns for recognizing block headings.
@@ -711,6 +725,9 @@ func extractBlocks(tree ast.Node, source []byte, idx *lineIndex, doc *Document, 
 	pendingProse := -1
 	// orphanIdx is the index in doc.Orphans of the heading now in effect, or -1.
 	orphanIdx := -1
+	// underHeading is true while bullets belong to the last occurrence of the
+	// current block's heading, rather than to a prose lead-in.
+	underHeading := false
 	var currentSection *Section
 	var inArguments, inAttributes bool
 	var sawRequiredByline bool // true between a "required:" byline and the next list
@@ -774,6 +791,7 @@ func extractBlocks(tree ast.Node, source []byte, idx *lineIndex, doc *Document, 
 			}
 
 			if n.Level == 2 {
+				underHeading = false
 				orphaned = false
 				listSinceHeading = false
 				pendingProse = -1
@@ -828,6 +846,7 @@ func extractBlocks(tree ast.Node, source []byte, idx *lineIndex, doc *Document, 
 			if n.Level >= 3 && (inArguments || inAttributes) {
 				blockNames := templates.MatchAll(headingText)
 				orphaned = len(blockNames) == 0
+				underHeading = !orphaned
 				listSinceHeading = false
 				pendingProse = -1
 				if orphaned {
@@ -881,6 +900,7 @@ func extractBlocks(tree ast.Node, source []byte, idx *lineIndex, doc *Document, 
 						if b.HeadingLine == 0 {
 							b.HeadingLine = headingLine
 						}
+						b.Occurrences = append(b.Occurrences, Occurrence{Heading: headingText, Line: headingLine})
 					}
 					currentBlockAliases = blockNames[1:]
 				}
@@ -925,6 +945,7 @@ func extractBlocks(tree ast.Node, source []byte, idx *lineIndex, doc *Document, 
 			if inArguments || inAttributes {
 				text := string(n.Text(source))
 				if path, ok := NestedBlockLeadIn(text); ok {
+					underHeading = false
 					orphaned = false
 					listSinceHeading = false
 					currentBlockName = path
@@ -991,6 +1012,9 @@ func extractBlocks(tree ast.Node, source []byte, idx *lineIndex, doc *Document, 
 					if attr.Name != "" {
 						attr.Line = line
 						block.Attributes = append(block.Attributes, attr)
+						if underHeading && !orphaned {
+							appendToLastOccurrence(block, attr)
+						}
 						if prose >= 0 {
 							doc.ProseLeadIns[prose].Bullets = append(doc.ProseLeadIns[prose].Bullets, attr)
 						}
@@ -1005,6 +1029,9 @@ func extractBlocks(tree ast.Node, source []byte, idx *lineIndex, doc *Document, 
 						for _, alias := range currentBlockAliases {
 							if ab := target[alias]; ab != nil {
 								ab.Attributes = append(ab.Attributes, attr)
+								if underHeading {
+									appendToLastOccurrence(ab, attr)
+								}
 							}
 						}
 						// Capture inline-indented nested attributes (e.g. the
@@ -1406,6 +1433,12 @@ func NormalizeDotPath(raw string) (string, bool) {
 		segments[i] = seg
 	}
 	return strings.Join(segments, "."), true
+}
+
+func appendToLastOccurrence(b *DocBlock, attr DocAttribute) {
+	if n := len(b.Occurrences); n > 0 {
+		b.Occurrences[n-1].Attributes = append(b.Occurrences[n-1].Attributes, attr)
+	}
 }
 
 // proseIntroducesOtherBlock reports whether a paragraph might introduce a list

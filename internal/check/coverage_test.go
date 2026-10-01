@@ -251,8 +251,8 @@ func TestSchemaDocsRule_DuplicateBlockNames(t *testing.T) {
 	appmesh := &schema.ResourceSchema{Name: "aws_test_resource", Blocks: map[string]*schema.Block{
 		"":                         {Attributes: []schema.Attribute{{Name: "name", Required: true}}, ChildBlocks: []string{"connection_pool", "timeout"}},
 		"connection_pool":          {ChildBlocks: []string{"connection_pool.tcp", "connection_pool.grpc"}},
-		"connection_pool.tcp":      {Attributes: []schema.Attribute{{Name: "max_connections", Required: true}}},
-		"connection_pool.grpc":     {Attributes: []schema.Attribute{{Name: "max_requests", Required: true}}},
+		"connection_pool.tcp":      {Attributes: []schema.Attribute{{Name: "max_connections", Optional: true}}},
+		"connection_pool.grpc":     {Attributes: []schema.Attribute{{Name: "max_requests", Optional: true}}},
 		"timeout":                  {ChildBlocks: []string{"timeout.tcp", "timeout.grpc"}},
 		"timeout.tcp":              {ChildBlocks: []string{"timeout.tcp.idle"}},
 		"timeout.tcp.idle":         {Attributes: []schema.Attribute{{Name: "unit", Required: true}, {Name: "value", Required: true}}},
@@ -300,23 +300,35 @@ func TestSchemaDocsRule_DuplicateBlockNames(t *testing.T) {
 	}
 
 	testCases := map[string]struct {
-		rs   *schema.ResourceSchema
-		md   string
-		want []string // "path field" pairs reported as not existing
+		rs        *schema.ResourceSchema
+		md        string
+		want      []string // "path field" pairs reported as not existing
+		wantOther []string // other findings, in order
 	}{
-		"appmesh: merged tcp and grpc sections": {
+		// Two tcp and two grpc headings, each listing exactly one path's
+		// fields. The fit rule matches them, so no field is wrong, but the
+		// duplicated headings are still reported (§5).
+		"appmesh: duplicate tcp and grpc headings": {
 			rs: appmesh,
 			md: page([]string{"connection_pool", "timeout"},
 				sec("connection_pool", "grpc", "tcp"), sec("timeout", "grpc", "tcp"),
 				sec("tcp", "max_connections"), sec("tcp", "idle"),
 				sec("grpc", "max_requests"), sec("grpc", "idle", "per_request"),
 				sec("idle", "unit", "value"), sec("per_request", "unit", "value")),
-			want: []string{
-				"connection_pool.grpc idle", "connection_pool.grpc per_request",
-				"connection_pool.tcp idle",
-				"timeout.grpc max_requests",
-				"timeout.tcp max_connections",
+			wantOther: []string{
+				`2 headings in Argument Reference normalize to "grpc" (lines 25, 29), so a reader can't tell which block each documents; give each the heading of the path it documents (connection_pool.grpc, timeout.grpc)`,
+				`2 headings in Argument Reference normalize to "tcp" (lines 17, 21), so a reader can't tell which block each documents; give each the heading of the path it documents (connection_pool.tcp, timeout.tcp)`,
 			},
+		},
+		// One merged tcp section: checked against each path it serves.
+		"appmesh: one shared tcp section listing both paths' fields": {
+			rs: appmesh,
+			md: page([]string{"connection_pool", "timeout"},
+				sec("connection_pool", "grpc", "tcp"), sec("timeout", "grpc", "tcp"),
+				sec("tcp", "idle", "max_connections"),
+				sec("connection_pool.grpc", "max_requests"), sec("timeout.grpc", "idle", "per_request"),
+				sec("idle", "unit", "value"), sec("per_request", "unit", "value")),
+			want: []string{"connection_pool.tcp idle", "timeout.tcp max_connections"},
 		},
 		"appmesh: qualified sections": {
 			rs: appmesh,
@@ -377,8 +389,8 @@ func TestSchemaDocsRule_DuplicateBlockNames(t *testing.T) {
 			if !slices.Equal(got, tc.want) {
 				t.Errorf("phantoms = %q\nwant      %q", got, tc.want)
 			}
-			if len(other) > 0 {
-				t.Errorf("unexpected findings:\n  %s", strings.Join(other, "\n  "))
+			if !slices.Equal(other, tc.wantOther) {
+				t.Errorf("other findings =\n  %s\nwant\n  %s", strings.Join(other, "\n  "), strings.Join(tc.wantOther, "\n  "))
 			}
 		})
 	}
@@ -1665,6 +1677,51 @@ func TestDescriptions_OrphanedBullets(t *testing.T) {
 	}
 }
 
+// TestCoverage_DuplicateHeadingClosestPrefersContent: when naming the closest
+// block for a heading that fits none, a block whose fields match but whose
+// label differs is nearer than one with a missing field
+// (aws_cognito_risk_configuration's two `actions` headings).
+func TestCoverage_DuplicateHeadingClosestPrefersContent(t *testing.T) {
+	t.Parallel()
+
+	// t.u.z has a2 and a3, both Required; x.y.z has a2, a3, a4, all Optional.
+	// The second heading lists a2 and a3 as (Optional): against t.u.z that's
+	// two wrong labels, against x.y.z one missing field. By count x.y.z is
+	// closer; by content t.u.z is.
+	rs := twoZSchema(
+		&schema.Block{Attributes: optional("a2", "a3", "a4")},
+		&schema.Block{Attributes: []schema.Attribute{{Name: "a2", Required: true}, {Name: "a3", Required: true}}},
+		nil,
+	)
+	sections := withParents(section{heading: "z", fields: []string{"a2", "a3", "a4"}}, section{heading: "z", fields: []string{"a2", "a3"}})
+	results := runAcceptance(t, rs, []string{"t", "x"}, sections)
+	want := `heading "z Block" (line 30) in Argument Reference documents no block exactly; the closest is "t.u.z": "a2" should be (Required); "a3" should be (Required)`
+	if !hasMessage(results, want) {
+		t.Errorf("missing %q in:\n  %s", want, joinMessages(results))
+	}
+}
+
+// TestCoverage_DuplicateHeadingFitSortsDifferences: the fit rule lists the
+// closest heading's differences. The provider schema builds attribute slices
+// from maps, so their order varies between runs; the list must be sorted or
+// the message flaps (#77). The attributes here are deliberately unsorted.
+func TestCoverage_DuplicateHeadingFitSortsDifferences(t *testing.T) {
+	t.Parallel()
+
+	many := make([]schema.Attribute, 0, 12)
+	for _, n := range []string{"k", "c", "h", "a", "j", "e", "b", "l", "f", "d", "i", "g"} {
+		many = append(many, schema.Attribute{Name: n, Optional: true})
+	}
+	rs := twoZSchema(&schema.Block{Attributes: many}, &schema.Block{Attributes: optional("a")}, nil)
+	sections := withParents(section{heading: "z", fields: []string{"a"}}, section{heading: "z", fields: []string{"a", "m"}})
+
+	results := runAcceptance(t, rs, []string{"t", "x"}, sections)
+	want := `documents block "x.y.z" exactly; the closest, at line 24: "b" isn't listed; "c" isn't listed; "d" isn't listed; and 8 more`
+	if !hasMessage(results, want) {
+		t.Errorf("missing %q in:\n  %s", want, joinMessages(results))
+	}
+}
+
 // TestCoverage_UndocumentedSubtreeReportsShallowest: only the shallowest
 // undocumented block in a subtree is reported, with the count of undocumented
 // paths beneath it. Descendants can't be reached from the docs, so the real
@@ -2028,6 +2085,15 @@ func TestCoverageAcceptance_case2IdenticalFields(t *testing.T) {
 				section{heading: "z", fields: []string{"a1", "a2", "a3", "a4"}},
 			),
 			want: wantError,
+		},
+		// A heading with no bullets ("See `z` above.") documents nothing, so it
+		// isn't fitted; the other heading serves both identical paths.
+		"two z headings, one with no bullets": {
+			sections: withParents(
+				section{heading: "z", fields: []string{"a1", "a2", "a3"}},
+				section{heading: "z"},
+			),
+			want: wantWarnOnly,
 		},
 		// A duplicated key is always reported, even when every occurrence fits
 		// every path: a reader can't tell which block each heading documents.
