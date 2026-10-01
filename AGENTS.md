@@ -66,7 +66,7 @@ If two existing implementations disagree, don't adopt whichever you found first 
 
 ## Corpus validation
 
-Any change that can alter findings must be measured against a real provider. terraform-provider-aws is the reference: its `.ci/swissshepherd-weak.hcl` is what its CI runs, and `.ci/swissshepherd-full.hcl` enables everything.
+Any change that can alter findings must be measured against a real provider. terraform-provider-aws is the reference: its `.ci/swissshepherd-weak.hcl` is what its CI runs, and `.ci/swissshepherd-full.hcl` enables more. The full config does not set every option (for example `nested_object_attributes`, which the weak config sets), so measure both.
 
 ```bash
 git worktree add --detach /tmp/ss-main origin/main && (cd /tmp/ss-main && go build -o /tmp/ss-base .)
@@ -80,7 +80,7 @@ LC_ALL=C comm -3 /tmp/base.txt /tmp/new.txt   # added (right) / removed (left)
 Also:
 
 - Run the new binary twice and confirm identical output.
-- Run the weak config and confirm its error count is unchanged.
+- Run the weak config too and diff it the same way. Its error count may rise: more findings are better when they are correct. A change is worse only if it adds false positives or lets a real defect pass silently. Spot-check every added weak-config finding, and report the before and after counts in the PR.
 - Spot-check added findings against the provider's Go schema, and report the false-positive count.
 - Use `LC_ALL=C` everywhere. Locale collation once made `comm` report findings that didn't exist.
 - Afterwards, run `git worktree remove /tmp/ss-main`.
