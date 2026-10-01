@@ -331,12 +331,9 @@ func TestSchemaDocsRule_DuplicateBlockNames(t *testing.T) {
 			md: page([]string{"pool_a", "pool_b"},
 				sec("pool_a", "tcp"), sec("pool_b", "tcp"),
 				sec("tcp", "max_connections", "timeout", "bogus_attr")),
-			// pool_b.tcp bogus_attr is also wrong but is collapsed into
-			// pool_a.tcp's by leaf dedup until path-keyed dedup (design §6,
-			// commit sequence step 3) lands.
 			want: []string{
 				"pool_a.tcp bogus_attr", "pool_a.tcp timeout",
-				"pool_b.tcp max_connections",
+				"pool_b.tcp bogus_attr", "pool_b.tcp max_connections",
 			},
 		},
 		"grpc: merged section lists another path's child block": {
@@ -1561,15 +1558,16 @@ func coverageMissingBlockMsgs(t *testing.T, src string, rs *schema.ResourceSchem
 	return msgs
 }
 
-// Several undocumented blocks that share a leaf name are deduped to a single
-// representative finding. Before issue #65 the representative path was chosen by
-// Go's randomized map iteration over rs.Blocks, so the reported path flapped
-// between runs. Coverage must now produce identical output every run.
+// Several undocumented blocks that share a leaf name are each reported under
+// their own path: findings are keyed by path, never by leaf (#77). Before #77 a
+// leaf-keyed dedup kept one representative, and before #65 that representative
+// was chosen by Go's randomized map iteration, so the reported path flapped.
+// Coverage must produce identical output every run.
 func TestCoverage_UndocumentedSiblingBlocksDeterministic(t *testing.T) {
 	t.Parallel()
 
 	// foo.thing and bar.thing are distinct undocumented blocks that share the
-	// leaf name "thing"; the leaf-keyed dedup keeps exactly one representative.
+	// leaf name "thing"; each is reported.
 	rs := &schema.ResourceSchema{Blocks: map[string]*schema.Block{
 		"":          {Attributes: []schema.Attribute{{Name: "name", Required: true}}, ChildBlocks: []string{"foo", "bar"}},
 		"foo":       {Path: "foo", ChildBlocks: []string{"foo.thing"}},
@@ -1591,15 +1589,9 @@ func TestCoverage_UndocumentedSiblingBlocksDeterministic(t *testing.T) {
 	// the check many times in one process exercises many orderings.
 	first := coverageMissingBlockMsgs(t, src, rs)
 
-	// Exactly one representative for the shared "thing" leaf.
-	thingCount := 0
-	for _, m := range first {
-		if strings.Contains(m, `"thing"`) || strings.Contains(m, ".thing") {
-			thingCount++
-		}
-	}
-	if thingCount != 1 {
-		t.Fatalf("expected exactly one deduped 'thing' block finding, got %d: %v", thingCount, first)
+	want := []string{`block "bar.thing" is not documented`, `block "foo.thing" is not documented`}
+	if !slices.Equal(first, want) {
+		t.Fatalf("missing-block findings = %q, want %q", first, want)
 	}
 
 	for i := 1; i < 100; i++ {

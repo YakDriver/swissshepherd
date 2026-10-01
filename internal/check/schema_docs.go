@@ -158,30 +158,20 @@ func (r *SchemaDocsRule) checkCoverage(ctx CheckContext) []Result {
 	}
 
 	var results []Result
-	reportedMissingBlocks := make(map[string]bool)
-	reportedExtraAttrs := make(map[string]bool)
 
-	// Iterate schema blocks in sorted path order. Several undocumented blocks
-	// can share a leaf name (e.g. many `...display_options` siblings across a
-	// large nested schema); the reportedMissingBlocks / reportedExtraAttrs dedup
-	// below keeps only one representative per leaf, so the iteration order would
-	// otherwise leak Go's randomized map ordering into which path is reported
-	// (see issue #65). Sorting makes the representative deterministic.
+	// Findings are keyed by schema path, never by leaf name: same-named blocks
+	// under different parents are different defects (#77). Sorted iteration
+	// keeps output order deterministic (#65).
 	for _, blockPath := range slices.Sorted(maps.Keys(rs.Blocks)) {
 		schemaBlock := rs.Blocks[blockPath]
 		if slices.Contains(r.skipBlocks(), blockPath) {
 			continue
 		}
 
-		docBlockName := leafName(blockPath)
 		docBlocks := resolveSections(rs, ctx.Doc, blockPath)
 
 		if len(docBlocks) == 0 {
 			if hasConfigurableAttributes(schemaBlock) {
-				if reportedMissingBlocks[docBlockName] {
-					continue
-				}
-				reportedMissingBlocks[docBlockName] = true
 				results = append(results, Result{
 					Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityError,
 					Message: fmt.Sprintf("block %q is not documented", displayPath(blockPath)),
@@ -246,11 +236,6 @@ func (r *SchemaDocsRule) checkCoverage(ctx CheckContext) []Result {
 
 		for _, docAttr := range allDocAttrs {
 			if !schemaAttrNames[docAttr.Name] && !slices.Contains(r.phantom(), docAttr.Name) {
-				key := docBlockName + "." + docAttr.Name
-				if reportedExtraAttrs[key] {
-					continue
-				}
-				reportedExtraAttrs[key] = true
 				results = append(results, Result{
 					Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityWarning,
 					Message: fmt.Sprintf("documented attribute %q in block %q does not exist in schema", docAttr.Name, displayPath(blockPath)),
