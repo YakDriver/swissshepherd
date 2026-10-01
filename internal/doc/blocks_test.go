@@ -4,6 +4,7 @@
 package doc_test
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/YakDriver/swissshepherd/internal/doc"
@@ -241,5 +242,54 @@ func TestBlocks_UsageBasedPricingTerm(t *testing.T) {
 		if !found {
 			t.Errorf("block usage_based_pricing_term missing attribute %q", want)
 		}
+	}
+}
+
+// TestBlocks_UnparseableHeadingOrphansBullets: bullets under an H3+ heading
+// that matches no heading template belong to no section. Before #77 they were
+// credited to the previous section, producing phantom fields there. A dot-path
+// reference bullet names its own path and is still routed.
+func TestBlocks_UnparseableHeadingOrphansBullets(t *testing.T) {
+	t.Parallel()
+
+	source := []byte("# Resource: test\n\n## Argument Reference\n\n" +
+		"* `source` - (Required) Source.\n\n" +
+		"### `source` Block\n\n" +
+		"* `location` - (Required) Location.\n\n" +
+		"### source: auth\n\n" +
+		"* `resource` - (Optional) Resource.\n" +
+		"* `source[*].auth[*].type` - (Required) Type.\n\n" +
+		"### `other` Block\n\n" +
+		"* `name` - (Optional) Name.\n")
+
+	d, err := doc.ParseWithTemplates(source, "test", doc.HeadingTemplates{"`{Block}` Block"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	names := func(key string) []string {
+		var out []string
+		if b := d.ArgumentBlocks[key]; b != nil {
+			for _, a := range b.Attributes {
+				out = append(out, a.Name)
+			}
+		}
+		return out
+	}
+	testCases := map[string]struct {
+		key  string
+		want []string
+	}{
+		"previous section keeps only its own bullet": {key: "source", want: []string{"location"}},
+		"dot-path reference is still routed":         {key: "source.auth", want: []string{"type"}},
+		"next parsed heading starts a section again": {key: "other", want: []string{"name"}},
+	}
+	for name, tc := range testCases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if got := names(tc.key); !slices.Equal(got, tc.want) {
+				t.Errorf("ArgumentBlocks[%q] = %v, want %v", tc.key, got, tc.want)
+			}
+		})
 	}
 }

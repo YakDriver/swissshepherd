@@ -670,6 +670,11 @@ func blankFrontmatter(source []byte, end int) []byte {
 func extractBlocks(tree ast.Node, source []byte, idx *lineIndex, doc *Document, templates HeadingTemplates, captureNested bool) {
 	var currentBlockName string
 	var currentBlockAliases []string
+	// orphaned is set by an H3+ heading in Argument or Attribute Reference that
+	// matches no heading template. Bullets under it belong to no section: they
+	// must not be credited to whatever section came before
+	// (docs/rules/coverage-path-resolution.md §5).
+	var orphaned bool
 	var currentSection *Section
 	var inArguments, inAttributes bool
 	var sawRequiredByline bool // true between a "required:" byline and the next list
@@ -733,6 +738,7 @@ func extractBlocks(tree ast.Node, source []byte, idx *lineIndex, doc *Document, 
 			}
 
 			if n.Level == 2 {
+				orphaned = false
 				inArguments = strings.HasPrefix(headingText, "Argument")
 				inAttributes = strings.HasPrefix(headingText, "Attribute")
 				sawRequiredByline = false
@@ -783,6 +789,10 @@ func extractBlocks(tree ast.Node, source []byte, idx *lineIndex, doc *Document, 
 
 			if n.Level >= 3 && (inArguments || inAttributes) {
 				blockNames := templates.MatchAll(headingText)
+				orphaned = len(blockNames) == 0
+				if orphaned {
+					currentBlockAliases = nil
+				}
 				if len(blockNames) > 0 {
 					currentBlockName = blockNames[0]
 					sawRequiredByline = false
@@ -870,6 +880,7 @@ func extractBlocks(tree ast.Node, source []byte, idx *lineIndex, doc *Document, 
 			// exactly as a `#### x.y` heading would.
 			if inArguments || inAttributes {
 				if path, ok := NestedBlockLeadIn(string(n.Text(source))); ok {
+					orphaned = false
 					currentBlockName = path
 					currentBlockAliases = nil
 					sawRequiredByline = false
@@ -904,6 +915,11 @@ func extractBlocks(tree ast.Node, source []byte, idx *lineIndex, doc *Document, 
 			}
 
 			block := target[currentBlockName]
+			if orphaned {
+				// Collect plain bullets into a discarded block. Dot-path
+				// reference bullets name their own path and are still routed.
+				block = &DocBlock{}
+			}
 			if block == nil {
 				return ast.WalkSkipChildren, nil
 			}
@@ -934,7 +950,7 @@ func extractBlocks(tree ast.Node, source []byte, idx *lineIndex, doc *Document, 
 						// Capture inline-indented nested attributes (e.g. the
 						// fields of a list(object({...})) documented as
 						// sub-bullets) into a dot-path keyed block.
-						if captureNested {
+						if captureNested && !orphaned {
 							captureNestedAttrs(li, joinDocPath(currentBlockName, attr.Name), target, source, idx)
 						}
 					} else if ref := parseNestedRef(li, source); ref.Parent != "" {
