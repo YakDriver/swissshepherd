@@ -6,6 +6,7 @@ package check_test
 import (
 	"fmt"
 	"maps"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -238,6 +239,11 @@ func TestSchemaDocsRule_NestedBlock_LeafAndDotNotation_Coverage(t *testing.T) {
 	}
 }
 
+var (
+	phantomRe = regexp.MustCompile(`^documented (?:argument|attribute) "([^"]+)" in block "[^"]+" does not exist in schema`)
+	sharedRe  = regexp.MustCompile(`^section "[^"]*" \(line \d+\) in (?:Argument|Attribute) Reference documents \d+ paths; `)
+)
+
 // TestSchemaDocsRule_DuplicateBlockNames covers same-named blocks under
 // different parents with different fields (the aws_appmesh_virtual_node
 // pattern). A merged section is checked against each path it serves, so a
@@ -300,10 +306,11 @@ func TestSchemaDocsRule_DuplicateBlockNames(t *testing.T) {
 	}
 
 	testCases := map[string]struct {
-		rs        *schema.ResourceSchema
-		md        string
-		want      []string // "path field" pairs reported as not existing
-		wantOther []string // other findings, in order
+		rs         *schema.ResourceSchema
+		md         string
+		want       []string // "path field" pairs reported as not existing
+		wantOther  []string // other findings, in order
+		wantShared int      // shared-section findings (§6)
 	}{
 		// Two tcp and two grpc headings, each listing exactly one path's
 		// fields. The fit rule matches them, so no field is wrong, but the
@@ -328,7 +335,8 @@ func TestSchemaDocsRule_DuplicateBlockNames(t *testing.T) {
 				sec("tcp", "idle", "max_connections"),
 				sec("connection_pool.grpc", "max_requests"), sec("timeout.grpc", "idle", "per_request"),
 				sec("idle", "unit", "value"), sec("per_request", "unit", "value")),
-			want: []string{"connection_pool.tcp idle", "timeout.tcp max_connections"},
+			want:       []string{"connection_pool.tcp idle", "timeout.tcp max_connections"},
+			wantShared: 1,
 		},
 		"appmesh: qualified sections": {
 			rs: appmesh,
@@ -347,6 +355,7 @@ func TestSchemaDocsRule_DuplicateBlockNames(t *testing.T) {
 				"pool_a.tcp bogus_attr", "pool_a.tcp timeout",
 				"pool_b.tcp bogus_attr", "pool_b.tcp max_connections",
 			},
+			wantShared: 1,
 		},
 		"grpc: merged section lists another path's child block": {
 			rs: grpcs,
@@ -354,7 +363,8 @@ func TestSchemaDocsRule_DuplicateBlockNames(t *testing.T) {
 				sec("fast", "grpc"), sec("slow", "grpc"),
 				sec("grpc", "max_requests", "per_request"),
 				sec("per_request", "unit", "value")),
-			want: []string{"fast.grpc per_request", "slow.grpc max_requests"},
+			want:       []string{"fast.grpc per_request", "slow.grpc max_requests"},
+			wantShared: 1,
 		},
 		"grpc: qualified sections": {
 			rs: grpcs,
@@ -377,13 +387,20 @@ func TestSchemaDocsRule_DuplicateBlockNames(t *testing.T) {
 			results := rule.Check(check.CheckContext{Resource: tc.rs.Name, Schema: tc.rs, Doc: d})
 
 			var got, other []string
+			shared := 0
 			for _, r := range results {
-				field, rest, ok := strings.Cut(strings.TrimPrefix(r.Message, "documented attribute "), " in block ")
-				if ok && strings.HasSuffix(rest, "does not exist in schema") {
-					got = append(got, r.Block+" "+strings.Trim(field, `"`))
+				if m := phantomRe.FindStringSubmatch(r.Message); m != nil {
+					got = append(got, r.Block+" "+m[1])
+					continue
+				}
+				if sharedRe.MatchString(r.Message) {
+					shared++
 					continue
 				}
 				other = append(other, r.Message)
+			}
+			if shared != tc.wantShared {
+				t.Errorf("shared-section findings = %d, want %d", shared, tc.wantShared)
 			}
 			slices.Sort(got)
 			if !slices.Equal(got, tc.want) {
@@ -1792,6 +1809,67 @@ func TestCoverage_UnresolvedSections(t *testing.T) {
 	}
 }
 
+// TestCoverage_SharedSectionMessages pins two details of the shared-section
+// finding found on the corpus (#77): a field that is an attribute at one path
+// and a child block at another isn't a label conflict, and a disjunct-4
+// finding names the two parent paths whose children differ.
+func TestCoverage_SharedSectionMessages(t *testing.T) {
+	t.Parallel()
+
+	testCases := map[string]struct {
+		rs       *schema.ResourceSchema
+		sections []section
+		want     []string // substrings, each in some shared-section finding
+		wantNot  string   // substring no finding may contain
+	}{
+		"attribute at one path, child block at another": {
+			rs: twoZSchema(
+				&schema.Block{Attributes: optional("a1", "tls")},
+				&schema.Block{Attributes: optional("a1"), ChildBlocks: []string{"t.u.z.tls"}},
+				map[string]*schema.Block{"t.u.z.tls": {Attributes: optional("b1")}},
+			),
+			sections: withParents(section{heading: "z", fields: []string{"a1", "tls"}}, section{heading: "t.u.z.tls", fields: []string{"b1"}}),
+			wantNot:  "can't label it correctly",
+		},
+		// Recursion through one name (WAFv2's statement.and_statement...):
+		// section a serves a and a.k.a, whose k children differ. The finding
+		// must name the two parents, not one twice.
+		"children differ below, recursive name": {
+			rs: &schema.ResourceSchema{Name: "aws_test", Blocks: map[string]*schema.Block{
+				"":        {ChildBlocks: []string{"a"}},
+				"a":       {Attributes: optional("a1"), ChildBlocks: []string{"a.k"}},
+				"a.k":     {Attributes: optional("b1"), ChildBlocks: []string{"a.k.a"}},
+				"a.k.a":   {Attributes: optional("a1"), ChildBlocks: []string{"a.k.a.k"}},
+				"a.k.a.k": {Attributes: optional("b1")},
+			}},
+			sections: []section{
+				{heading: "a", fields: []string{"a1", "k"}},
+				{heading: "a.k", fields: []string{"a", "b1"}},
+				{heading: "a.k.a.k", fields: []string{"b1"}},
+			},
+			want: []string{`"k" differs below this level between "a" and "a.k.a"`},
+		},
+	}
+	for name, tc := range testCases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			root := []string{"t", "x"}
+			if _, ok := tc.rs.Blocks["a"]; ok {
+				root = []string{"a"}
+			}
+			results := runAcceptance(t, tc.rs, root, tc.sections)
+			for _, w := range tc.want {
+				if !hasMessage(results, w) {
+					t.Errorf("missing %q in:\n  %s", w, joinMessages(results))
+				}
+			}
+			if tc.wantNot != "" && hasMessage(results, tc.wantNot) {
+				t.Errorf("unexpected %q in:\n  %s", tc.wantNot, joinMessages(results))
+			}
+		})
+	}
+}
+
 // TestCoverage_UndocumentedSubtreeReportsShallowest: only the shallowest
 // undocumented block in a subtree is reported, with the count of undocumented
 // paths beneath it. Descendants can't be reached from the docs, so the real
@@ -2319,4 +2397,285 @@ func TestCoverageAcceptance_nonTransitive(t *testing.T) {
 	}
 
 	assertWant(t, runAcceptance(t, rs, []string{"a", "b", "c"}, sections), wantWarnOnly)
+}
+
+// The heading ambiguity warning moved into coverage as the shared-section
+// finding (#77, docs/rules/coverage-path-resolution.md §6). These tests kept
+// their scenarios and now assert that finding.
+
+// TestSchemaDocsRule_FullPathHeadings_DescendantsOwnHeadings is a
+// regression test for the self-suggesting ambiguity false positive on
+// aws_appmesh_gateway_route / aws_appmesh_route. A parent block
+// (spec.http2_route.match) and its descendants
+// (…match.header.match, …match.query_parameter.match) all share the
+// leaf "match" and are structurally distinct, so the leaf is ambiguous.
+// But every block has its own exact full-path heading, so the parent
+// heading is NOT ambiguous.
+//
+// The old resolver evaluated the parent's doc key in isolation and, via
+// the non-contiguous composite matcher (parts[0].parts[1].leaf), counted
+// the descendants as also "resolving" to the parent key — producing an
+// ambiguity warning whose suggested fix was the identical string the
+// author had already written. With most-specific-match resolution, each
+// descendant is owned by its own full-path heading, so the parent
+// resolves to exactly one block.
+func TestSchemaDocsRule_FullPathHeadings_DescendantsOwnHeadings(t *testing.T) {
+	t.Parallel()
+
+	rs := &schema.ResourceSchema{
+		Name: "aws_test",
+		Blocks: map[string]*schema.Block{
+			"": {
+				Attributes:  []schema.Attribute{{Name: "name", Required: true}},
+				ChildBlocks: []string{"spec"},
+			},
+			"spec":             {ChildBlocks: []string{"spec.http2_route"}},
+			"spec.http2_route": {ChildBlocks: []string{"spec.http2_route.match"}},
+			// Three distinct blocks sharing the leaf "match" -> ambiguous leaf.
+			"spec.http2_route.match": {
+				Attributes:  []schema.Attribute{{Name: "prefix", Optional: true}},
+				ChildBlocks: []string{"spec.http2_route.match.header", "spec.http2_route.match.query_parameter"},
+			},
+			"spec.http2_route.match.header":       {ChildBlocks: []string{"spec.http2_route.match.header.match"}},
+			"spec.http2_route.match.header.match": {Attributes: []schema.Attribute{{Name: "exact", Optional: true}}},
+			"spec.http2_route.match.query_parameter": {
+				ChildBlocks: []string{"spec.http2_route.match.query_parameter.match"},
+			},
+			"spec.http2_route.match.query_parameter.match": {Attributes: []schema.Attribute{{Name: "regex", Optional: true}}},
+		},
+	}
+
+	// Every match block has its own exact full-path heading.
+	markdown := "## Argument Reference\n\n" +
+		"* `name` - (Required) Name.\n" +
+		"* `spec` - (Required) Spec.\n\n" +
+		"### `spec.http2_route.match` Block\n\n" +
+		"* `prefix` - (Optional) Prefix.\n\n" +
+		"### `spec.http2_route.match.header.match` Block\n\n" +
+		"* `exact` - (Optional) Exact.\n\n" +
+		"### `spec.http2_route.match.query_parameter.match` Block\n\n" +
+		"* `regex` - (Optional) Regex.\n"
+
+	d, err := doc.ParseWithTemplates([]byte(markdown), "aws_test", doc.HeadingTemplates{"`{Path}` Block", "`{Block}` Block"})
+	if err != nil {
+		t.Fatalf("parse error: %v", err)
+	}
+
+	rule := &check.SchemaDocsRule{Preferred: doc.HeadingTemplates{"`{Path}` Block", "`{Block}` Block"}}
+	results := rule.Check(check.CheckContext{Resource: "aws_test", Schema: rs, Doc: d})
+
+	for _, r := range results {
+		if sharedRe.MatchString(r.Message) {
+			t.Errorf("full-path heading whose descendants have their own headings must not get a shared-section finding; got: %s", r.Message)
+		}
+	}
+}
+
+// TestSchemaDocsRule_IdenticalRepeatedBlocks_NotAmbiguous is a
+// regression test for the order-dependent block-signature bug. Two
+// blocks sharing a leaf ("config") have the identical attribute set but
+// list the attributes in different declaration order. Because schema
+// attributes are loaded from a Go map, declaration order is not stable;
+// an unsorted signature made these compare unequal, falsely marking the
+// leaf ambiguous (nondeterministically). A shared heading for two
+// structurally identical blocks is unambiguous, so no warning is
+// expected.
+func TestSchemaDocsRule_IdenticalRepeatedBlocks_NotAmbiguous(t *testing.T) {
+	t.Parallel()
+
+	rs := &schema.ResourceSchema{
+		Name: "aws_test",
+		Blocks: map[string]*schema.Block{
+			"": {
+				Attributes:  []schema.Attribute{{Name: "name", Required: true}},
+				ChildBlocks: []string{"config", "parent"},
+			},
+			// Same attribute set {auth_ttl, issuer}, different order.
+			"config": {Attributes: []schema.Attribute{
+				{Name: "auth_ttl", Optional: true},
+				{Name: "issuer", Required: true},
+			}},
+			"parent": {ChildBlocks: []string{"parent.config"}},
+			"parent.config": {Attributes: []schema.Attribute{
+				{Name: "issuer", Required: true},
+				{Name: "auth_ttl", Optional: true},
+			}},
+		},
+	}
+
+	// Only the bare "config" heading exists; parent.config has none, so
+	// the bare key would resolve to both blocks. The blocks are
+	// identical, so this is not a real ambiguity.
+	markdown := "## Argument Reference\n\n" +
+		"* `name` - (Required) Name.\n" +
+		"* `config` - (Optional) Config.\n" +
+		"* `parent` - (Optional) Parent.\n\n" +
+		"### `config` Block\n\n" +
+		"* `auth_ttl` - (Optional) TTL.\n" +
+		"* `issuer` - (Required) Issuer.\n"
+
+	d, err := doc.ParseWithTemplates([]byte(markdown), "aws_test", doc.HeadingTemplates{"`{Path}` Block", "`{Block}` Block"})
+	if err != nil {
+		t.Fatalf("parse error: %v", err)
+	}
+
+	rule := &check.SchemaDocsRule{Preferred: doc.HeadingTemplates{"`{Path}` Block", "`{Block}` Block"}}
+	results := rule.Check(check.CheckContext{Resource: "aws_test", Schema: rs, Doc: d})
+
+	for _, r := range results {
+		if sharedRe.MatchString(r.Message) {
+			t.Errorf("structurally identical repeated blocks must not get a shared-section finding; got: %s", r.Message)
+		}
+	}
+}
+
+// TestSchemaDocsRule_GenuineAmbiguity_StillWarns guards against
+// over-suppression. Two blocks share the leaf "config" but are
+// structurally DISTINCT, and only the bare top-level heading exists —
+// the nested block has no dedicated heading, so the bare key genuinely
+// covers both. This is a real ambiguity and must still get a shared-section finding.
+func TestSchemaDocsRule_GenuineAmbiguity_StillWarns(t *testing.T) {
+	t.Parallel()
+
+	rs := &schema.ResourceSchema{
+		Name: "aws_test",
+		Blocks: map[string]*schema.Block{
+			"": {
+				Attributes:  []schema.Attribute{{Name: "name", Required: true}},
+				ChildBlocks: []string{"config", "parent"},
+			},
+			"config": {Attributes: []schema.Attribute{{Name: "issuer", Required: true}}},
+			"parent": {ChildBlocks: []string{"parent.config"}},
+			// Distinct from top-level config (extra attribute).
+			"parent.config": {Attributes: []schema.Attribute{
+				{Name: "issuer", Required: true},
+				{Name: "extra", Optional: true},
+			}},
+		},
+	}
+
+	// Only the bare "config" heading; parent.config has none.
+	markdown := "## Argument Reference\n\n" +
+		"* `name` - (Required) Name.\n" +
+		"* `config` - (Optional) Config.\n" +
+		"* `parent` - (Optional) Parent.\n\n" +
+		"### `config` Block\n\n" +
+		"* `issuer` - (Required) Issuer.\n"
+
+	d, err := doc.ParseWithTemplates([]byte(markdown), "aws_test", doc.HeadingTemplates{"`{Path}` Block", "`{Block}` Block"})
+	if err != nil {
+		t.Fatalf("parse error: %v", err)
+	}
+
+	rule := &check.SchemaDocsRule{Preferred: doc.HeadingTemplates{"`{Path}` Block", "`{Block}` Block"}}
+	results := rule.Check(check.CheckContext{Resource: "aws_test", Schema: rs, Doc: d})
+
+	var found bool
+	for _, r := range results {
+		if sharedRe.MatchString(r.Message) && strings.HasPrefix(r.Message, `section "config"`) {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("genuine ambiguity (distinct blocks, only bare heading) must still get a shared-section finding; got %d results", len(results))
+		for _, r := range results {
+			t.Logf("  result: %s", r.Message)
+		}
+	}
+}
+
+// TestSchemaDocsRule_PathKeyedHeadings_PartialPathStillAmbiguous
+// covers the case Copilot flagged: a partial-path key like
+// `header.match` (from a `{Parent}` template or similar) still
+// resolves to multiple schema paths under the suffix-composite
+// lookup. The ambiguity warning must fire in this case even though
+// the doc key contains a dot.
+func TestSchemaDocsRule_PathKeyedHeadings_PartialPathStillAmbiguous(t *testing.T) {
+	t.Parallel()
+
+	rs := &schema.ResourceSchema{
+		Name: "aws_test",
+		Blocks: map[string]*schema.Block{
+			"": {
+				Attributes:  []schema.Attribute{{Name: "name", Required: true}},
+				ChildBlocks: []string{"spec"},
+			},
+			"spec": {
+				ChildBlocks: []string{"spec.http_route", "spec.http2_route"},
+			},
+			"spec.http_route": {
+				ChildBlocks: []string{"spec.http_route.header"},
+			},
+			"spec.http_route.header": {
+				ChildBlocks: []string{"spec.http_route.header.match"},
+			},
+			"spec.http_route.header.match": {
+				Attributes: []schema.Attribute{{Name: "exact", Optional: true}},
+			},
+			"spec.http2_route": {
+				ChildBlocks: []string{"spec.http2_route.header"},
+			},
+			"spec.http2_route.header": {
+				ChildBlocks: []string{"spec.http2_route.header.match"},
+			},
+			"spec.http2_route.header.match": {
+				Attributes: []schema.Attribute{{Name: "regex", Optional: true}},
+			},
+		},
+	}
+
+	// Heading uses a {Parent} template producing doc key
+	// "header.match". This 2-segment composite resolves to BOTH
+	// schema paths via the suffix-composite lookup, so the doc key
+	// does not actually disambiguate.
+	markdown := "## Argument Reference\n\n" +
+		"* `name` - (Required) Name.\n" +
+		"* `spec` - (Required) Spec.\n\n" +
+		"### `header` `match` Block\n\n" +
+		"* `exact` - (Optional) Exact.\n" +
+		"* `regex` - (Optional) Regex.\n"
+
+	// Use a parent template so the heading parses to "header.match".
+	templates := doc.HeadingTemplates{
+		"`{Parent}` `{Block}` Block",
+		"`{Path}` Block",
+		"`{Block}` Block",
+	}
+	d, err := doc.ParseWithTemplates([]byte(markdown), "aws_test", templates)
+	if err != nil {
+		t.Fatalf("parse error: %v", err)
+	}
+
+	// Confirm the doc actually keyed the block as "header.match" via
+	// the {Parent} template — otherwise the test isn't exercising the
+	// scenario.
+	if _, ok := d.ArgumentBlocks["header.match"]; !ok {
+		var keys []string
+		for k := range d.ArgumentBlocks {
+			keys = append(keys, k)
+		}
+		t.Fatalf("expected ArgumentBlocks[\"header.match\"] (got keys: %v)", keys)
+	}
+
+	rule := &check.SchemaDocsRule{
+		Preferred: doc.HeadingTemplates{"`{Path}` Block", "`{Block}` Block"},
+	}
+	results := rule.Check(check.CheckContext{Resource: "aws_test", Schema: rs, Doc: d})
+
+	var ambiguityFound bool
+	for _, r := range results {
+		if !sharedRe.MatchString(r.Message) {
+			continue
+		}
+		if strings.HasPrefix(r.Message, `section "header.match"`) &&
+			(strings.Contains(r.Message, "spec.http_route.header.match") || strings.Contains(r.Message, "spec.http2_route.header.match")) {
+			ambiguityFound = true
+		}
+	}
+	if !ambiguityFound {
+		t.Errorf("expected shared-section finding on partial-path key 'header.match' citing both colliding schema paths; got %d results", len(results))
+		for _, r := range results {
+			t.Logf("  result: %s", r.Message)
+		}
+	}
 }
