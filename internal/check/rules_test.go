@@ -132,68 +132,33 @@ func TestSchemaDocsRule_Bad(t *testing.T) {
 	}
 }
 
-func TestSchemaDocsRule_Correct(t *testing.T) {
+// TestNestedObject_On_WeakDescription_Flagged: description style now reaches
+// nested object fields — an "arn" documented as "The ARN." is flagged.
+func TestNestedObject_On_WeakDescription_Flagged(t *testing.T) {
 	t.Parallel()
 
-	ps, err := schema.LoadFile("../../testdata/schema/test_provider.json", "registry.terraform.io/hashicorp/test")
-	if err != nil {
-		t.Fatalf("loading schema: %s", err)
+	rs := objectAttrSchema()
+	schema.ExpandObjectAttributes(&schema.ProviderSchema{
+		DataSources: map[string]*schema.ResourceSchema{"aws_test": rs},
+	})
+
+	md := "## Argument Reference\n\n" +
+		"* `name` - (Required) Name.\n\n" +
+		"## Attribute Reference\n\n" +
+		"* `items` - List of objects. Each object has the following attributes:\n" +
+		"    * `arn` - The ARN value.\n" +
+		"    * `foo` - Foo value.\n"
+
+	results := (&check.SchemaDocsRule{}).Check(check.CheckContext{
+		Resource: "aws_test", Schema: rs, Doc: parseCaptured(t, md),
+	})
+
+	// Both fields covered — no missing-field error.
+	if hasMessage(results, `block "items"`) && hasMessage(results, "should be documented") {
+		t.Errorf("unexpected coverage error:\n  %s", joinMessages(results))
 	}
-
-	d, err := doc.ParseFile("../../testdata/docs/r/instance.html.markdown")
-	if err != nil {
-		t.Fatalf("loading doc: %s", err)
-	}
-
-	rule := &check.SchemaDocsRule{}
-	results := rule.Check(check.CheckContext{Resource: "test_instance", Schema: ps.Resources["test_instance"], Doc: d})
-
-	// arn is computed-only and is in the Attribute Reference section — should pass
-	for _, r := range results {
-		if r.Severity == check.SeverityError && strings.Contains(r.Message, "arn") {
-			t.Errorf("unexpected error for 'arn': %s", r.Message)
-		}
-	}
-}
-
-func TestSchemaDocsRule_Wrong(t *testing.T) {
-	t.Parallel()
-
-	ps, err := schema.LoadFile("../../testdata/schema/test_provider.json", "registry.terraform.io/hashicorp/test")
-	if err != nil {
-		t.Fatalf("loading schema: %s", err)
-	}
-
-	d, err := doc.ParseFile("../../testdata/docs/r/instance_computed_wrong.html.markdown")
-	if err != nil {
-		t.Fatalf("loading doc: %s", err)
-	}
-
-	// SchemaDocsRule: arn is computed-only but NOT in Attribute Reference
-	attrRule := &check.SchemaDocsRule{}
-	attrResults := attrRule.Check(check.CheckContext{Resource: "test_instance", Schema: ps.Resources["test_instance"], Doc: d})
-
-	var foundMissing bool
-	for _, r := range attrResults {
-		if strings.Contains(r.Message, "should be documented in Attribute Reference") {
-			foundMissing = true
-		}
-	}
-	if !foundMissing {
-		t.Error("expected error about 'arn' missing from Attribute Reference section")
-	}
-
-	// SchemaDocsRule: arn is computed-only but IS in Argument Reference
-	argRule := &check.SchemaDocsRule{}
-	argResults := argRule.Check(check.CheckContext{Resource: "test_instance", Schema: ps.Resources["test_instance"], Doc: d})
-
-	var foundWrongSection bool
-	for _, r := range argResults {
-		if strings.Contains(r.Message, "should not appear in Argument Reference") {
-			foundWrongSection = true
-		}
-	}
-	if !foundWrongSection {
-		t.Error("expected warning about 'arn' appearing in Argument Reference section")
+	// arn's weak "The" start is flagged inside the nested block.
+	if !hasMessage(results, `attribute "arn" description should not start with "The"`) {
+		t.Errorf("expected weak-description finding for nested arn, got:\n  %s", joinMessages(results))
 	}
 }

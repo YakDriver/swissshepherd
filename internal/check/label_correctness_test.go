@@ -4,6 +4,7 @@
 package check_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/YakDriver/swissshepherd/internal/check"
@@ -590,5 +591,43 @@ func TestLabelCorrectness_ComputedOnlyMislabeledCoverageDisabled(t *testing.T) {
 
 	if !hasMsg(results, `argument "status" is labeled (Optional) but is computed-only in the schema; move it to Attribute Reference and remove the label`) {
 		t.Errorf("labels must report computed-only mislabel when coverage is disabled; got: %+v", results)
+	}
+}
+
+// TestSchemaDocsRule_NoFalseLabelsWarning verifies that attributes in the
+// Attribute Reference section are NOT flagged for missing (Required)/(Optional)
+// labels, even when broad heading templates cause them to appear in ArgumentBlocks.
+func TestSchemaDocsRule_NoFalseLabelsWarning(t *testing.T) {
+	t.Parallel()
+
+	templates := doc.HeadingTemplates{"`{Block}` Block", "{Block} Block", "{Block}", "{Title}"}
+
+	src := []byte(`# Data Source: aws_thing
+
+## Argument Reference
+
+* ` + "`name`" + ` - (Required) Name of the thing.
+
+## Attribute Reference
+
+* ` + "`arn`" + ` - ARN of the thing.
+* ` + "`created_date`" + ` - Creation date.
+* ` + "`last_updated_date`" + ` - Last update date.
+`)
+
+	d, err := doc.ParseWithTemplates(src, "aws_thing", templates)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rule := &check.SchemaDocsRule{}
+	results := rule.Check(check.CheckContext{Resource: "aws_thing", Doc: d})
+
+	for _, r := range results {
+		if strings.Contains(r.Message, "is missing (Required) or (Optional) label") {
+			if strings.Contains(r.Message, "arn") || strings.Contains(r.Message, "created_date") || strings.Contains(r.Message, "last_updated_date") {
+				t.Errorf("false positive label warning for attribute-section item: %s", r.Message)
+			}
+		}
 	}
 }

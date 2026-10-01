@@ -59,6 +59,7 @@ If two existing implementations disagree, don't adopt whichever you found first 
 
 - Use stdlib `testing` only. Tests are table-driven and call `t.Parallel()` in every test and subtest, except tests that use `t.Chdir` or `t.Setenv` (Go panics if these are combined with `t.Parallel()`). Mark those with a `// Not parallel: <reason>` comment instead.
 - Default to black-box `_test` packages. White-box tests are fine for pure unexported primitives.
+- Tests for the `schema_docs` coverage sub-check (coverage, phantom fields and blocks, Read-Only coverage, shared sections, the #77 acceptance cases) live in `internal/check/coverage_test.go`. Look there first, and add new coverage tests there rather than in a new file.
 - When a real provider doc exposes a bug, freeze the pre-fix doc in `testdata/` as a fixture.
 - Test the negative cases: every never-guess condition must produce no findings.
 - For nondeterminism, run the check many times in-process and assert identical output.
