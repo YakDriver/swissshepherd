@@ -64,7 +64,7 @@ check "schema_docs" {
 
 ## Object-typed attributes (`nested_object_attributes`)
 
-Legacy `list(object({...}))` / `set(object({...}))` / bare `object({...})` attributes carry their fields as a nested *type*, not as a schema block. By default swissshepherd treats such an attribute as a single leaf: its inner fields are neither required to be documented nor style-checked.
+Legacy `list(object({...}))` / `set(object({...}))` / bare `object({...})` attributes carry their fields as a nested *type*, not as a schema block. By default swissshepherd treats such an attribute as a single leaf: its inner fields are neither required to be documented nor style-checked. A section whose heading names one (`` ### `items` ``) isn't reported as a phantom block, but its bullets aren't checked against the object's fields either, so a misspelled or nonexistent field there passes silently. Enable the option to check them.
 
 Set `nested_object_attributes = true` to model those fields as nested blocks. When enabled:
 
