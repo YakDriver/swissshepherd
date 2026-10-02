@@ -1870,6 +1870,95 @@ func TestCoverage_SharedSectionMessages(t *testing.T) {
 	}
 }
 
+// TestCoverage_OutsideHome covers the §2 home-section check: a
+// pure-configurable argument documented only under Attribute Reference with
+// no label is reported by coverage. Labeled bullets stay with labels' move
+// finding, and fields with no single home are never reported.
+func TestCoverage_OutsideHome(t *testing.T) {
+	t.Parallel()
+
+	const msg = "is documented under Attribute Reference but is a configurable argument in the schema"
+	testCases := map[string]struct {
+		root, child []schema.Attribute
+		unknown     bool   // child is ConfigUnknown
+		args, attrs string // root-level bullets
+		nArgs       string // bullets of child's Argument Reference section; "" omits it
+		nAttrs      string // bullets of child's Attribute Reference section; "" omits it
+		want        []string
+		wantWarn    bool
+	}{
+		"root required, unlabeled under attributes": {
+			root:     []schema.Attribute{{Name: "name", Required: true}, {Name: "arn", Computed: true}},
+			attrs:    "* `arn` - ARN.\n* `name` - Name.\n",
+			want:     []string{`argument "name" ` + msg + "; move it to Argument Reference and label it (Required)"},
+			wantWarn: true,
+		},
+		"nested optional, unlabeled under attributes": {
+			child:  []schema.Attribute{{Name: "size", Optional: true}},
+			nAttrs: "* `size` - Size.\n",
+			want:   []string{`argument "size" in block "c" ` + msg + "; move it to Argument Reference and label it (Optional)"},
+		},
+		// The computed sibling keeps labels from collapsing the section into
+		// one "move this subsection" finding.
+		"labeled: left to labels": {
+			child:  []schema.Attribute{{Name: "size", Optional: true}, {Name: "state", Computed: true}},
+			nAttrs: "* `size` - (Optional) Size.\n* `state` - State.\n",
+			want:   []string{`argument "size" in block "c" ` + msg + "; move it to Argument Reference"},
+		},
+		"also under arguments": {
+			child:  []schema.Attribute{{Name: "size", Optional: true}},
+			nArgs:  "* `size` - (Optional) Size.\n",
+			nAttrs: "* `size` - Size.\n",
+		},
+		"optional+computed has two homes": {
+			child:  []schema.Attribute{{Name: "size", Optional: true, Computed: true}},
+			nAttrs: "* `size` - Size.\n",
+		},
+		"config unknown": {
+			child:   []schema.Attribute{{Name: "size", Optional: true}},
+			unknown: true,
+			nAttrs:  "* `size` - Size.\n",
+		},
+	}
+	for name, tc := range testCases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			root := append([]schema.Attribute{{Name: "id", Computed: true}}, tc.root...)
+			rs := &schema.ResourceSchema{Name: "aws_test", Blocks: map[string]*schema.Block{
+				"":  {Attributes: root, ChildBlocks: []string{"c"}},
+				"c": {Attributes: tc.child, ConfigUnknown: tc.unknown},
+			}}
+			md := "## Argument Reference\n\n" + tc.args + "* `c` - (Optional) C.\n\n"
+			if tc.nArgs != "" {
+				md += "### `c` Block\n\n" + tc.nArgs + "\n"
+			}
+			md += "## Attribute Reference\n\n* `id` - ID.\n" + tc.attrs + "\n"
+			if tc.nAttrs != "" {
+				md += "### `c` Block\n\n" + tc.nAttrs
+			}
+			d, err := doc.Parse([]byte(md), rs.Name)
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			off := false
+			rule := &check.SchemaDocsRule{Ordering: &off, Description: &off, Format: &off, Byline: &off, Heading: &off}
+			results := rule.Check(check.CheckContext{Resource: rs.Name, Schema: rs, Doc: d})
+			var got []string
+			for _, r := range results {
+				if strings.Contains(r.Message, msg) {
+					got = append(got, r.Message)
+					if (r.Severity == check.SeverityWarning) != tc.wantWarn {
+						t.Errorf("severity = %v, want warning = %t", r.Severity, tc.wantWarn)
+					}
+				}
+			}
+			if !slices.Equal(got, tc.want) {
+				t.Errorf("got:\n  %s\nwant:\n  %s\nall:\n  %s", strings.Join(got, "\n  "), strings.Join(tc.want, "\n  "), joinMessages(results))
+			}
+		})
+	}
+}
+
 // TestCoverage_UndocumentedSubtreeReportsShallowest: only the shallowest
 // undocumented block in a subtree is reported, with the count of undocumented
 // paths beneath it. Descendants can't be reached from the docs, so the real

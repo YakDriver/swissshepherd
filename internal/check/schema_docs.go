@@ -212,6 +212,7 @@ func (r *SchemaDocsRule) checkCoverage(ctx CheckContext, idx map[*doc.DocBlock][
 		}
 		argSection := resolveSection(rs, ctx.Doc.ArgumentBlocks, blockPath)
 		argDuplicated := duplicated(argSection)
+		attrSection := resolveSection(rs, ctx.Doc.AttributeBlocks, blockPath)
 
 		for _, attr := range schemaBlock.Attributes {
 			if r.shouldSkipAttribute(attr) {
@@ -233,6 +234,8 @@ func (r *SchemaDocsRule) checkCoverage(ctx CheckContext, idx map[*doc.DocBlock][
 						Rule: r.Name(), Resource: ctx.Resource, Severity: severity(attr), Message: msg, Block: blockPath,
 					})
 				}
+			} else if res, ok := r.outsideHome(ctx, blockPath, attr, argSection, attrSection); ok {
+				results = append(results, res)
 			} else if m, ok := findMalformed(malformed, attr.Name); ok {
 				results = append(results, Result{
 					Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityWarning,
@@ -303,6 +306,44 @@ func (r *SchemaDocsRule) checkCoverage(ctx CheckContext, idx map[*doc.DocBlock][
 	results = append(results, r.sharedSectionResults(ctx, shared)...)
 
 	return results
+}
+
+// outsideHome reports a pure-configurable argument at p that is documented
+// only under Attribute Reference, with no label (§2 home section). The union
+// of p's sections counts it as documented, and labels reads an unlabeled
+// bullet there as a computed output, so nothing else reports it. A labeled
+// bullet is left to labels' move finding, so the two never both fire.
+// Severity follows that finding: a warning for a root scalar (#62).
+func (r *SchemaDocsRule) outsideHome(ctx CheckContext, p string, attr schema.Attribute, argSection, attrSection *doc.DocBlock) (Result, bool) {
+	if attrSection == nil || !configurableArgAtPath(ctx.Schema, p, attr.Name) {
+		return Result{}, false
+	}
+	if argSection != nil && slices.ContainsFunc(argSection.Attributes, func(a doc.DocAttribute) bool { return a.Name == attr.Name }) {
+		return Result{}, false
+	}
+	i := slices.IndexFunc(attrSection.Attributes, func(a doc.DocAttribute) bool { return a.Name == attr.Name })
+	if i < 0 {
+		return Result{}, false
+	}
+	da := attrSection.Attributes[i]
+	if da.Required || da.Optional || da.ReadOnly {
+		return Result{}, false
+	}
+	label := "(Optional)"
+	if attr.Required {
+		label = "(Required)"
+	}
+	where := ""
+	sev := severity(attr)
+	if p == "" {
+		sev = SeverityWarning
+	} else {
+		where = fmt.Sprintf(" in block %q", displayPath(p))
+	}
+	return Result{
+		Rule: r.Name(), Resource: ctx.Resource, Severity: sev, Block: p, Line: da.Line,
+		Message: fmt.Sprintf("argument %q%s is documented under Attribute Reference but is a configurable argument in the schema; move it to Argument Reference and label it %s", attr.Name, where, label),
+	}, true
 }
 
 // --- Shared sections ---
@@ -542,7 +583,7 @@ func (r *SchemaDocsRule) homeOnlyIn(rs *schema.ResourceSchema, p, f string, inAt
 		}
 		return false
 	}
-	c := p + "." + f
+	c := childBlockPath(p, f)
 	switch {
 	case blockTreeHasPureConfigurable(rs, c, make(map[string]bool)):
 		return !inAttrs

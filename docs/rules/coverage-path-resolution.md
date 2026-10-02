@@ -351,7 +351,11 @@ The order is load-bearing, not cosmetic. Deleting `existsInSiblingBlock` before 
   Deviation: the field-existence message carries the section and the paths where the field does exist, but not the section's line; the line is already the finding's own location.
 4. **§5 findings and the parser change** (occurrence lists and the duplicate-heading fit rule). Must be in the same release as step 1, per §5's release condition; "unresolved section" may trail the other two.
 5. **Shared-section finding into `coverage`** with the four disjuncts, and `checkHeadings` reduced to the preferred-style check.
-6. **Home-section check** for unlabeled single-home fields.
+6. **Home-section check** for unlabeled single-home fields. *Measured* (base = 5): full config ERROR 17,497 → 17,504, WARN 4,490 → 4,507; weak config ERROR 24 → 24, WARN 12 → 19; nothing removed. All 24 added findings checked against the schema and the doc: each field is `Required` or `Optional`, not `Computed`, and listed only under Attribute Reference without a label. 17 are root scalars, mostly data-source arguments listed only as exported attributes (`aws_elasticache_user.user_name`, `aws_ses_email_identity.email`); 7 are nested (`filter` blocks under Attribute Reference in `aws_ami` and `aws_ami_ids`, a combined "Accepter and Requester" heading, a routed `payment_configuration.query_compute.is_responsible`).
+
+  Scope: scalar attributes only. Coverage requires child blocks through the block-level finding, not a parent bullet, so a child-block bullet in the wrong section has no missing-field finding to extend. The reverse direction (a computed-only field only under Argument Reference, unlabeled) needs no new finding: Read-Only coverage already reports it as not documented in Attribute Reference (error), and `labels` reports the missing label.
+
+  Deviation: severity follows `labels`' move finding, not `severity(attr)` alone: a warning for a root scalar (#62), so one defect doesn't get a different severity depending on whether the bullet has a label. The message ends with the label to add.
 
 `checkDeprecated` moves onto the new resolver in step 1, and the suppression that keeps it from emitting a contradictory pair arrives with step 5, so those two must land in the same release even if they are separate PRs.
 
@@ -454,7 +458,7 @@ Shared-section deprecation conflicts (disjunct 3): not measured. Needs the count
 
 Shared-section child-content conflicts (disjunct 4): 24 groups in 11 resources agree at their own level but differ below (§6). Upper bound: measured before field homes and filters were applied, and counts schema groups, not doc sections that actually share a heading.
 
-Home-section check for unlabeled fields: 2 measured root-level cases (`aws_fsx_ontap_volume.volume_type`, `aws_vpclattice_auth_policy.state`). Nested cases not measured.
+Home-section check for unlabeled fields: 24 findings, 17 at the root and 7 nested, all confirmed (§7 step 6). The design-time estimate was 2 root-level cases.
 
 Missing-block errors (path-keyed dedup):
 
@@ -478,7 +482,7 @@ Everything above that is an estimate, a stale figure, or absent. `AGENTS.md` req
 | Disjunct 3: paths disagreeing on `Deprecated`, and the contradictory `checkDeprecated` pairs it suppresses | not measured |
 | Disjunct 4: shared sections whose paths differ below their own level | 24 schema groups (upper bound); re-measure against actual doc sections with filters and field homes |
 | `checkDeprecated` on the new resolver, independent of disjunct 3 | not measured |
-| Home-section check, nested cases | only the 2 root-level cases measured |
+| Home-section check | measured: 24 (17 root, 7 nested) |
 | Weak-config error count | must be unchanged except `aws_arcregionswitch_plan`; confirm per step |
 | Two runs of the new binary, byte-identical | required by `AGENTS.md`; also per step |
 
