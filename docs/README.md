@@ -368,7 +368,7 @@ check "region_argument" {
 
 ### `schema_docs`
 
-The primary rule. Validates argument and attribute documentation against the provider schema. Eight sub-checks: `byline`, `coverage`, `deprecated`, `description`, `format`, `heading`, `labels`, `ordering`. Coverage enforces the Required / Optional / Read-Only model at every depth of nesting and supports inline `(Read-Only)` labels via `allow_inline_read_only`. It decides which section documents a block from headings alone, and checks every section against every block it documents.
+The primary rule. Validates argument and attribute documentation against the provider schema. Eight sub-checks: `byline`, `coverage`, `deprecated`, `description`, `format`, `heading`, `labels`, `ordering`. Coverage enforces the Required / Optional / Read-Only model at every depth of nesting and supports inline `(Read-Only)` labels via `allow_inline_read_only`. It decides which section documents a block from headings alone, and checks every section against every block it documents; `labels` checks each section's labels the same way.
 
 See **[rules/schema_docs.md](rules/schema_docs.md)** for the full configuration reference, sub-check details, and the schema model.
 

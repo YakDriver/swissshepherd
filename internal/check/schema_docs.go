@@ -127,8 +127,10 @@ func (r *SchemaDocsRule) Check(ctx CheckContext) []Result {
 
 	var idx map[*doc.DocBlock][]string
 	var shared []sharedSection
-	if ctx.Schema != nil && ctx.Doc != nil && enabled(r.Coverage) {
+	if ctx.Schema != nil && ctx.Doc != nil && (enabled(r.Coverage) || enabled(r.Labels)) {
 		idx = r.sectionIndex(ctx)
+	}
+	if idx != nil && enabled(r.Coverage) {
 		shared = r.sharedSections(ctx, idx)
 	}
 	if enabled(r.Coverage) {
@@ -147,7 +149,7 @@ func (r *SchemaDocsRule) Check(ctx CheckContext) []Result {
 		results = append(results, r.checkFormat(ctx)...)
 	}
 	if enabled(r.Labels) {
-		results = append(results, r.checkLabels(ctx)...)
+		results = append(results, r.checkLabels(ctx, idx)...)
 	}
 	if enabled(r.Byline) {
 		results = append(results, r.checkBylines(ctx)...)
@@ -1926,7 +1928,7 @@ func (r *SchemaDocsRule) validateIndentedAttr(ctx CheckContext, attrStack []stri
 
 // --- Labels ---
 
-func (r *SchemaDocsRule) checkLabels(ctx CheckContext) []Result {
+func (r *SchemaDocsRule) checkLabels(ctx CheckContext, idx map[*doc.DocBlock][]string) []Result {
 	var results []Result
 
 	// Build set of attrs in attribute section to avoid false positives from
@@ -1960,7 +1962,7 @@ func (r *SchemaDocsRule) checkLabels(ctx CheckContext) []Result {
 				// entry in the attribute section here would let an incorrect label
 				// (e.g. (Required) on an Optional+Computed field listed in both
 				// sections) slip through unreported (issue #68 review).
-				if res := r.labelCorrectness(ctx, blockName, attr); res != nil {
+				if res := r.labelCorrectness(ctx, idx, blockName, attr); res != nil {
 					results = append(results, *res)
 				}
 				continue
@@ -1970,7 +1972,7 @@ func (r *SchemaDocsRule) checkLabels(ctx CheckContext) []Result {
 				// Still verify it names a genuinely read-only attribute: a
 				// (Read-Only) label on a configurable (Required/Optional) field is
 				// wrong and must name the real requiredness (Gap A).
-				if res := r.labelCorrectness(ctx, blockName, attr); res != nil {
+				if res := r.labelCorrectness(ctx, idx, blockName, attr); res != nil {
 					results = append(results, *res)
 				}
 				continue
@@ -2020,54 +2022,39 @@ func (r *SchemaDocsRule) checkLabels(ctx CheckContext) []Result {
 // checkComputedMisplacement when the coverage sub-check is enabled (labels defers
 // to avoid a double finding) and by labels itself when coverage is disabled.
 //
-// It returns nil (no finding) whenever the schema attribute cannot be resolved
-// unambiguously so a finding never fires on a guess:
-//   - the subsection heading does not resolve to a schema path,
-//   - the resolved path is in skip_blocks,
-//   - the resolved block is ConfigUnknown (object-typed synthesized block whose
-//     per-field Required/Optional metadata is unknowable), or
-//   - the attribute is not a scalar attribute at that path (e.g. a child-block
-//     reference bullet, which carries no scalar Required/Optional flag).
+// The section is checked against every path it serves (idx, the #77
+// resolver), so a shared or partly qualified section is checked like any
+// other (#80). It returns nil (no finding) whenever the label can't be settled
+// so a finding never fires on a guess:
+//   - the section serves no path (skip_blocks paths are never served),
+//   - the field is a scalar attribute at none of the served paths whose
+//     labels are known (a ConfigUnknown block's per-field flags aren't),
+//   - the served paths disagree about the label: that's the shared-section
+//     finding's to report once, since per-path findings would contradict
+//     each other, or
+//   - the key has several headings and coverage is on: the fit rule compares
+//     each heading's labels against the paths it could document.
 //
 // Label additions such as "Forces new resource" or "Deprecated" do not matter:
 // the parser sets attr.Required/attr.Optional from the leading token, so the
 // booleans compared here are already correct regardless of trailing traits.
-func (r *SchemaDocsRule) labelCorrectness(ctx CheckContext, blockName string, attr doc.DocAttribute) *Result {
+func (r *SchemaDocsRule) labelCorrectness(ctx CheckContext, idx map[*doc.DocBlock][]string, blockName string, attr doc.DocAttribute) *Result {
 	if ctx.Schema == nil {
 		return nil
 	}
-	path, _, ok := resolveSubsectionPath(ctx.Schema, ctx.Doc.ArgumentBlocks, blockName)
-	if !ok || slices.Contains(r.skipBlocks(), path) {
-		return nil
-	}
-	b, ok := ctx.Schema.Blocks[path]
-	if !ok || b.ConfigUnknown {
-		return nil
-	}
-
-	var sa *schema.Attribute
-	for i := range b.Attributes {
-		if b.Attributes[i].Name == attr.Name {
-			sa = &b.Attributes[i]
-			break
+	paths := []string{""}
+	if blockName != "" {
+		b := ctx.Doc.ArgumentBlocks[blockName]
+		if duplicated(b) && enabled(r.Coverage) {
+			return nil
 		}
+		paths = idx[b]
 	}
-	// Not a scalar attribute at this path (child-block reference or absent): out
-	// of scope — no finding fires on a guess.
-	if sa == nil {
+	want := r.servedLabel(ctx.Schema, paths, attr.Name)
+	if want == "" {
 		return nil
 	}
-
-	// The schema-correct label for this attribute.
-	var want, state string
-	switch {
-	case sa.Required:
-		want, state = "(Required)", "required"
-	case sa.Optional:
-		want, state = "(Optional)", "optional" // pure Optional or Optional+Computed
-	default:
-		want, state = "(Read-Only)", "read-only" // computed-only
-	}
+	state := map[string]string{"(Required)": "required", "(Optional)": "optional", "(Read-Only)": "read-only"}[want]
 
 	// The documented label(s). A well-formed argument bullet carries exactly one
 	// category label; the parser sets a boolean per recognized trait, so a
@@ -2103,12 +2090,22 @@ func (r *SchemaDocsRule) labelCorrectness(ctx CheckContext, blockName string, at
 	//     a double finding); when coverage is disabled that check never runs, so
 	//     labels must report the strict-mode fix itself or the finding is lost.
 	if want == "(Read-Only)" && !r.allowInlineReadOnly() {
-		if enabled(r.Coverage) {
-			return nil // checkComputedMisplacement reports the move
+		// Coverage reports the field only where Attribute Reference doesn't
+		// document it, so labels defers only then.
+		inAttrs := !slices.ContainsFunc(paths, func(p string) bool {
+			s := resolveSection(ctx.Schema, ctx.Doc.AttributeBlocks, p)
+			return s == nil || !slices.ContainsFunc(s.Attributes, func(a doc.DocAttribute) bool { return a.Name == attr.Name })
+		})
+		if enabled(r.Coverage) && !inAttrs {
+			return nil // checkComputedMisplacement or Read-Only coverage reports the move
 		}
-		msg := fmt.Sprintf("argument %q is labeled %s but is computed-only in the schema; move it to Attribute Reference and remove the label", attr.Name, have)
+		fix := "move it to Attribute Reference and remove the label"
+		if inAttrs {
+			fix = "Attribute Reference already documents it, so remove it from Argument Reference"
+		}
+		msg := fmt.Sprintf("argument %q is labeled %s but is computed-only in the schema; %s", attr.Name, have, fix)
 		if blockName != "" {
-			msg = fmt.Sprintf("argument %q in block %q is labeled %s but is computed-only in the schema; move it to Attribute Reference and remove the label", attr.Name, displayPath(blockName), have)
+			msg = fmt.Sprintf("argument %q in block %q is labeled %s but is computed-only in the schema; %s", attr.Name, displayPath(blockName), have, fix)
 		}
 		return &Result{
 			Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityError,
@@ -2128,6 +2125,37 @@ func (r *SchemaDocsRule) labelCorrectness(ctx CheckContext, blockName string, at
 		Block:   blockName,
 		Line:    attr.Line,
 	}
+}
+
+// servedLabel returns the one schema-correct label for field f across paths,
+// or "" when it can't be settled: f is a scalar with known labels at none of
+// them, or they disagree. A path where coverage ignores f (deprecated, under
+// ignore_deprecated) counts only when no other path does, as in the
+// shared-section comparison.
+func (r *SchemaDocsRule) servedLabel(rs *schema.ResourceSchema, paths []string, f string) string {
+	var labels, ignored []string
+	for _, p := range paths {
+		b := rs.Blocks[p]
+		if b == nil || b.ConfigUnknown {
+			continue
+		}
+		a, ok := attrAt(b, f)
+		if !ok {
+			continue
+		}
+		if r.IgnoreDeprecated && a.Deprecated {
+			ignored = append(ignored, labelFor(a))
+			continue
+		}
+		labels = append(labels, labelFor(a))
+	}
+	if len(labels) == 0 {
+		labels = ignored
+	}
+	if len(slices.Compact(slices.Sorted(slices.Values(labels)))) != 1 {
+		return ""
+	}
+	return labels[0]
 }
 
 // stripLabelResult builds the "attribute should not have <label(s)>" warning for

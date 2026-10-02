@@ -129,16 +129,18 @@ The invariant is single-valued: exactly one label is correct for each attribute 
 
 Correctness lives inside the `labels` sub-check rather than behind a separate toggle. `schema_docs` shares one `ignore_targets`/`prefixes` scope across all sub-checks, so a second toggle would only add a global on/off, never per-target granularity. Validating the label's value was always the intent of `labels`; the earlier presence-only behavior was a gap in that check, not a deliberately narrower feature.
 
+A section is checked against every block it documents, decided the way `coverage` decides it (see "Coverage: which section documents a block" below). A shared section, such as one `` `encryption_configuration` `` heading documenting two blocks, or a partly qualified one, such as `` `a.z` `` for block `w.a.z`, is checked like an exact one, and its finding names the section as written.
+
 The check never fires on a guess. It reports nothing when:
 
-- the subsection heading does not resolve to a schema path;
-- the resolved path is in `skip_blocks`;
-- the resolved block is `ConfigUnknown` (an object-typed synthesized block whose per-field configurability is unknowable — see [Object-typed attributes](object-typed-attributes.md)); or
-- the name is not a scalar attribute at that path (e.g. a child-block reference bullet).
+- the section documents no block (including blocks in `skip_blocks`);
+- the name is not a scalar attribute at any block it documents whose labels are known (e.g. a child-block reference bullet). A `ConfigUnknown` block (an object-typed synthesized block whose per-field configurability is unknowable — see [Object-typed attributes](object-typed-attributes.md)) doesn't count;
+- those blocks disagree about the label: no label is right for every one of them, and `coverage` reports that once as a shared-section finding; or
+- the section's key has several headings and `coverage` is on: the duplicate-heading check compares each heading's labels instead.
 
 Label additions such as `(Required, Forces new resource)` do not affect detection: the required/optional state is read from the leading token, and trailing traits are left as authored.
 
-Correctness also covers the inline `(Read-Only)` label permitted when `allow_inline_read_only = true`: it is valid only for a genuinely read-only (computed-only) attribute. A configurable (`Required`/`Optional`) field mislabeled `(Read-Only)` is reported the same way, directing the author to the correct `(Required)`/`(Optional)` label. Conversely, a computed-only field mislabeled `(Required)`/`(Optional)` is reported with `use (Read-Only)` — but only under `allow_inline_read_only = true`; in strict mode a computed-only field does not belong in Argument Reference at all, which `coverage` reports instead, so `labels` defers to avoid a double finding.
+Correctness also covers the inline `(Read-Only)` label permitted when `allow_inline_read_only = true`: it is valid only for a genuinely read-only (computed-only) attribute. A configurable (`Required`/`Optional`) field mislabeled `(Read-Only)` is reported the same way, directing the author to the correct `(Required)`/`(Optional)` label. Conversely, a computed-only field mislabeled `(Required)`/`(Optional)` is reported with `use (Read-Only)` — but only under `allow_inline_read_only = true`; in strict mode a computed-only field does not belong in Argument Reference at all, which `coverage` reports instead, so `labels` defers to avoid a double finding. When Attribute Reference already documents the field, `coverage` is satisfied, so `labels` reports it: `argument "r" in block "z" is labeled (Optional) but is computed-only in the schema; Attribute Reference already documents it, so remove it from Argument Reference`.
 
 Under `## Attribute Reference` the rule is the mirror image: attributes carry **no label at all**. A `(Read-Only)` label there is flagged for removal, just as a stray `(Required)`/`(Optional)` label is — a configurable field is additionally directed to move to Argument Reference (see [Argument/Attribute-Reference Misplacement](argument-attribute-misplacement.md)). This holds regardless of `allow_inline_read_only`, which only governs inline `(Read-Only)` in Argument Reference.
 
