@@ -1780,9 +1780,54 @@ func TestCoverage_DuplicateHeadingClosestPrefersContent(t *testing.T) {
 	)
 	sections := withParents(section{heading: "z", fields: []string{"a2", "a3", "a4"}}, section{heading: "z", fields: []string{"a2", "a3"}})
 	results := runAcceptance(t, rs, []string{"t", "x"}, sections)
-	want := `heading "z Block" (line 30) in Argument Reference documents no block exactly; the closest is "t.u.z": "a2" should be (Required); "a3" should be (Required)`
+	want := `documents block "t.u.z" exactly; the closest, at line 30: "a2" should be (Required); "a3" should be (Required)`
 	if !hasMessage(results, want) {
 		t.Errorf("missing %q in:\n  %s", want, joinMessages(results))
+	}
+}
+
+// TestCoverage_DuplicateHeadingReportsOnce: when a path's error already names
+// a heading as its closest with the same differences, that heading isn't
+// reported again (aws_sagemaker_user_profile: one missing field gave three
+// errors). A heading with different differences still is.
+func TestCoverage_DuplicateHeadingReportsOnce(t *testing.T) {
+	t.Parallel()
+
+	testCases := map[string]struct {
+		sections []section
+		want     int
+	}{
+		// Both headings miss a3, for the one path either could document.
+		"same defect": {
+			sections: withParents(section{heading: "z", fields: []string{"a1"}}, section{heading: "z", fields: []string{"a1"}}),
+			want:     1,
+		},
+		// The second heading also lists a field that doesn't exist.
+		"different defects": {
+			sections: withParents(section{heading: "z", fields: []string{"a1"}}, section{heading: "z", fields: []string{"a1", "bogus"}}),
+			want:     2,
+		},
+	}
+	for name, tc := range testCases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			rs := &schema.ResourceSchema{Name: "aws_test", Blocks: map[string]*schema.Block{
+				"":      {ChildBlocks: []string{"x"}},
+				"x":     {ChildBlocks: []string{"x.y"}},
+				"x.y":   {ChildBlocks: []string{"x.y.z"}},
+				"x.y.z": {Attributes: optional("a1", "a3")},
+			}}
+			results := runAcceptance(t, rs, []string{"x"}, tc.sections)
+			n := 0
+			for _, r := range results {
+				if r.Severity == check.SeverityError && (strings.Contains(r.Message, "documents no block exactly") || strings.Contains(r.Message, "exactly; the closest")) {
+					n++
+				}
+			}
+			if n != tc.want {
+				t.Errorf("fit errors = %d, want %d:\n  %s", n, tc.want, joinMessages(results))
+			}
+		})
 	}
 }
 

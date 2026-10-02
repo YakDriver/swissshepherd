@@ -815,6 +815,10 @@ func (r *SchemaDocsRule) checkDuplicateHeadings(ctx CheckContext) []Result {
 				}
 			}
 			before := len(results)
+			// reported holds each path error's differences, so a heading whose
+			// closest path already carries the same differences isn't
+			// reported again: the path's message names every heading line.
+			reported := make(map[int]string)
 			for j, p := range served {
 				best := 0
 				for i := range mis {
@@ -826,6 +830,7 @@ func (r *SchemaDocsRule) checkDuplicateHeadings(ctx CheckContext) []Result {
 					break
 				}
 				if d := mis[best][j]; len(d) > 0 {
+					reported[j] = strings.Join(d, "\x00")
 					results = append(results, Result{
 						Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityError, Block: p, Line: occs[best].Line,
 						Message: fmt.Sprintf("none of the %d headings for %q in %s (lines %s) documents block %q exactly; the closest, at line %d: %s",
@@ -841,6 +846,9 @@ func (r *SchemaDocsRule) checkDuplicateHeadings(ctx CheckContext) []Result {
 					}
 				}
 				if d := mis[i][best]; len(d) > 0 {
+					if prev, ok := reported[best]; ok && prev == strings.Join(d, "\x00") {
+						continue
+					}
 					results = append(results, Result{
 						Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityError, Block: served[best], Line: o.Line,
 						Message: fmt.Sprintf("heading %q (line %d) in %s documents no block exactly; the closest is %q: %s",
