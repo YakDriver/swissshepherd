@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/YakDriver/swissshepherd/internal/check"
 	"github.com/YakDriver/swissshepherd/internal/doc"
@@ -2172,6 +2173,65 @@ func TestCoverage_SharedChildDeprecation(t *testing.T) {
 	results := rule.Check(check.CheckContext{Resource: rs.Name, Schema: rs, Doc: d})
 	if want := `"a3" differs below this level between "x.y.z" and "t.u.z"`; !hasMessage(results, want) {
 		t.Errorf("missing %q in:\n  %s", want, joinMessages(results))
+	}
+}
+
+// TestCoverage_SharedSectionCost guards the evaluation cost of shared
+// sections (design §6 Cost). Bare-leaf sections here each serve 4,000 paths
+// with nested children, about twice aws_wafv2_web_acl's match_pattern
+// (2,160). Evaluating each disjunct over the served set is linear in paths; a
+// pairwise implementation passes every correctness test but does millions of
+// block comparisons here and blows the deadline, which leaves a wide margin
+// over the set-based cost.
+func TestCoverage_SharedSectionCost(t *testing.T) {
+	t.Parallel()
+
+	const n = 4000
+	blocks := map[string]*schema.Block{"": {}}
+	for i := range n {
+		c := fmt.Sprintf("c%04d", i)
+		blocks[""].ChildBlocks = append(blocks[""].ChildBlocks, c)
+		blocks[c] = &schema.Block{ChildBlocks: []string{c + ".z"}}
+		blocks[c+".z"] = &schema.Block{Attributes: optional("a1", "a2"), ChildBlocks: []string{c + ".z.k"}}
+		blocks[c+".z.k"] = &schema.Block{Attributes: optional("b1", "b2"), ChildBlocks: []string{c + ".z.k.m"}}
+		blocks[c+".z.k.m"] = &schema.Block{Attributes: optional("d1", "d2")}
+	}
+	rs := &schema.ResourceSchema{Name: "aws_test", Blocks: blocks}
+	sections := []section{
+		{heading: "z", fields: []string{"a1", "a2", "k"}},
+		{heading: "k", fields: []string{"b1", "b2", "m"}},
+		{heading: "m", fields: []string{"d1", "d2"}},
+	}
+	for _, c := range blocks[""].ChildBlocks {
+		sections = append(sections, section{heading: c, fields: []string{"z"}})
+	}
+	md := "## Argument Reference\n\n"
+	for _, c := range blocks[""].ChildBlocks {
+		md += "* `" + c + "` - (Optional) C.\n"
+	}
+	md += "\n"
+	for _, sec := range sections {
+		md += "### `" + sec.heading + "` Block\n\n"
+		for _, f := range sec.fields {
+			md += "* `" + f + "` - (Optional) F.\n"
+		}
+		md += "\n"
+	}
+	d, err := doc.Parse([]byte(md), rs.Name)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	off := false
+	rule := &check.SchemaDocsRule{Ordering: &off, Description: &off, Format: &off, Byline: &off, Heading: &off}
+
+	start := time.Now()
+	results := rule.Check(check.CheckContext{Resource: rs.Name, Schema: rs, Doc: d})
+	if elapsed := time.Since(start); elapsed > 10*time.Second {
+		t.Errorf("Check took %v for %d paths per shared section; evaluation is probably pairwise", elapsed, n)
+	}
+	// Interchangeable paths: the shared sections are valid.
+	if hasMessage(results, "paths; ") {
+		t.Errorf("unexpected shared-section finding:\n  %s", joinMessages(results))
 	}
 }
 
