@@ -2235,6 +2235,134 @@ func TestCoverage_SharedSectionCost(t *testing.T) {
 	}
 }
 
+// TestCoverage_ReviewRegressions covers defects found in review of #87. Child
+// blocks use the loader's bare-name ChildBlocks, as provider schemas do.
+func TestCoverage_ReviewRegressions(t *testing.T) {
+	t.Parallel()
+
+	off := false
+	z := func(xyz, tuz *schema.Block, extra map[string]*schema.Block) *schema.ResourceSchema {
+		return twoZSchema(xyz, tuz, extra)
+	}
+	parents := "* `x` - (Optional) X.\n* `t` - (Optional) T.\n\n### `x` Block\n\n* `y` - (Optional) Y.\n\n### `x.y` Block\n\n* `z` - (Optional) Z.\n\n" +
+		"### `t` Block\n\n* `u` - (Optional) U.\n\n### `t.u` Block\n\n* `z` - (Optional) Z.\n\n"
+	testCases := map[string]struct {
+		rs      *schema.ResourceSchema
+		expand  bool // nested_object_attributes
+		md      string
+		rule    check.SchemaDocsRule
+		combine bool   // also accept bare `{Block}` headings, as combined headings need
+		want    string // substring some finding must contain
+		wantNot string // substring no finding may contain
+	}{
+		// ignore_deprecated drops a deprecated field from coverage, but it
+		// still exists, so a shared section listing it isn't wrong there.
+		"ignored deprecated field still exists": {
+			rs:      z(&schema.Block{Attributes: optional("a1", "x")}, &schema.Block{Attributes: []schema.Attribute{{Name: "a1", Optional: true}, {Name: "x", Optional: true, Deprecated: true}}}, nil),
+			md:      "## Argument Reference\n\n" + parents + "### `z` Block\n\n* `a1` - (Optional) A.\n* `x` - (Optional) X.\n",
+			rule:    check.SchemaDocsRule{IgnoreDeprecated: true},
+			wantNot: "paths; ",
+		},
+		// With nested_object_attributes, an object attribute's fields are a
+		// block at p.f that ChildBlocks doesn't list; they're compared too.
+		"object attribute fields differ": {
+			rs: z(
+				&schema.Block{Attributes: []schema.Attribute{{Name: "c1", Computed: true}, {Name: "obj", Computed: true, Children: []schema.Attribute{{Name: "b1", Computed: true}}}}},
+				&schema.Block{Attributes: []schema.Attribute{{Name: "c1", Computed: true}, {Name: "obj", Computed: true, Children: []schema.Attribute{{Name: "b2", Computed: true}}}}},
+				nil,
+			),
+			expand: true,
+			md:     "## Argument Reference\n\n" + parents + "## Attribute Reference\n\n### `z` Block\n\n* `c1` - C.\n* `obj` - Obj.\n",
+			want:   `"obj" differs below this level`,
+		},
+		// A child whose subtree has only Optional+Computed fields may be
+		// listed in either section, so its absence at one path isn't a
+		// conflict. The grandchild is reached through a bare name.
+		"either-home child through a bare grandchild": {
+			rs: z(
+				&schema.Block{Attributes: []schema.Attribute{{Name: "c1", Computed: true}}, ChildBlocks: []string{"k"}},
+				&schema.Block{Attributes: []schema.Attribute{{Name: "c1", Computed: true}}},
+				map[string]*schema.Block{
+					"x.y.z.k":   {ChildBlocks: []string{"m"}},
+					"x.y.z.k.m": {Attributes: []schema.Attribute{{Name: "d1", Optional: true, Computed: true}}},
+				},
+			),
+			md:      "## Argument Reference\n\n" + parents + "## Attribute Reference\n\n### `z` Block\n\n* `c1` - C.\n* `k` - K.\n",
+			wantNot: `"k" must be listed`,
+		},
+		// Duplicate z headings that omit a configurable child don't fit; the
+		// child is a bare name.
+		"duplicate headings omitting a bare-named child": {
+			rs: z(
+				&schema.Block{Attributes: optional("a1"), ChildBlocks: []string{"a3"}},
+				&schema.Block{Attributes: optional("a1", "a2")},
+				map[string]*schema.Block{"x.y.z.a3": {Attributes: optional("b1")}},
+			),
+			md:   "## Argument Reference\n\n" + parents + "### `z` Block\n\n* `a1` - (Optional) A.\n\n### `z` Block\n\n* `a1` - (Optional) A.\n* `a2` - (Optional) A.\n",
+			want: `"a3" isn't listed`,
+		},
+		// A prose list after a combined heading leaves both aliases.
+		"prose after a combined heading": {
+			rs: &schema.ResourceSchema{Name: "aws_test", Blocks: map[string]*schema.Block{
+				"":  {ChildBlocks: []string{"a", "b", "c"}},
+				"a": {Attributes: optional("x")},
+				"b": {Attributes: optional("x")},
+				"c": {Attributes: optional("y")},
+			}},
+			md:      "## Argument Reference\n\n* `a` - (Optional) A.\n* `b` - (Optional) B.\n* `c` - (Optional) C.\n\n### `a` and `b`\n\n* `x` - (Optional) X.\n\nThe `c` block supports the following:\n\n* `y` - (Optional) Y.\n",
+			combine: true,
+			wantNot: "does not exist in schema",
+		},
+		// A prose list naming a unique leaf gets label correctness, as the
+		// same heading would.
+		"prose list label correctness": {
+			rs: &schema.ResourceSchema{Name: "aws_test", Blocks: map[string]*schema.Block{
+				"":                       {ChildBlocks: []string{"action"}},
+				"action":                 {Attributes: optional("name"), ChildBlocks: []string{"cloudwatch_logs"}},
+				"action.cloudwatch_logs": {Attributes: []schema.Attribute{{Name: "role_arn", Required: true}}},
+			}},
+			md:   "## Argument Reference\n\n* `action` - (Optional) A.\n\n### `action` Block\n\n* `name` - (Optional) N.\n\nThe `cloudwatch_logs` object takes the following arguments:\n\n* `role_arn` - (Optional) Role.\n",
+			want: `argument "role_arn" in block "cloudwatch_logs" is labeled (Optional) but is required in the schema`,
+		},
+		// Two z headings, each right for its own path, one marking x
+		// deprecated: the merged bullets aren't compared against both paths.
+		"duplicate headings with different deprecation": {
+			rs: z(
+				&schema.Block{Attributes: []schema.Attribute{{Name: "a1", Optional: true}, {Name: "x", Optional: true, Deprecated: true}}},
+				&schema.Block{Attributes: optional("a1", "a2", "x")},
+				nil,
+			),
+			md:      "## Argument Reference\n\n" + parents + "### `z` Block\n\n* `a1` - (Optional) A.\n* `x` - (Optional, **Deprecated**) X.\n\n### `z` Block\n\n* `a1` - (Optional) A.\n* `a2` - (Optional) A.\n* `x` - (Optional) X.\n",
+			wantNot: "deprecated in",
+		},
+	}
+	for name, tc := range testCases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if tc.expand {
+				schema.ExpandObjectAttributes(&schema.ProviderSchema{Resources: map[string]*schema.ResourceSchema{tc.rs.Name: tc.rs}})
+			}
+			templates := doc.HeadingTemplates{"`{Path}` Block", "`{Block}` Block"}
+			if tc.combine {
+				templates = append(templates, "`{Block}`")
+			}
+			d, err := doc.ParseWithOptions([]byte(tc.md), tc.rs.Name, templates, doc.ParseOptions{CaptureNestedAttributes: tc.expand})
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			rule := tc.rule
+			rule.Ordering, rule.Description, rule.Format, rule.Byline, rule.Heading = &off, &off, &off, &off, &off
+			results := rule.Check(check.CheckContext{Resource: tc.rs.Name, Schema: tc.rs, Doc: d})
+			if tc.want != "" && !hasMessage(results, tc.want) {
+				t.Errorf("missing %q in:\n  %s", tc.want, joinMessages(results))
+			}
+			if tc.wantNot != "" && hasMessage(results, tc.wantNot) {
+				t.Errorf("unexpected %q in:\n  %s", tc.wantNot, joinMessages(results))
+			}
+		})
+	}
+}
+
 // TestCoverage_UndocumentedSubtreeReportsShallowest: only the shallowest
 // undocumented block in a subtree is reported, with the count of undocumented
 // paths beneath it. Descendants can't be reached from the docs, so the real

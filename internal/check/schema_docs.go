@@ -465,13 +465,20 @@ func (e *shareEval) eval(paths []string, inAttrs bool, listed map[string]bool) [
 		if slices.Contains(e.r.implicit(), f) || slices.Contains(e.r.phantom(), f) {
 			continue
 		}
-		var exist, single []string
+		// exist is schema presence: a field coverage ignores (deprecated,
+		// under ignore_deprecated) still exists, so listing it isn't wrong.
+		// Ignored fields can't force a listing or a marker comparison.
+		var exist, single, compared []string
 		for _, p := range paths {
 			b := e.rs.Blocks[p]
-			if !blockHasField(b, f) || e.ignored(b, f) {
+			if !blockHasField(b, f) {
 				continue
 			}
 			exist = append(exist, p)
+			if e.ignored(b, f) {
+				continue
+			}
+			compared = append(compared, p)
 			if e.r.homeOnlyIn(e.rs, p, f, inAttrs) {
 				single = append(single, p)
 			}
@@ -480,17 +487,20 @@ func (e *shareEval) eval(paths []string, inAttrs bool, listed map[string]bool) [
 			missing := slices.IndexFunc(paths, func(p string) bool { return !slices.Contains(exist, p) })
 			out = append(out, shareConflict{kind: 1, field: f, q: single[0], p: paths[missing]})
 		}
-		if !(listed == nil || listed[f] || len(single) > 0) || len(exist) < 2 {
+		if !(listed == nil || listed[f] || len(single) > 0) || len(compared) < 2 {
 			continue
 		}
 		// A field can be an attribute at some paths and a child block at
-		// others. Labels and deprecation are compared among the attributes,
-		// contents among the child blocks.
+		// others, and an object-typed attribute is both: with
+		// nested_object_attributes its fields are expanded into a block at
+		// p.f that ChildBlocks doesn't list. Labels and deprecation are
+		// compared among the attributes, contents among the blocks.
 		var asAttr, children []string
-		for _, p := range exist {
+		for _, p := range compared {
 			if _, ok := attrAt(e.rs.Blocks[p], f); ok {
 				asAttr = append(asAttr, p)
-			} else if c := p + "." + f; !slices.Contains(e.r.skipBlocks(), c) {
+			}
+			if c := p + "." + f; !slices.Contains(e.r.skipBlocks(), c) {
 				if _, ok := e.rs.Blocks[c]; ok {
 					children = append(children, c)
 				}
@@ -607,7 +617,7 @@ func blockTreeHasConfigurable(rs *schema.ResourceSchema, path string) bool {
 	if slices.ContainsFunc(b.Attributes, func(a schema.Attribute) bool { return a.Required || a.Optional }) {
 		return true
 	}
-	return slices.ContainsFunc(b.ChildBlocks, func(c string) bool { return blockTreeHasConfigurable(rs, c) })
+	return slices.ContainsFunc(b.ChildBlocks, func(c string) bool { return blockTreeHasConfigurable(rs, childBlockPath(path, c)) })
 }
 
 // sharedSectionResults renders the shared-section findings.
@@ -962,7 +972,7 @@ func (r *SchemaDocsRule) fitMismatches(rs *schema.ResourceSchema, o doc.Occurren
 	}
 	if !inAttrs {
 		for _, c := range b.ChildBlocks {
-			if !listed[leafName(c)] && blockTreeHasPureConfigurable(rs, c, make(map[string]bool)) {
+			if !listed[leafName(c)] && blockTreeHasPureConfigurable(rs, childBlockPath(p, c), make(map[string]bool)) {
 				n = append(n, fmt.Sprintf("%q isn't listed", leafName(c)))
 			}
 		}
@@ -1127,17 +1137,26 @@ func withProseSections(rs *schema.ResourceSchema, d *doc.Document) *doc.Document
 		for _, a := range ps.Bullets {
 			lines[a.Line] = true
 		}
+		// The parser credits the bullets to the section and mirrors them into
+		// every alias of a combined heading ("`a` and `b`"), so they're
+		// removed from every section that holds them, by line.
 		var malformed []doc.MalformedAttr
-		if from := blocks[ps.Section]; from != nil && !ps.Orphaned {
-			from = own(blocks, ps.Section)
-			moved := func(a doc.DocAttribute) bool { return lines[a.Line] }
+		moved := func(a doc.DocAttribute) bool { return lines[a.Line] }
+		for _, key := range slices.Sorted(maps.Keys(blocks)) {
+			b := blocks[key]
+			if key == ps.key || (!slices.ContainsFunc(b.Attributes, moved) && !slices.ContainsFunc(b.MalformedAttributes, func(m doc.MalformedAttr) bool { return lines[m.Line] })) {
+				continue
+			}
+			from := own(blocks, key)
 			from.Attributes = slices.DeleteFunc(from.Attributes, moved)
 			for i := range from.Occurrences {
 				from.Occurrences[i].Attributes = slices.DeleteFunc(from.Occurrences[i].Attributes, moved)
 			}
 			from.MalformedAttributes = slices.DeleteFunc(from.MalformedAttributes, func(m doc.MalformedAttr) bool {
 				if lines[m.Line] {
-					malformed = append(malformed, m)
+					if key == ps.Section {
+						malformed = append(malformed, m)
+					}
 					return true
 				}
 				return false
@@ -2493,10 +2512,11 @@ func resolveSubsectionPath(rs *schema.ResourceSchema, docBlocks map[string]*doc.
 	if _, ok := rs.Blocks[key]; ok {
 		return key, resolveBareExact, true
 	}
-	// Unique-leaf inference, gated to real headings. A heading-less synthetic
-	// block (dot-path reference bullet or prose lead-in) must never be inferred
-	// by leaf; it resolves only by the exact-path branch above.
-	if b := docBlocks[key]; b != nil && b.Heading != "" {
+	// Unique-leaf inference, gated to headings and prose lead-ins, which are
+	// headings in all but syntax (coverage-path-resolution.md §5): both record
+	// occurrences. Routed content (dot-path reference bullets) records none and
+	// resolves only by the exact-path branch above.
+	if b := docBlocks[key]; b != nil && (b.Heading != "" || len(b.Occurrences) > 0) {
 		if p, ok := uniqueSchemaPathForLeaf(rs, key); ok {
 			return p, resolveUniqueLeaf, true
 		}
@@ -2928,6 +2948,11 @@ func (r *SchemaDocsRule) checkDeprecated(ctx CheckContext, shared []sharedSectio
 		}
 
 		for _, docBlock := range sections {
+			// Merged bullets of a duplicated key would be compared against
+			// every path; the fit rule judges each heading's markers instead.
+			if duplicated(docBlock) && enabled(r.Coverage) {
+				continue
+			}
 			skip := conflicted[docBlock]
 			docAttrs := make(map[string]*doc.DocAttribute, len(docBlock.Attributes))
 			for i := range docBlock.Attributes {
