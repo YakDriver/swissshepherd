@@ -13,7 +13,7 @@ All enabled by default; disable individually via the rule's config block.
 | `byline`      | First paragraph after section heading matches expected byline text (from type)                                                    |
 | `coverage`    | Every schema field is documented, in the section its path resolves to; every documented field exists at every path its section documents; a section shared by several paths is right for all of them; headings that document nothing, or the same key twice, are reported (see [Coverage: which section documents a block](#coverage-which-section-documents-a-block)) |
 | `deprecated`  | Deprecation status matches between schema and docs (both directions); a mismatch is an error                                     |
-| `description` | Descriptions don't start with weak/redundant/meta prefixes ("The ", "This ", "Contains ", "Used ", etc.)                              |
+| `description` | Descriptions don't start with weak/redundant/meta prefixes ("The ", "This ", "Contains ", "Used ", etc.). One finding per bullet, so same-named bullets in different sections are each reported |
 | `format`      | No code blocks in arg/attr sections; single-line attrs; uninterrupted lists                                                       |
 | `heading`     | Block headings match the preferred template style. Style only: whether a heading documents the right block is `coverage`'s job     |
 | `labels`      | Arguments carry a present, schema-correct label — (Required)/(Optional), or (Read-Only) for read-only attributes when allow_inline_read_only = true; attributes carry none. A wrong label is an error, a missing one a warning |

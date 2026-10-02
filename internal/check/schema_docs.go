@@ -1597,7 +1597,7 @@ func (r *SchemaDocsRule) checkOrdering(ctx CheckContext) []Result {
 // --- Description style ---
 
 func (r *SchemaDocsRule) checkDescriptions(ctx CheckContext) []Result {
-	seen := make(map[string]bool)
+	seen := make(map[bulletKey]bool)
 	var results []Result
 	results = append(results, checkDescriptionBlocks(ctx.Resource, r.Name(), r.prefixes(), ctx.Doc.ArgumentBlocks, seen)...)
 	results = append(results, checkDescriptionBlocks(ctx.Resource, r.Name(), r.prefixes(), ctx.Doc.AttributeBlocks, seen)...)
@@ -1625,14 +1625,26 @@ func (r *SchemaDocsRule) checkDescriptions(ctx CheckContext) []Result {
 	return results
 }
 
-func checkDescriptionBlocks(resource, ruleName string, prefixes []string, blocks map[string]*doc.DocBlock, seen map[string]bool) []Result {
+// bulletKey identifies one bullet. Each bullet is one defect: two bullets
+// with the same name, in either reference section or under the same key, are
+// two. The parser credits one bullet to several sections (the aliases of a
+// combined heading, or both sections under broad heading templates), so the
+// key is the bullet's line, never its section or name alone (#86).
+type bulletKey struct {
+	line int
+	name string
+}
+
+// checkDescriptionBlocks reports each bullet once, under the first section
+// in sorted order that holds it.
+func checkDescriptionBlocks(resource, ruleName string, prefixes []string, blocks map[string]*doc.DocBlock, seen map[bulletKey]bool) []Result {
 	var results []Result
-	for blockName, block := range blocks {
-		for _, attr := range block.Attributes {
+	for _, blockName := range slices.Sorted(maps.Keys(blocks)) {
+		for _, attr := range blocks[blockName].Attributes {
 			if attr.Description == "" {
 				continue
 			}
-			key := blockName + "." + attr.Name
+			key := bulletKey{attr.Line, attr.Name}
 			if seen[key] {
 				continue
 			}
