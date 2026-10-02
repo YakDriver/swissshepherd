@@ -18,6 +18,7 @@ A change isn't done until all of these hold:
 3. Any user-visible behavior change updates `docs/README.md` and the matching `docs/rules/*.md`.
 4. A change that alters findings has a measured corpus diff (see below) in the PR description.
 5. `git diff` contains no unrelated edits.
+6. Every exclusion, skip, suppression, or deferral the change adds names what it leaves unchecked and what reports it instead, in the PR or design doc. If nothing does, link a tracking issue. A deferral ("coverage reports this") needs a test that the other check fires in that exact case. "The false positive went away" isn't evidence a suppression is right: #77's `existsInSiblingBlock` silenced a finding by accepting unverified fields, and #80 found two deferrals where neither check reported.
 
 ## Priorities when rules conflict
 
