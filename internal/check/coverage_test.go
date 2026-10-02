@@ -2323,6 +2323,72 @@ func TestCoverage_ReviewRegressions(t *testing.T) {
 	}
 }
 
+// TestCoverage_ProseNestedSubBullets: with nested_object_attributes, a prose
+// list's indented sub-bullets move with their bullets into the block the prose
+// names, under a parseable heading or not (#88). A trailing bullet the section
+// keeps keeps its sub-bullets. The prose names a root block after the action
+// section, so the sub-bullets' old key (action.settings) documents nothing.
+func TestCoverage_ProseNestedSubBullets(t *testing.T) {
+	t.Parallel()
+
+	const head = "## Argument Reference\n\n* `action` - (Optional) A.\n* `cloudwatch_logs` - (Optional) C.\n\n### `action` Block\n\n* `name` - (Optional) N.\n\n"
+	const prose = "The `cloudwatch_logs` object takes the following arguments:\n\n* `settings` - (Optional) Settings. Each object has the following attributes:\n"
+	const tail = "\n## Attribute Reference\n\n* `id` - ID.\n"
+	testCases := map[string]struct {
+		md    string
+		other bool     // action has an object attribute "other"
+		want  []string // findings other than the prose and heading warnings
+	}{
+		"under a heading": {
+			md: head + prose + "    * `level` - (Optional) Level.\n" + tail,
+		},
+		"under an unparseable heading": {
+			md: head + "### Logging Things\n\n" + prose + "    * `level` - (Optional) Level.\n" + tail,
+		},
+		"misspelled sub-bullet is reported where it belongs": {
+			md: head + prose + "    * `levl` - (Optional) Level.\n" + tail,
+			want: []string{
+				`attribute "level" in block "cloudwatch_logs.settings" is not documented`,
+				`documented argument "levl" in block "cloudwatch_logs.settings" does not exist in schema`,
+			},
+		},
+		"trailing section bullet keeps its sub-bullets": {
+			md:    head + prose + "    * `level` - (Optional) Level.\n* `other` - (Optional) Other. Each object has the following attributes:\n    * `mode` - (Optional) Mode.\n" + tail,
+			other: true,
+		},
+	}
+	for name, tc := range testCases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			rs := &schema.ResourceSchema{Name: "aws_test", Blocks: map[string]*schema.Block{
+				"":                {Attributes: []schema.Attribute{{Name: "id", Computed: true}}, ChildBlocks: []string{"action", "cloudwatch_logs"}},
+				"action":          {Attributes: []schema.Attribute{{Name: "name", Optional: true}}},
+				"cloudwatch_logs": {Attributes: []schema.Attribute{{Name: "settings", Optional: true, Children: []schema.Attribute{{Name: "level", Optional: true}}}}},
+			}}
+			if tc.other {
+				rs.Blocks["action"].Attributes = append(rs.Blocks["action"].Attributes, schema.Attribute{Name: "other", Optional: true, Children: []schema.Attribute{{Name: "mode", Optional: true}}})
+			}
+			schema.ExpandObjectAttributes(&schema.ProviderSchema{Resources: map[string]*schema.ResourceSchema{rs.Name: rs}})
+			d, err := doc.ParseWithOptions([]byte(tc.md), rs.Name, doc.HeadingTemplates{"`{Path}` Block", "`{Block}` Block"}, doc.ParseOptions{CaptureNestedAttributes: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			off := false
+			rule := check.SchemaDocsRule{Ordering: &off, Format: &off, Byline: &off, Heading: &off}
+			var got []string
+			for _, r := range rule.Check(check.CheckContext{Resource: rs.Name, Schema: rs, Doc: d}) {
+				if !strings.Contains(r.Message, "list introduced by prose") && !strings.Contains(r.Message, "isn't a recognized block heading") {
+					got = append(got, r.Message)
+				}
+			}
+			slices.Sort(got)
+			if !slices.Equal(got, tc.want) {
+				t.Errorf("findings:\n  %s\nwant:\n  %s", strings.Join(got, "\n  "), strings.Join(tc.want, "\n  "))
+			}
+		})
+	}
+}
+
 // TestCoverage_UndocumentedSubtreeReportsShallowest: only the shallowest
 // undocumented block in a subtree is reported, with the count of undocumented
 // paths beneath it. Descendants can't be reached from the docs, so the real

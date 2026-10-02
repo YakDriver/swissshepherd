@@ -240,6 +240,8 @@ The list documents `cloudwatch_logs` and gets every check a section gets. Like a
 
 This is a parsing decision, not a coverage one: it applies whether or not `coverage` is enabled, so `ordering`, `description`, `labels`, and `format` judge a prose list's bullets against the block it names. The same holds for bullets under an unparseable heading, which belong to no section for every sub-check.
 
+With `nested_object_attributes = true`, the indented sub-bullets under a prose list's bullets move with them, so `` * `settings` `` with indented `` * `level` `` under prose naming `cloudwatch_logs` documents `cloudwatch_logs.settings.level`. This holds under an unparseable heading too.
+
 Exceptions, where reading prose as a heading would credit the wrong block:
 
 - Prose that names nothing in the schema ("…the same arguments as `aws_instance`, with the addition of:") continues its section.

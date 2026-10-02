@@ -6,6 +6,7 @@ package doc
 import (
 	"bytes"
 	"fmt"
+	"maps"
 	"net/url"
 	"os"
 	"slices"
@@ -383,6 +384,12 @@ type ProseLeadIn struct {
 	// Orphaned is set under an unparseable heading: the bullets are credited
 	// to no section, and Section is meaningless.
 	Orphaned bool
+	// Nested holds the bullets' inline-indented sub-bullets when
+	// CaptureNestedAttributes is on, keyed by dot-path relative to the
+	// section ("settings", "settings.level"). Unless Orphaned, they're also
+	// captured under Section, where the parser can't know they belong to
+	// the block the prose names.
+	Nested map[string][]DocAttribute
 }
 
 // Document represents a parsed documentation file.
@@ -1047,7 +1054,23 @@ func extractBlocks(tree ast.Node, source []byte, idx *lineIndex, doc *Document, 
 						// Capture inline-indented nested attributes (e.g. the
 						// fields of a list(object({...})) documented as
 						// sub-bullets) into a dot-path keyed block.
-						if captureNested && !orphaned {
+						switch {
+						case captureNested && prose >= 0:
+							captured := make(map[string]*DocBlock)
+							captureNestedAttrs(li, attr.Name, captured, source, idx)
+							pl := &doc.ProseLeadIns[prose]
+							for _, rel := range slices.Sorted(maps.Keys(captured)) {
+								if pl.Nested == nil {
+									pl.Nested = make(map[string][]DocAttribute)
+								}
+								pl.Nested[rel] = append(pl.Nested[rel], captured[rel].Attributes...)
+								if !orphaned {
+									key := joinDocPath(currentBlockName, rel)
+									ensureBlock(target, key, "")
+									target[key].Attributes = append(target[key].Attributes, captured[rel].Attributes...)
+								}
+							}
+						case captureNested && !orphaned:
 							captureNestedAttrs(li, joinDocPath(currentBlockName, attr.Name), target, source, idx)
 						}
 					} else if ref := parseNestedRef(li, source); ref.Parent != "" {

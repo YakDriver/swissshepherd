@@ -5,6 +5,7 @@ package doc_test
 
 import (
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/YakDriver/swissshepherd/internal/doc"
@@ -1048,5 +1049,52 @@ func TestParse_ProseLeadInAttachesToPath(t *testing.T) {
 		if a == "managed_workgroup_name" {
 			t.Error("lead-in attributes leaked into the root block")
 		}
+	}
+}
+
+// TestBlocks_ProseNestedCapture: with CaptureNestedAttributes, a prose list's
+// sub-bullets are recorded on the lead-in relative to the section, and still
+// captured under the section unless the heading is unparseable (#88).
+func TestBlocks_ProseNestedCapture(t *testing.T) {
+	t.Parallel()
+
+	const list = "The `cloudwatch_logs` object takes the following arguments:\n\n* `settings` - (Optional) S. Each object has the following attributes:\n    * `level` - (Optional) L.\n"
+	testCases := map[string]struct {
+		body      string
+		wantBlock string // captured block key under Argument Reference; "" for none
+	}{
+		"under a heading": {
+			body:      "### `action` Block\n\n* `name` - (Optional) N.\n\n" + list,
+			wantBlock: "action.settings",
+		},
+		"under an unparseable heading": {
+			body: "### Logging Things\n\n" + list,
+		},
+	}
+	for name, tc := range testCases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			src := "# Resource: x\n\n## Argument Reference\n\n* `action` - (Optional) A.\n\n" + tc.body
+			d, err := doc.ParseWithOptions([]byte(src), "x", doc.HeadingTemplates{"`{Block}` Block"}, doc.ParseOptions{CaptureNestedAttributes: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(d.ProseLeadIns) != 1 {
+				t.Fatalf("prose lead-ins = %d, want 1", len(d.ProseLeadIns))
+			}
+			got := d.ProseLeadIns[0].Nested["settings"]
+			if len(got) != 1 || got[0].Name != "level" || got[0].Line == 0 {
+				t.Errorf("Nested[settings] = %+v, want one level bullet with a line", got)
+			}
+			var keys []string
+			for k, b := range d.ArgumentBlocks {
+				if strings.HasSuffix(k, "settings") && len(b.Attributes) > 0 {
+					keys = append(keys, k)
+				}
+			}
+			if want := []string{tc.wantBlock}; tc.wantBlock == "" && len(keys) > 0 || tc.wantBlock != "" && !slices.Equal(keys, want) {
+				t.Errorf("captured settings blocks = %q, want %q", keys, tc.wantBlock)
+			}
+		})
 	}
 }

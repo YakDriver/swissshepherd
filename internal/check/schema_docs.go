@@ -1171,8 +1171,48 @@ func withProseSections(rs *schema.ResourceSchema, d *doc.Document) *doc.Document
 		to.Attributes = append(to.Attributes, ps.Bullets...)
 		to.MalformedAttributes = append(to.MalformedAttributes, malformed...)
 		to.Occurrences = append(to.Occurrences, doc.Occurrence{Heading: ps.Text, Line: ps.Line, Attributes: slices.Clone(ps.Bullets)})
+
+		// Sub-bullets captured under a moved bullet document the named
+		// block's fields too, so they move with it (#88). A trailing run the
+		// section keeps (resumeLine) keeps its sub-bullets.
+		for _, rel := range slices.Sorted(maps.Keys(ps.Nested)) {
+			var sub []doc.DocAttribute
+			for _, a := range ps.Nested[rel] {
+				if ps.resumeLine == 0 || a.Line < ps.resumeLine {
+					sub = append(sub, a)
+				}
+			}
+			if len(sub) == 0 {
+				continue
+			}
+			if !ps.Orphaned {
+				fromKey := joinPath(ps.Section, rel)
+				subLines := make(map[int]bool, len(sub))
+				for _, a := range sub {
+					subLines[a.Line] = true
+				}
+				if blocks[fromKey] != nil {
+					from := own(blocks, fromKey)
+					from.Attributes = slices.DeleteFunc(from.Attributes, func(a doc.DocAttribute) bool { return subLines[a.Line] })
+					if len(from.Attributes) == 0 && from.Heading == "" && len(from.Occurrences) == 0 {
+						delete(blocks, fromKey)
+					}
+				}
+			}
+			to := own(blocks, joinPath(ps.key, rel))
+			to.Attributes = append(to.Attributes, sub...)
+		}
 	}
 	return &c
+}
+
+// joinPath joins a section key and a dot-path relative to it; the root key
+// is empty.
+func joinPath(key, rel string) string {
+	if key == "" {
+		return rel
+	}
+	return key + "." + rel
 }
 
 // pathTemplate is the first preferred heading style that takes a path, as
