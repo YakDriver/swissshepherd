@@ -48,6 +48,14 @@ If you are on the third patch for another heading or schema permutation, stop. Y
 
 If two existing implementations disagree, don't adopt whichever you found first as precedent. Check the design docs and git history for the intended behavior, or ask.
 
+## Issues and review comments
+
+Treat an issue, a review comment, or a fix proposed in either as a hypothesis, including ones an agent wrote. Before acting:
+
+- Confirm the defect against the code and, where it's about findings, the corpus. Issues get facts wrong: #74's premise was a coverage bug, and #86 claims a nondeterminism its dedup key rules out.
+- Ask whether the proposed fix is the right design, not just whether it removes the symptom. What else does it change? Which invariant could it break? Does it push provider docs toward something worse, such as bullets that restate field names?
+- If the issue or proposal is wrong, say so, with evidence, and correct the issue. Don't implement it to close it.
+
 ## Don't
 
 - Don't refactor adjacent code (especially `internal/check/schema_docs.go`) while fixing something in it.
@@ -59,7 +67,9 @@ If two existing implementations disagree, don't adopt whichever you found first 
 
 - Use stdlib `testing` only. Tests are table-driven and call `t.Parallel()` in every test and subtest, except tests that use `t.Chdir` or `t.Setenv` (Go panics if these are combined with `t.Parallel()`). Mark those with a `// Not parallel: <reason>` comment instead.
 - Default to black-box `_test` packages. White-box tests are fine for pure unexported primitives.
-- Tests for the `schema_docs` coverage sub-check (coverage, phantom fields and blocks, Read-Only coverage, shared sections, the #77 acceptance cases) live in `internal/check/coverage_test.go`. Look there first, and add new coverage tests there rather than in a new file.
+- Add a test to the existing file for its source file, not a new file for a new topic. `foo.go` is tested in `foo_test.go`, plus `foo_internal_test.go` for white-box tests. A new test file needs a new source file.
+- Two large source files are split by area instead. `internal/check/schema_docs.go` has one file per sub-check: `coverage_test.go` (coverage, phantom fields and blocks, Read-Only coverage, shared sections, the #77 acceptance cases), `labels_test.go`, and `schema_docs_test.go` for the rest. `internal/doc/doc.go` has `blocks_test.go`, `listitem_test.go`, `anchors_test.go`, and `doc_test.go`.
+- Name a test `Test<Rule or sub-check>_<Case>`, using the prefix its file already uses (`TestCoverage_`, `TestLabels_`), so `-run TestCoverage` selects that file's tests.
 - When a real provider doc exposes a bug, freeze the pre-fix doc in `testdata/` as a fixture.
 - Test the negative cases: every never-guess condition must produce no findings.
 - For nondeterminism, run the check many times in-process and assert identical output.
