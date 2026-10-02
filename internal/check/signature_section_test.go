@@ -1,10 +1,12 @@
 // Copyright IBM Corp. 2019, 2026
 // SPDX-License-Identifier: MPL-2.0
 
-package check
+package check_test
 
 import (
 	"testing"
+
+	"github.com/YakDriver/swissshepherd/internal/check"
 
 	"github.com/YakDriver/swissshepherd/internal/doc"
 	"github.com/YakDriver/swissshepherd/internal/schema"
@@ -65,8 +67,8 @@ func TestSignatureSectionRule(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			rule := &SignatureSectionRule{}
-			ctx := CheckContext{Resource: tt.name, Doc: d, FunctionSchema: tt.funcSch}
+			rule := &check.SignatureSectionRule{}
+			ctx := check.CheckContext{Resource: tt.name, Doc: d, FunctionSchema: tt.funcSch}
 			// Use the function name from the markdown title
 			if tt.funcSch != nil {
 				ctx.Resource = tt.funcSch.Name
@@ -78,9 +80,9 @@ func TestSignatureSectionRule(t *testing.T) {
 			var errs, warns int
 			for _, r := range results {
 				switch r.Severity {
-				case SeverityError:
+				case check.SeverityError:
 					errs++
-				case SeverityWarning:
+				case check.SeverityWarning:
 					warns++
 				}
 			}

@@ -398,3 +398,655 @@ func TestBlocks_DuplicateHeadingOccurrences(t *testing.T) {
 		t.Errorf("occurrences = %v, want %v", got, want)
 	}
 }
+
+func TestHeadingTemplates_Match(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		templates doc.HeadingTemplates
+		heading   string
+		want      string
+	}{
+		// {Block} Block — goldmark strips backticks so `network` Block → "network Block"
+		{
+			name:      "backtick_block style",
+			templates: doc.HeadingTemplates{"`{Block}` Block"},
+			heading:   "network Block",
+			want:      "network",
+		},
+		{
+			name:      "backtick_block with underscores",
+			templates: doc.HeadingTemplates{"`{Block}` Block"},
+			heading:   "credit_specification Block",
+			want:      "credit_specification",
+		},
+		// {Block} alone — bare snake_case name
+		{
+			name:      "bare block name",
+			templates: doc.HeadingTemplates{"{Block}"},
+			heading:   "statement",
+			want:      "statement",
+		},
+		{
+			name:      "bare block name with underscores",
+			templates: doc.HeadingTemplates{"{Block}"},
+			heading:   "redis_settings",
+			want:      "redis_settings",
+		},
+		// {Title} — title case converted to snake_case
+		{
+			name:      "title case",
+			templates: doc.HeadingTemplates{"{Title}"},
+			heading:   "Credit Specification",
+			want:      "credit_specification",
+		},
+		{
+			name:      "title case multi-word",
+			templates: doc.HeadingTemplates{"{Title}"},
+			heading:   "CPU Options",
+			want:      "cpu_options",
+		},
+		// {Block} Block without backticks
+		{
+			name:      "block suffix no backticks",
+			templates: doc.HeadingTemplates{"{Block} Block"},
+			heading:   "network Block",
+			want:      "network",
+		},
+		// Multiple templates — first match wins
+		{
+			name:      "multiple templates first match",
+			templates: doc.DefaultHeadingTemplates(),
+			heading:   "network Block",
+			want:      "network",
+		},
+		{
+			name:      "multiple templates title case fallback",
+			templates: doc.DefaultHeadingTemplates(),
+			heading:   "Network Interfaces",
+			want:      "network_interfaces",
+		},
+		{
+			name:      "multiple templates bare name",
+			templates: doc.DefaultHeadingTemplates(),
+			heading:   "condition",
+			want:      "condition",
+		},
+		// Title-case headings match {Title} template (the parser only invokes
+		// MatchAll inside Argument/Attribute Reference, where Example Usage
+		// subheadings cannot appear).
+		{
+			name:      "title template snake_cases multi-word headings",
+			templates: doc.DefaultHeadingTemplates(),
+			heading:   "Basic Usage",
+			want:      "basic_usage",
+		},
+		{
+			name:      "title template snake_cases mixed case",
+			templates: doc.DefaultHeadingTemplates(),
+			heading:   "Network example",
+			want:      "network_example",
+		},
+		// Non-matches
+		{
+			name:      "strict rejects bare name",
+			templates: doc.HeadingTemplates{"`{Block}` Block"},
+			heading:   "network",
+			want:      "",
+		},
+		{
+			name:      "strict rejects title case",
+			templates: doc.HeadingTemplates{"`{Block}` Block"},
+			heading:   "Network Interfaces",
+			want:      "",
+		},
+		{
+			name:      "strict accepts correct format",
+			templates: doc.HeadingTemplates{"`{Block}` Block"},
+			heading:   "network_interface Block",
+			want:      "network_interface",
+		},
+		// Title case rejected when not in templates
+		{
+			name:      "no title template rejects title case",
+			templates: doc.HeadingTemplates{"`{Block}` Block", "{Block}"},
+			heading:   "CPU Options",
+			want:      "",
+		},
+		// Upper case rejected as {Block} (must be lowercase)
+		{
+			name:      "block rejects uppercase",
+			templates: doc.HeadingTemplates{"{Block}"},
+			heading:   "Network",
+			want:      "",
+		},
+		// {Block} rejects punctuation and hyphens (mirrors {Path})
+		{
+			name:      "block rejects hyphen",
+			templates: doc.HeadingTemplates{"`{Block}` Block"},
+			heading:   "foo-bar Block",
+			want:      "",
+		},
+		{
+			name:      "block rejects slash",
+			templates: doc.HeadingTemplates{"`{Block}` Block"},
+			heading:   "a/b Block",
+			want:      "",
+		},
+		{
+			name:      "block rejects dot",
+			templates: doc.HeadingTemplates{"`{Block}` Block"},
+			heading:   "foo.bar Block",
+			want:      "",
+		},
+		{
+			name:      "block accepts digits and underscores",
+			templates: doc.HeadingTemplates{"`{Block}` Block"},
+			heading:   "config_v2 Block",
+			want:      "config_v2",
+		},
+		// {Parent} template — single parent
+		{
+			name:      "parent single word",
+			templates: doc.HeadingTemplates{"`{Parent}` `{Block}` Block"},
+			heading:   "custom_key header Block",
+			want:      "custom_key.header",
+		},
+		// {Parent} template — multi-word parent (uses last two parent words for disambiguation)
+		{
+			name:      "parent multi-word",
+			templates: doc.HeadingTemplates{"`{Parent}` `{Block}` Block"},
+			heading:   "customized_metric_specification metrics metric_stat Block",
+			want:      "customized_metric_specification.metrics.metric_stat",
+		},
+		{
+			name:      "parent three words",
+			templates: doc.HeadingTemplates{"`{Parent}` `{Block}` Block"},
+			heading:   "metric_data_query metric_stat metric Block",
+			want:      "metric_data_query.metric_stat.metric",
+		},
+		// {Parent} template — no match without suffix
+		{
+			name:      "parent rejects single word",
+			templates: doc.HeadingTemplates{"`{Parent}` `{Block}` Block"},
+			heading:   "header Block",
+			want:      "",
+		},
+		// {Path} template — single segment (acts like {Block})
+		{
+			name:      "path single segment",
+			templates: doc.HeadingTemplates{"`{Path}` Block"},
+			heading:   "network Block",
+			want:      "network",
+		},
+		// {Path} template — two segments dot-notation
+		{
+			name:      "path two segments",
+			templates: doc.HeadingTemplates{"`{Path}` Block"},
+			heading:   "partition_spec.fields Block",
+			want:      "partition_spec.fields",
+		},
+		// {Path} template — three segments dot-notation
+		{
+			name:      "path three segments",
+			templates: doc.HeadingTemplates{"`{Path}` Block"},
+			heading:   "analyzer_configuration.internal_access_configuration.internal_access_analysis_rule Block",
+			want:      "analyzer_configuration.internal_access_configuration.internal_access_analysis_rule",
+		},
+		// tfplugindocs canonical heading
+		{
+			name:      "tfplugindocs nested schema",
+			templates: doc.HeadingTemplates{"Nested Schema for `{Path}`"},
+			heading:   "Nested Schema for partition_spec.fields",
+			want:      "partition_spec.fields",
+		},
+		{
+			name:      "tfplugindocs nested schema single segment",
+			templates: doc.HeadingTemplates{"Nested Schema for `{Path}`"},
+			heading:   "Nested Schema for analyzer_configuration",
+			want:      "analyzer_configuration",
+		},
+		{
+			name:      "tfplugindocs nested schema deep",
+			templates: doc.HeadingTemplates{"Nested Schema for `{Path}`"},
+			heading:   "Nested Schema for analyzer_configuration.unused_access_configuration.analysis_rule.exclusions.resource_tags",
+			want:      "analyzer_configuration.unused_access_configuration.analysis_rule.exclusions.resource_tags",
+		},
+		// {Path} rejects malformed dot-notation
+		{
+			name:      "path rejects leading dot",
+			templates: doc.HeadingTemplates{"`{Path}` Block"},
+			heading:   ".fields Block",
+			want:      "",
+		},
+		{
+			name:      "path rejects trailing dot",
+			templates: doc.HeadingTemplates{"`{Path}` Block"},
+			heading:   "fields. Block",
+			want:      "",
+		},
+		{
+			name:      "path rejects double dot",
+			templates: doc.HeadingTemplates{"`{Path}` Block"},
+			heading:   "a..b Block",
+			want:      "",
+		},
+		{
+			name:      "path rejects uppercase segment",
+			templates: doc.HeadingTemplates{"`{Path}` Block"},
+			heading:   "Foo.bar Block",
+			want:      "",
+		},
+		{
+			name:      "path rejects space in segment",
+			templates: doc.HeadingTemplates{"`{Path}` Block"},
+			heading:   "partition spec.fields Block",
+			want:      "",
+		},
+		{
+			name:      "path rejects hyphen in segment",
+			templates: doc.HeadingTemplates{"`{Path}` Block"},
+			heading:   "foo-bar.fields Block",
+			want:      "",
+		},
+		{
+			name:      "path rejects slash in segment",
+			templates: doc.HeadingTemplates{"`{Path}` Block"},
+			heading:   "a/b.fields Block",
+			want:      "",
+		},
+		{
+			name:      "path rejects punctuation in segment",
+			templates: doc.HeadingTemplates{"`{Path}` Block"},
+			heading:   "foo+bar.fields Block",
+			want:      "",
+		},
+		{
+			name:      "path accepts digits",
+			templates: doc.HeadingTemplates{"`{Path}` Block"},
+			heading:   "config_v2.field_1 Block",
+			want:      "config_v2.field_1",
+		},
+		// Default templates accept the path forms
+		{
+			name:      "defaults accept dot-notation block",
+			templates: doc.DefaultHeadingTemplates(),
+			heading:   "partition_spec.fields Block",
+			want:      "partition_spec.fields",
+		},
+		{
+			name:      "defaults accept tfplugindocs",
+			templates: doc.DefaultHeadingTemplates(),
+			heading:   "Nested Schema for partition_spec.fields",
+			want:      "partition_spec.fields",
+		},
+		{
+			name:      "defaults accept bare dot-notation",
+			templates: doc.DefaultHeadingTemplates(),
+			heading:   "partition_spec.fields",
+			want:      "partition_spec.fields",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := tt.templates.Match(tt.heading)
+			if got != tt.want {
+				t.Errorf("Match(%q) = %q, want %q", tt.heading, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseWithTemplates_Strict(t *testing.T) {
+	t.Parallel()
+
+	// The test fixture uses "### `network` Block" which goldmark renders as "network Block"
+	// With strict backtick_block template, this should match
+	strict := doc.HeadingTemplates{"`{Block}` Block"}
+
+	d, err := doc.ParseFileWithTemplates("../../testdata/docs/r/instance.html.markdown", strict)
+	if err != nil {
+		t.Fatalf("unexpected error: %s", err)
+	}
+
+	if _, ok := d.ArgumentBlocks["network"]; !ok {
+		t.Error("strict template should match 'network Block' heading")
+	}
+}
+
+func TestParseWithTemplates_StrictRejectsBareName(t *testing.T) {
+	t.Parallel()
+
+	// Create a doc with bare name heading style (### statement)
+	source := []byte(`# Resource: test_thing
+
+## Argument Reference
+
+* ` + "`name`" + ` - (Required) Name.
+
+### statement
+
+* ` + "`sid`" + ` - (Optional) Statement ID.
+`)
+
+	// Strict backtick_block should NOT match "statement" (bare name)
+	strict := doc.HeadingTemplates{"`{Block}` Block"}
+	d, err := doc.ParseWithTemplates(source, "test", strict)
+	if err != nil {
+		t.Fatalf("unexpected error: %s", err)
+	}
+
+	if _, ok := d.ArgumentBlocks["statement"]; ok {
+		t.Error("strict backtick_block template should NOT match bare 'statement' heading")
+	}
+
+	// But default templates should match it
+	d2, err := doc.ParseWithTemplates(source, "test", doc.DefaultHeadingTemplates())
+	if err != nil {
+		t.Fatalf("unexpected error: %s", err)
+	}
+
+	if _, ok := d2.ArgumentBlocks["statement"]; !ok {
+		t.Error("default templates should match bare 'statement' heading")
+	}
+}
+
+// TestParse_TfplugindocsStyle confirms the parser keys nested-block doc
+// blocks by their full dot-notation path when the heading carries the
+// path explicitly. This is the tfplugindocs canonical form ("Nested
+// Schema for `<path>`") and the equivalent AWS-extended forms.
+func TestParse_TfplugindocsStyle(t *testing.T) {
+	t.Parallel()
+
+	// A doc that mirrors the tfplugindocs layout: every nested block is
+	// at heading level 3 with the full dot-path in backticks.
+	source := []byte(`# Resource: aws_test
+
+## Argument Reference
+
+* ` + "`name`" + ` - (Required) Name.
+
+### Nested Schema for ` + "`config`" + `
+
+* ` + "`enabled`" + ` - (Required) Enable.
+
+### Nested Schema for ` + "`config.encryption`" + `
+
+* ` + "`kms_key_id`" + ` - (Required) KMS key.
+
+### Nested Schema for ` + "`config.encryption.rotation`" + `
+
+* ` + "`interval_days`" + ` - (Required) Days.
+
+### Nested Schema for ` + "`config.logging`" + `
+
+* ` + "`bucket`" + ` - (Required) Bucket.
+`)
+
+	d, err := doc.Parse(source, "aws_test")
+	if err != nil {
+		t.Fatalf("parse error: %v", err)
+	}
+
+	cases := []struct {
+		key      string
+		wantAttr string
+	}{
+		{"config", "enabled"},
+		{"config.encryption", "kms_key_id"},
+		{"config.encryption.rotation", "interval_days"},
+		{"config.logging", "bucket"},
+	}
+
+	for _, c := range cases {
+		block, ok := d.ArgumentBlocks[c.key]
+		if !ok {
+			t.Errorf("ArgumentBlocks[%q] missing", c.key)
+			continue
+		}
+		var found bool
+		for _, a := range block.Attributes {
+			if a.Name == c.wantAttr {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("ArgumentBlocks[%q] has no attribute %q (got %v)", c.key, c.wantAttr, block.Attributes)
+		}
+	}
+}
+
+// TestParse_RepeatedLeafDistinctPaths confirms that same-name nested
+// blocks under different parents stay separated when authored with
+// dot-notation. The appmesh "match" case is the canonical scenario:
+// `spec.http_route.match` and `spec.grpc_route.match` are distinct
+// schema blocks and must remain distinct in the doc model.
+func TestParse_RepeatedLeafDistinctPaths(t *testing.T) {
+	t.Parallel()
+
+	source := []byte(`# Resource: aws_appmesh_test
+
+## Argument Reference
+
+* ` + "`spec`" + ` - (Required) Spec.
+
+### ` + "`spec.http_route`" + ` Block
+
+* ` + "`name`" + ` - (Required) Name.
+
+### ` + "`spec.http_route.match`" + ` Block
+
+* ` + "`method`" + ` - (Optional) HTTP method.
+* ` + "`scheme`" + ` - (Optional) HTTP scheme.
+
+### ` + "`spec.grpc_route`" + ` Block
+
+* ` + "`name`" + ` - (Required) Name.
+
+### ` + "`spec.grpc_route.match`" + ` Block
+
+* ` + "`service_name`" + ` - (Optional) gRPC service name.
+* ` + "`port`" + ` - (Optional) Port.
+`)
+
+	d, err := doc.Parse(source, "aws_appmesh_test")
+	if err != nil {
+		t.Fatalf("parse error: %v", err)
+	}
+
+	httpMatch, ok := d.ArgumentBlocks["spec.http_route.match"]
+	if !ok {
+		t.Fatalf("ArgumentBlocks missing spec.http_route.match — got keys %v", argumentKeys(d))
+	}
+	grpcMatch, ok := d.ArgumentBlocks["spec.grpc_route.match"]
+	if !ok {
+		t.Fatalf("ArgumentBlocks missing spec.grpc_route.match — got keys %v", argumentKeys(d))
+	}
+
+	// The two match blocks must be distinct DocBlocks with their own
+	// attribute lists. No merging.
+	if httpMatch == grpcMatch {
+		t.Fatal("http_route.match and grpc_route.match share the same DocBlock — they should be distinct")
+	}
+
+	httpAttrs := attrNames(httpMatch.Attributes)
+	grpcAttrs := attrNames(grpcMatch.Attributes)
+
+	wantHTTP := []string{"method", "scheme"}
+	wantGRPC := []string{"service_name", "port"}
+
+	if !sameStrings(httpAttrs, wantHTTP) {
+		t.Errorf("spec.http_route.match attributes = %v, want %v", httpAttrs, wantHTTP)
+	}
+	if !sameStrings(grpcAttrs, wantGRPC) {
+		t.Errorf("spec.grpc_route.match attributes = %v, want %v", grpcAttrs, wantGRPC)
+	}
+
+	// And there must NOT be a leaf-keyed "match" block — the parser
+	// keyed by full path, so the leaf form should not exist.
+	if _, ok := d.ArgumentBlocks["match"]; ok {
+		t.Errorf("ArgumentBlocks unexpectedly contains a leaf-keyed %q block; path-keyed headings should not collapse to leaf", "match")
+	}
+}
+
+// argumentKeys returns the sorted keys of d.ArgumentBlocks for debug output.
+func argumentKeys(d *doc.Document) []string {
+	keys := make([]string, 0, len(d.ArgumentBlocks))
+	for k := range d.ArgumentBlocks {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+	return keys
+}
+
+func sameStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func docBlockAttrNames(b *doc.DocBlock) []string {
+	if b == nil {
+		return nil
+	}
+	names := make([]string, 0, len(b.Attributes))
+	for _, a := range b.Attributes {
+		names = append(names, a.Name)
+	}
+	return names
+}
+
+func hasAttr(b *doc.DocBlock, name string) bool {
+	return slices.Contains(docBlockAttrNames(b), name)
+}
+
+const nestedItemsDoc = "## Attribute Reference\n\n" +
+	"* `items` - List of objects. Each object has the following attributes:\n" +
+	"    * `arn` - The ARN.\n" +
+	"    * `dns_entry` - DNS block.\n" +
+	"        * `domain_name` - The domain name.\n"
+
+// TestParse_NestedCaptureOff confirms the default ignores inline-indented
+// nested sub-bullets: no dot-path blocks are created.
+func TestParse_NestedCaptureOff(t *testing.T) {
+	t.Parallel()
+
+	d, err := doc.Parse([]byte(nestedItemsDoc), "t")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := d.AttributeBlocks["items"]; ok {
+		t.Error(`"items" block should not exist with capture off`)
+	}
+	if _, ok := d.AttributeBlocks["items.dns_entry"]; ok {
+		t.Error(`"items.dns_entry" block should not exist with capture off`)
+	}
+	// The top-level `items` attribute is still recorded in the root block.
+	if !hasAttr(d.AttributeBlocks[""], "items") {
+		t.Error(`root block should still contain "items"`)
+	}
+}
+
+// TestParse_NestedCaptureOn confirms inline-indented nested attributes are
+// captured into dot-path keyed blocks at every depth.
+func TestParse_NestedCaptureOn(t *testing.T) {
+	t.Parallel()
+
+	d, err := doc.ParseWithOptions([]byte(nestedItemsDoc), "t",
+		doc.DefaultHeadingTemplates(), doc.ParseOptions{CaptureNestedAttributes: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	items := d.AttributeBlocks["items"]
+	if items == nil {
+		t.Fatalf(`"items" block missing; blocks: %v`, attrBlockKeys(d))
+	}
+	if !hasAttr(items, "arn") || !hasAttr(items, "dns_entry") {
+		t.Errorf(`"items" block should contain arn and dns_entry, got %v`, docBlockAttrNames(items))
+	}
+
+	dns := d.AttributeBlocks["items.dns_entry"]
+	if dns == nil {
+		t.Fatalf(`"items.dns_entry" block missing; blocks: %v`, attrBlockKeys(d))
+	}
+	if !hasAttr(dns, "domain_name") {
+		t.Errorf(`"items.dns_entry" should contain domain_name, got %v`, docBlockAttrNames(dns))
+	}
+}
+
+func blkAttrNames(b *doc.DocBlock) []string {
+	if b == nil {
+		return nil
+	}
+	names := make([]string, 0, len(b.Attributes))
+	for _, a := range b.Attributes {
+		names = append(names, a.Name)
+	}
+	return names
+}
+
+// TestNestedBlockLeadIn covers the legacy prose block introducer.
+func TestNestedBlockLeadIn(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		in   string
+		want string
+		ok   bool
+	}{
+		{"The `catalog_properties[0].data_lake_access_properties[0]` block also exports:", "catalog_properties.data_lake_access_properties", true},
+		{"The `parent[0].child[0]` block supports the following:", "parent.child", true},
+		{"The `foo` block supports:", "", false},      // single-level: use a heading
+		{"The `foo` block is deprecated.", "", false}, // no supports/exports + colon
+		{"This resource exports the following attributes:", "", false},
+		{"Some prose about a block.", "", false},
+	}
+	for _, c := range cases {
+		got, ok := doc.NestedBlockLeadIn(c.in)
+		if ok != c.ok || got != c.want {
+			t.Errorf("NestedBlockLeadIn(%q) = (%q,%v), want (%q,%v)", c.in, got, ok, c.want, c.ok)
+		}
+	}
+}
+
+// TestParse_ProseLeadInAttachesToPath: bullets after a prose lead-in are
+// attributed to the dot-path block, not the root (issue #53).
+func TestParse_ProseLeadInAttachesToPath(t *testing.T) {
+	t.Parallel()
+
+	md := "## Attribute Reference\n\n" +
+		"* `id` - The ID.\n\n" +
+		"The `catalog_properties[0].data_lake_access_properties[0]` block also exports:\n\n" +
+		"* `managed_workgroup_name` - Managed workgroup name.\n" +
+		"* `status_message` - Status message.\n"
+
+	d, err := doc.ParseWithOptions([]byte(md), "t", doc.DefaultHeadingTemplates(), doc.ParseOptions{CaptureNestedAttributes: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := d.AttributeBlocks["catalog_properties.data_lake_access_properties"]
+	if b == nil {
+		t.Fatal(`expected block keyed "catalog_properties.data_lake_access_properties"`)
+	}
+	got := blkAttrNames(b)
+	if len(got) != 2 || got[0] != "managed_workgroup_name" {
+		t.Errorf("block attrs = %v, want [managed_workgroup_name status_message]", got)
+	}
+	// The bullets must NOT have leaked into the root attribute block.
+	for _, a := range blkAttrNames(d.AttributeBlocks[""]) {
+		if a == "managed_workgroup_name" {
+			t.Error("lead-in attributes leaked into the root block")
+		}
+	}
+}

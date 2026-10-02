@@ -1723,46 +1723,6 @@ func TestCoverage_OrphanedBullets(t *testing.T) {
 	}
 }
 
-// TestDescriptions_OrphanedBullets: bullets that belong to no section still
-// get the description check, which doesn't depend on the block. The finding
-// names the heading instead. A prose-introduced list belongs to the block it
-// names, so its finding names that block (#77).
-func TestDescriptions_OrphanedBullets(t *testing.T) {
-	t.Parallel()
-
-	rs := &schema.ResourceSchema{Blocks: map[string]*schema.Block{
-		"":                       {Attributes: []schema.Attribute{{Name: "name", Required: true}}, ChildBlocks: []string{"action"}},
-		"action":                 {ChildBlocks: []string{"action.cloudwatch_logs"}},
-		"action.cloudwatch_logs": {Attributes: optional("role_arn")},
-	}}
-	testCases := map[string]struct {
-		body string
-		want string
-	}{
-		"under an unparseable heading": {
-			body: "### Waiting for Capacity\n\n* `role_arn` - (Optional) The role.\n",
-			want: `attribute "role_arn" description should not start with "The" (under heading "Waiting for Capacity")`,
-		},
-		"in a prose-introduced list": {
-			body: "* `name` - (Required) Name.\n\nThe `cloudwatch_logs` object takes the following arguments:\n\n* `role_arn` - (Optional) The role.\n",
-			want: `attribute "role_arn" description should not start with "The" (block "cloudwatch_logs")`,
-		},
-	}
-	for name, tc := range testCases {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			d, err := doc.ParseWithTemplates([]byte("## Argument Reference\n\n"+tc.body), "aws_thing", doc.HeadingTemplates{"`{Path}` Block", "`{Block}` Block"})
-			if err != nil {
-				t.Fatal(err)
-			}
-			results := (&check.SchemaDocsRule{IgnoreDeprecated: true}).Check(check.CheckContext{Resource: "aws_thing", Schema: rs, Doc: d})
-			if !hasMessage(results, tc.want) {
-				t.Errorf("missing %q in:\n  %s", tc.want, joinMessages(results))
-			}
-		})
-	}
-}
-
 // TestCoverage_DuplicateHeadingClosestPrefersContent: when naming the closest
 // block for a heading that fits none, a block whose fields match but whose
 // label differs is nearer than one with a missing field
