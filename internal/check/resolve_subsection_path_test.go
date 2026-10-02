@@ -143,3 +143,84 @@ func TestResolveSubsectionPath(t *testing.T) {
 		})
 	}
 }
+
+// TestResolveSection pins the coverage resolver
+// (docs/rules/coverage-path-resolution.md §4): one section per path per
+// reference section, chosen by heading key alone.
+func TestResolveSection(t *testing.T) {
+	t.Parallel()
+
+	rs := &schema.ResourceSchema{Blocks: map[string]*schema.Block{
+		"":                                     {},
+		"visibility_config":                    {},
+		"rule":                                 {},
+		"rule.visibility_config":               {},
+		"spec":                                 {},
+		"spec.grpc_route":                      {},
+		"spec.grpc_route.match":                {},
+		"spec.grpc_route.match.metadata":       {},
+		"spec.grpc_route.match.metadata.match": {},
+		"a":                                    {},
+		"a.b":                                  {},
+		"a.x":                                  {},
+		"a.x.b":                                {},
+	}}
+
+	testCases := map[string]struct {
+		keys    []string // doc section keys present in one reference section
+		path    string
+		wantKey string // "" means unresolved
+	}{
+		"root": {
+			keys: []string{""}, path: "", wantKey: "",
+		},
+		"exact path wins over bare leaf": {
+			keys: []string{"spec.grpc_route.match.metadata.match", "match"}, path: "spec.grpc_route.match.metadata.match", wantKey: "spec.grpc_route.match.metadata.match",
+		},
+		"exact path wins over composite that is another path": {
+			keys: []string{"spec.grpc_route.match", "spec.grpc_route.match.metadata.match"}, path: "spec.grpc_route.match.metadata.match", wantKey: "spec.grpc_route.match.metadata.match",
+		},
+		"dotted key naming another path is skipped": {
+			keys: []string{"a.b"}, path: "a.x.b", wantKey: "",
+		},
+		"dotted key naming another path is skipped, falls through to leaf": {
+			keys: []string{"a.b", "b"}, path: "a.x.b", wantKey: "b",
+		},
+		"bare leaf that is also a root path still serves nested paths": {
+			keys: []string{"visibility_config"}, path: "rule.visibility_config", wantKey: "visibility_config",
+		},
+		"nearest ancestor composite before farther": {
+			keys: []string{"spec.match", "metadata.match"}, path: "spec.grpc_route.match.metadata.match", wantKey: "metadata.match",
+		},
+		"three-segment composite before two-segment": {
+			keys: []string{"metadata.match", "match.metadata.match"}, path: "spec.grpc_route.match.metadata.match", wantKey: "match.metadata.match",
+		},
+		"no matching key": {
+			keys: []string{"other"}, path: "a.b", wantKey: "",
+		},
+	}
+
+	for name, tc := range testCases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			blocks := make(map[string]*doc.DocBlock, len(tc.keys))
+			for _, k := range tc.keys {
+				blocks[k] = &doc.DocBlock{Name: k}
+			}
+			got := resolveSection(rs, blocks, tc.path)
+			if tc.path == "" {
+				if got != blocks[""] {
+					t.Errorf("root: got %v, want the root block", got)
+				}
+				return
+			}
+			gotKey := ""
+			if got != nil {
+				gotKey = got.Name
+			}
+			if gotKey != tc.wantKey {
+				t.Errorf("resolveSection(%q) = %q, want %q", tc.path, gotKey, tc.wantKey)
+			}
+		})
+	}
+}

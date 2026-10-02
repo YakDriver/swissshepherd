@@ -59,13 +59,14 @@ If two existing implementations disagree, don't adopt whichever you found first 
 
 - Use stdlib `testing` only. Tests are table-driven and call `t.Parallel()` in every test and subtest, except tests that use `t.Chdir` or `t.Setenv` (Go panics if these are combined with `t.Parallel()`). Mark those with a `// Not parallel: <reason>` comment instead.
 - Default to black-box `_test` packages. White-box tests are fine for pure unexported primitives.
+- Tests for the `schema_docs` coverage sub-check (coverage, phantom fields and blocks, Read-Only coverage, shared sections, the #77 acceptance cases) live in `internal/check/coverage_test.go`. Look there first, and add new coverage tests there rather than in a new file.
 - When a real provider doc exposes a bug, freeze the pre-fix doc in `testdata/` as a fixture.
 - Test the negative cases: every never-guess condition must produce no findings.
 - For nondeterminism, run the check many times in-process and assert identical output.
 
 ## Corpus validation
 
-Any change that can alter findings must be measured against a real provider. terraform-provider-aws is the reference: its `.ci/swissshepherd-weak.hcl` is what its CI runs, and `.ci/swissshepherd-full.hcl` enables everything.
+Any change that can alter findings must be measured against a real provider. terraform-provider-aws is the reference: its `.ci/swissshepherd-weak.hcl` is what its CI runs, and `.ci/swissshepherd-full.hcl` enables more. The full config does not set every option (for example `nested_object_attributes`, which the weak config sets), so measure both.
 
 ```bash
 git worktree add --detach /tmp/ss-main origin/main && (cd /tmp/ss-main && go build -o /tmp/ss-base .)
@@ -79,7 +80,7 @@ LC_ALL=C comm -3 /tmp/base.txt /tmp/new.txt   # added (right) / removed (left)
 Also:
 
 - Run the new binary twice and confirm identical output.
-- Run the weak config and confirm its error count is unchanged.
+- Run the weak config too and diff it the same way. Its error count may rise: more findings are better when they are correct. A change is worse only if it adds false positives or lets a real defect pass silently. Spot-check every added weak-config finding, and report the before and after counts in the PR.
 - Spot-check added findings against the provider's Go schema, and report the false-positive count.
 - Use `LC_ALL=C` everywhere. Locale collation once made `comm` report findings that didn't exist.
 - Afterwards, run `git worktree remove /tmp/ss-main`.

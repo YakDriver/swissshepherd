@@ -28,14 +28,15 @@ A documentation linter for Terraform providers. swissshepherd compares a provide
 
 swissshepherd compares a Terraform provider's schema against its markdown documentation and reports:
 
-- **Missing documentation** — schema attributes or blocks with no corresponding doc entry
-- **Phantom documentation** — documented attributes that don't exist in the schema
+- **Missing documentation** — schema attributes or blocks with no corresponding doc entry, matched by section heading alone (never by links or position)
+- **Phantom documentation** — documented arguments or attributes that don't exist at a block the section documents
+- **Shared and duplicate sections** — one section serving several blocks that aren't interchangeable, two headings for the same key, and headings that document no block
 - **Ordering violations** — arguments or attributes not in alphabetical order
 - **Description style issues** — descriptions starting with articles or fluff words
 - **Misplaced computed attributes** — computed-only attributes in the Argument Reference section
-- **Heading style mismatches** — nested block headings not matching the preferred format
+- **Heading style mismatches** — nested block headings not matching the preferred format, and prose lead-ins standing in for a heading
 - **Format / structure issues** — code blocks inside argument sections, multi-line attribute descriptions, interrupted attribute lists
-- **Label violations** — arguments missing a (Required)/(Optional) label, or carrying one that contradicts the schema (e.g. (Required) on an Optional attribute) (and optionally (Read-Only) when allow_inline_read_only = true); or attributes that have labels
+- **Label violations** — arguments missing a (Required)/(Optional) label, or carrying one that contradicts the schema (e.g. (Required) on an Optional attribute) (and optionally (Read-Only) when allow_inline_read_only = true); attributes that have labels; or arguments documented only under Attribute Reference
 - **Byline mismatches** — section introductory paragraph doesn't match expected text
 - **Frontmatter problems** — missing required YAML fields, forbidden fields present, disallowed subcategories
 - **Title section problems** — missing title, wrong heading level, bad `<Kind>: ` prefix
@@ -367,7 +368,7 @@ check "region_argument" {
 
 ### `schema_docs`
 
-The primary rule. Validates argument and attribute documentation against the provider schema. Eight sub-checks: `byline`, `coverage`, `deprecated`, `description`, `format`, `heading`, `labels`, `ordering`. Coverage enforces the Required / Optional / Read-Only model at every depth of nesting and supports inline `(Read-Only)` labels via `allow_inline_read_only`.
+The primary rule. Validates argument and attribute documentation against the provider schema. Eight sub-checks: `byline`, `coverage`, `deprecated`, `description`, `format`, `heading`, `labels`, `ordering`. Coverage enforces the Required / Optional / Read-Only model at every depth of nesting and supports inline `(Read-Only)` labels via `allow_inline_read_only`. It decides which section documents a block from headings alone, and checks every section against every block it documents.
 
 See **[rules/schema_docs.md](rules/schema_docs.md)** for the full configuration reference, sub-check details, and the schema model.
 
@@ -547,6 +548,8 @@ The `block_heading_styles` list controls which `###` heading formats are recogni
 | `{Title}` | `Credit Specification` | `credit_specification` |
 
 Note: goldmark strips backticks from inline code in headings, so `` ### `network` Block `` becomes `network Block` in parsed text.
+
+The extracted name is the section's key, and it alone decides which schema blocks the section documents: the full path, a shorter qualified path such as `parent.block`, or the bare block name. A heading in Argument or Attribute Reference that matches no template is reported, and its bullets aren't checked against the schema; so is a heading whose key matches no schema block. See [Coverage: which section documents a block](rules/schema_docs.md#coverage-which-section-documents-a-block).
 
 ### Preferred style
 

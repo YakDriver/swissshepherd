@@ -4,6 +4,7 @@
 package doc_test
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/YakDriver/swissshepherd/internal/doc"
@@ -21,7 +22,7 @@ func TestBlocks_CombinedHeading_SharedAttributes(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	blocks := d.Blocks()
+	blocks := d.ArgumentBlocks
 	for _, name := range []string{"publish_auth_mode", "subscribe_auth_mode"} {
 		b, ok := blocks[name]
 		if !ok {
@@ -52,7 +53,7 @@ func TestBlocks_CombinedHeading_NestedUnderParent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	blocks := d.Blocks()
+	blocks := d.ArgumentBlocks
 
 	// handler_configs should have on_publish and on_subscribe as attributes
 	hc := blocks["handler_configs"]
@@ -105,7 +106,7 @@ func TestBlocks_SingleWordTitleCase_NotSwallowedByPreviousBlock(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	blocks := d.Blocks()
+	blocks := d.ArgumentBlocks
 
 	// lambda_conflict_handler_config must NOT contain name/runtime_version
 	lc := blocks["lambda_conflict_handler_config"]
@@ -147,7 +148,7 @@ func TestBlocks_CombinedHeading_ThreeBlocks(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	blocks := d.Blocks()
+	blocks := d.ArgumentBlocks
 	for _, name := range []string{"a", "b", "c"} {
 		b, ok := blocks[name]
 		if !ok {
@@ -177,7 +178,7 @@ func TestBlocks_CombinedHeading_DoesNotPolluteNextBlock(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	blocks := d.Blocks()
+	blocks := d.ArgumentBlocks
 
 	// x and y should have "shared" but NOT "unique"
 	for _, name := range []string{"x", "y"} {
@@ -224,7 +225,7 @@ func TestBlocks_UsageBasedPricingTerm(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	blocks := d.Blocks()
+	blocks := d.AttributeBlocks
 
 	// Validate usage_based_pricing_term block
 	usageTermBlock := blocks["usage_based_pricing_term"]
@@ -241,5 +242,159 @@ func TestBlocks_UsageBasedPricingTerm(t *testing.T) {
 		if !found {
 			t.Errorf("block usage_based_pricing_term missing attribute %q", want)
 		}
+	}
+}
+
+// TestBlocks_UnparseableHeadingOrphansBullets: bullets under an H3+ heading
+// that matches no heading template belong to no section. Before #77 they were
+// credited to the previous section, producing phantom fields there. A dot-path
+// reference bullet names its own path and is still routed.
+func TestBlocks_UnparseableHeadingOrphansBullets(t *testing.T) {
+	t.Parallel()
+
+	source := []byte("# Resource: test\n\n## Argument Reference\n\n" +
+		"* `source` - (Required) Source.\n\n" +
+		"### `source` Block\n\n" +
+		"* `location` - (Required) Location.\n\n" +
+		"### source: auth\n\n" +
+		"* `resource` - (Optional) Resource.\n" +
+		"* `source[*].auth[*].type` - (Required) Type.\n\n" +
+		"### `other` Block\n\n" +
+		"* `name` - (Optional) Name.\n")
+
+	d, err := doc.ParseWithTemplates(source, "test", doc.HeadingTemplates{"`{Block}` Block"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	names := func(key string) []string {
+		var out []string
+		if b := d.ArgumentBlocks[key]; b != nil {
+			for _, a := range b.Attributes {
+				out = append(out, a.Name)
+			}
+		}
+		return out
+	}
+	testCases := map[string]struct {
+		key  string
+		want []string
+	}{
+		"previous section keeps only its own bullet": {key: "source", want: []string{"location"}},
+		"dot-path reference is still routed":         {key: "source.auth", want: []string{"type"}},
+		"next parsed heading starts a section again": {key: "other", want: []string{"name"}},
+	}
+	for name, tc := range testCases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if got := names(tc.key); !slices.Equal(got, tc.want) {
+				t.Errorf("ArgumentBlocks[%q] = %v, want %v", tc.key, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestBlocks_ProseLeadInCandidates: after a section's own bullets, a
+// colon-terminated paragraph naming something in backticks may introduce a
+// list for another block. The parser records it with the list's bullets and
+// leaves the bullets in the section; only the schema can say whether they
+// belong to another block (#77).
+func TestBlocks_ProseLeadInCandidates(t *testing.T) {
+	t.Parallel()
+
+	testCases := map[string]struct {
+		body        string
+		wantRoot    []string
+		wantBullets []string // bullets of the recorded candidate; nil for none
+	}{
+		"prose naming another block": {
+			body:        "* `name` - (Required) Name.\n\nThe `cloudwatch_logs` object takes the following arguments:\n\n* `role_arn` - (Required) Role.\n",
+			wantRoot:    []string{"name", "role_arn"},
+			wantBullets: []string{"role_arn"},
+		},
+		"byline before the first list": {
+			body:     "The following arguments are required:\n\n* `name` - (Required) Name.\n",
+			wantRoot: []string{"name"},
+		},
+		"second byline without a block name": {
+			body:     "* `name` - (Required) Name.\n\nThe following arguments are optional:\n\n* `tags` - (Optional) Tags.\n",
+			wantRoot: []string{"name", "tags"},
+		},
+		"prose without a trailing colon": {
+			body:     "* `name` - (Required) Name.\n\nSee `cloudwatch_logs` below.\n\n* `tags` - (Optional) Tags.\n",
+			wantRoot: []string{"name", "tags"},
+		},
+	}
+	for name, tc := range testCases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			d, err := doc.Parse([]byte("# Resource: test\n\n## Argument Reference\n\n"+tc.body), "test")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got []string
+			for _, a := range d.ArgumentBlocks[""].Attributes {
+				got = append(got, a.Name)
+			}
+			if !slices.Equal(got, tc.wantRoot) {
+				t.Errorf("root bullets = %v, want %v", got, tc.wantRoot)
+			}
+			var bullets []string
+			for _, pl := range d.ProseLeadIns {
+				for _, a := range pl.Bullets {
+					bullets = append(bullets, a.Name)
+				}
+			}
+			if !slices.Equal(bullets, tc.wantBullets) {
+				t.Errorf("candidate bullets = %v, want %v", bullets, tc.wantBullets)
+			}
+		})
+	}
+}
+
+// TestBlocks_ProseContinuingCurrentBlockIsNotOrphaned: prose that names the
+// current section's own block continues that section.
+func TestBlocks_ProseContinuingCurrentBlockIsNotOrphaned(t *testing.T) {
+	t.Parallel()
+
+	d, err := doc.Parse([]byte("# Resource: test\n\n## Argument Reference\n\n"+
+		"### `rule` Block\n\n* `a` - (Optional) A.\n\nThe `rule` block also supports:\n\n* `b` - (Optional) B.\n"), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, a := range d.ArgumentBlocks["rule"].Attributes {
+		got = append(got, a.Name)
+	}
+	if !slices.Equal(got, []string{"a", "b"}) || len(d.ProseLeadIns) != 0 {
+		t.Errorf("rule bullets = %v, prose lead-ins = %+v; want [a b] and none", got, d.ProseLeadIns)
+	}
+}
+
+// TestBlocks_DuplicateHeadingOccurrences: headings that normalize to the same
+// key are kept as separate occurrences, each with its own bullets, so coverage
+// can judge them one by one (#77). Content routed from elsewhere on the page
+// joins the merged entry but no occurrence.
+func TestBlocks_DuplicateHeadingOccurrences(t *testing.T) {
+	t.Parallel()
+
+	d, err := doc.Parse([]byte("# Resource: test\n\n## Argument Reference\n\n"+
+		"* `z[*].routed` - (Optional) Routed.\n\n"+
+		"### `z` Block\n\n* `a1` - (Optional) A1.\n\n"+
+		"### `z` Block\n\n* `a4` - (Optional) A4.\n"), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got [][]string
+	for _, o := range d.ArgumentBlocks["z"].Occurrences {
+		var names []string
+		for _, a := range o.Attributes {
+			names = append(names, a.Name)
+		}
+		got = append(got, names)
+	}
+	want := [][]string{{"a1"}, {"a4"}}
+	if !slices.EqualFunc(got, want, slices.Equal) {
+		t.Errorf("occurrences = %v, want %v", got, want)
 	}
 }

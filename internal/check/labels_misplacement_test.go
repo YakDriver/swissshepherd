@@ -1397,7 +1397,7 @@ func TestLabels_SplitHeadingDistinctConfigInAlternateEmitted(t *testing.T) {
 	if !hasMsg(results, `argument "y" in block "notification" is documented under Attribute Reference but is a configurable argument in the schema; move it to Argument Reference`) {
 		t.Errorf("distinct configurable field in the alternate heading must not be silenced by the owner's collapse: %+v", results)
 	}
-	if hasMsg(results, `attribute "y"`) && hasMsg(results, "should not have") {
+	if hasMsg(results, `attribute "y" in block "notification" should not have`) {
 		t.Errorf("the alternate's configurable field must move, not strip: %+v", results)
 	}
 	if !hasMsg(results, `attribute "z" in block "notification" should not have (Optional) label`) {

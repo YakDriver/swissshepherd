@@ -60,6 +60,20 @@ type DocBlock struct {
 	// relocate all of it, so the misplacement rule must not collapse such an
 	// entry (it emits per-attribute moves instead).
 	SpansSubsections bool
+	// Occurrences lists each heading that normalized to this block's key, in
+	// document order, with the bullets written under it. Attributes is their
+	// merged union plus any content routed here from elsewhere on the page.
+	// With two or more occurrences a reader can't tell which block each
+	// heading documents, so coverage judges them one by one
+	// (docs/rules/coverage-path-resolution.md §5).
+	Occurrences []Occurrence
+}
+
+// Occurrence is one heading that normalized to a block key, with its bullets.
+type Occurrence struct {
+	Heading    string
+	Line       int
+	Attributes []DocAttribute
 }
 
 // HeadingTemplates defines patterns for recognizing block headings.
@@ -202,8 +216,8 @@ func matchTemplate(tmpl, heading string) string {
 	//         This is the tfplugindocs-compatible form and also the
 	//         unambiguous AWS-provider form for blocks whose leaf name
 	//         repeats under multiple parents. The returned key is the
-	//         literal dot-notation path, so downstream lookups via
-	//         findAllDocBlocksIn match by full path directly.
+	//         literal dot-notation path, so the check package's section
+	//         resolver matches it by full path directly.
 	// {Title} matches title-case words (converted to snake_case)
 	// {Parent} matches a snake_case name (used as disambiguator, value is discarded)
 
@@ -346,6 +360,31 @@ func matchTemplate(tmpl, heading string) string {
 	return ""
 }
 
+// Orphan is an unparseable heading whose bullets belong to no section
+// (docs/rules/coverage-path-resolution.md §5).
+type Orphan struct {
+	Line         int
+	Text         string
+	InAttributes bool           // in Attribute Reference rather than Argument Reference
+	Bullets      []DocAttribute // bullets under the heading, checked only for block-independent style
+}
+
+// ProseLeadIn is a paragraph that may introduce a list for a block other than
+// the section it sits in.
+type ProseLeadIn struct {
+	Line         int
+	Text         string
+	InAttributes bool
+	Section      string         // key of the section the following bullets are credited to
+	Bullets      []DocAttribute // the following list's bullets
+	// AfterHeading is set when no list has been read since the section's
+	// heading, so the prose may instead introduce the section's own list.
+	AfterHeading bool
+	// Orphaned is set under an unparseable heading: the bullets are credited
+	// to no section, and Section is meaningless.
+	Orphaned bool
+}
+
 // Document represents a parsed documentation file.
 type Document struct {
 	ResourceName    string
@@ -362,6 +401,15 @@ type Document struct {
 	// to duplicate slugs (e.g. "grpc-block", "grpc-block-1"). Used to verify
 	// that in-page links (`](#anchor)`) resolve to a real heading.
 	HeadingAnchors map[string]bool
+	// Orphans records H3+ headings in Argument or Attribute Reference that
+	// match no heading template. Their bullets belong to no section.
+	Orphans []Orphan
+	// ProseLeadIns records colon-terminated paragraphs that name something in
+	// backticks and introduce a further list after a section's own bullets,
+	// with that list's bullet names. The bullets stay in the section: whether
+	// the prose introduces a different block can only be judged against the
+	// schema.
+	ProseLeadIns []ProseLeadIn
 	// InPageLinks lists every in-page link (destination beginning with "#")
 	// found anywhere in the document, used to validate that link fragments
 	// resolve to an existing heading anchor.
@@ -371,25 +419,6 @@ type Document struct {
 
 // Source returns the raw markdown source bytes.
 func (d *Document) Source() []byte { return d.source }
-
-// Blocks returns a merged view of argument + attribute blocks.
-// The returned map is independent — it does not mutate the original blocks.
-func (d *Document) Blocks() map[string]*DocBlock {
-	merged := make(map[string]*DocBlock, len(d.ArgumentBlocks)+len(d.AttributeBlocks))
-	for k, v := range d.ArgumentBlocks {
-		clone := *v
-		clone.Attributes = append([]DocAttribute(nil), v.Attributes...)
-		merged[k] = &clone
-	}
-	for k, v := range d.AttributeBlocks {
-		if existing, ok := merged[k]; ok {
-			existing.Attributes = append(existing.Attributes, v.Attributes...)
-		} else {
-			merged[k] = v
-		}
-	}
-	return merged
-}
 
 // ParseFile reads and parses a markdown documentation file (accepts all heading styles).
 func ParseFile(path string) (*Document, error) {
@@ -689,6 +718,25 @@ func blankFrontmatter(source []byte, end int) []byte {
 func extractBlocks(tree ast.Node, source []byte, idx *lineIndex, doc *Document, templates HeadingTemplates, captureNested bool) {
 	var currentBlockName string
 	var currentBlockAliases []string
+	// orphaned is set by an H3+ heading in Argument or Attribute Reference that
+	// matches no heading template. Bullets under it belong to no section: they
+	// must not be credited to whatever section came before
+	// (docs/rules/coverage-path-resolution.md §5).
+	var orphaned bool
+	// listSinceHeading is set once a bullet list has been read since the last
+	// heading. A colon-terminated paragraph that names a different block may
+	// introduce bullets for that block rather than the current section; before
+	// any list it may instead introduce the section's own (AfterHeading).
+	var listSinceHeading bool
+	// activeProse is the index in doc.ProseLeadIns whose lists come next, or
+	// -1. Like a heading, a prose lead-in is in effect until the next heading
+	// or lead-in, so a code block interrupting its list doesn't end it.
+	activeProse := -1
+	// orphanIdx is the index in doc.Orphans of the heading now in effect, or -1.
+	orphanIdx := -1
+	// underHeading is true while bullets belong to the last occurrence of the
+	// current block's heading, rather than to a prose lead-in.
+	underHeading := false
 	var currentSection *Section
 	var inArguments, inAttributes bool
 	var sawRequiredByline bool // true between a "required:" byline and the next list
@@ -752,6 +800,10 @@ func extractBlocks(tree ast.Node, source []byte, idx *lineIndex, doc *Document, 
 			}
 
 			if n.Level == 2 {
+				underHeading = false
+				orphaned = false
+				listSinceHeading = false
+				activeProse = -1
 				inArguments = strings.HasPrefix(headingText, "Argument")
 				inAttributes = strings.HasPrefix(headingText, "Attribute")
 				sawRequiredByline = false
@@ -802,6 +854,17 @@ func extractBlocks(tree ast.Node, source []byte, idx *lineIndex, doc *Document, 
 
 			if n.Level >= 3 && (inArguments || inAttributes) {
 				blockNames := templates.MatchAll(headingText)
+				orphaned = len(blockNames) == 0
+				underHeading = !orphaned
+				listSinceHeading = false
+				activeProse = -1
+				if orphaned {
+					currentBlockAliases = nil
+					doc.Orphans = append(doc.Orphans, Orphan{
+						Line: nodeLineNumber(n, idx), Text: headingText, InAttributes: inAttributes,
+					})
+					orphanIdx = len(doc.Orphans) - 1
+				}
 				if len(blockNames) > 0 {
 					currentBlockName = blockNames[0]
 					sawRequiredByline = false
@@ -846,6 +909,7 @@ func extractBlocks(tree ast.Node, source []byte, idx *lineIndex, doc *Document, 
 						if b.HeadingLine == 0 {
 							b.HeadingLine = headingLine
 						}
+						b.Occurrences = append(b.Occurrences, Occurrence{Heading: headingText, Line: headingLine})
 					}
 					currentBlockAliases = blockNames[1:]
 				}
@@ -888,7 +952,12 @@ func extractBlocks(tree ast.Node, source []byte, idx *lineIndex, doc *Document, 
 			// exports:"). Route the following list to that dot-path block,
 			// exactly as a `#### x.y` heading would.
 			if inArguments || inAttributes {
-				if path, ok := NestedBlockLeadIn(string(n.Text(source))); ok {
+				text := string(n.Text(source))
+				if path, ok := NestedBlockLeadIn(text); ok {
+					underHeading = false
+					orphaned = false
+					listSinceHeading = false
+					activeProse = -1
 					currentBlockName = path
 					currentBlockAliases = nil
 					sawRequiredByline = false
@@ -897,6 +966,12 @@ func extractBlocks(tree ast.Node, source []byte, idx *lineIndex, doc *Document, 
 						target = doc.AttributeBlocks
 					}
 					ensureBlock(target, path, "")
+				} else if proseIntroducesOtherBlock(text, proseCurrent(currentBlockName, orphaned)) {
+					doc.ProseLeadIns = append(doc.ProseLeadIns, ProseLeadIn{
+						Line: nodeLineNumber(n, idx), Text: strings.TrimSpace(text), InAttributes: inAttributes, Section: currentBlockName,
+						AfterHeading: !listSinceHeading, Orphaned: orphaned,
+					})
+					activeProse = len(doc.ProseLeadIns) - 1
 				}
 			}
 			return ast.WalkSkipChildren, nil
@@ -923,9 +998,16 @@ func extractBlocks(tree ast.Node, source []byte, idx *lineIndex, doc *Document, 
 			}
 
 			block := target[currentBlockName]
+			if orphaned {
+				// Collect plain bullets into a discarded block. Dot-path
+				// reference bullets name their own path and are still routed.
+				block = &DocBlock{}
+			}
 			if block == nil {
 				return ast.WalkSkipChildren, nil
 			}
+			listSinceHeading = true
+			prose := activeProse
 
 			// If we saw a "required:" byline before this list, mark the block as split.
 			if inArguments && sawRequiredByline {
@@ -940,6 +1022,15 @@ func extractBlocks(tree ast.Node, source []byte, idx *lineIndex, doc *Document, 
 					if attr.Name != "" {
 						attr.Line = line
 						block.Attributes = append(block.Attributes, attr)
+						if underHeading && !orphaned {
+							appendToLastOccurrence(block, attr)
+						}
+						if prose >= 0 {
+							doc.ProseLeadIns[prose].Bullets = append(doc.ProseLeadIns[prose].Bullets, attr)
+						}
+						if orphaned && orphanIdx >= 0 && prose < 0 {
+							doc.Orphans[orphanIdx].Bullets = append(doc.Orphans[orphanIdx].Bullets, attr)
+						}
 						// Flag attributes with malformed separator (e.g. `mode`- instead of `mode` -).
 						if hasMalformedSeparator(li, source, attr.Name) {
 							block.MalformedAttributes = append(block.MalformedAttributes, MalformedAttr{Name: attr.Name, Line: line})
@@ -948,12 +1039,15 @@ func extractBlocks(tree ast.Node, source []byte, idx *lineIndex, doc *Document, 
 						for _, alias := range currentBlockAliases {
 							if ab := target[alias]; ab != nil {
 								ab.Attributes = append(ab.Attributes, attr)
+								if underHeading {
+									appendToLastOccurrence(ab, attr)
+								}
 							}
 						}
 						// Capture inline-indented nested attributes (e.g. the
 						// fields of a list(object({...})) documented as
 						// sub-bullets) into a dot-path keyed block.
-						if captureNested {
+						if captureNested && !orphaned {
 							captureNestedAttrs(li, joinDocPath(currentBlockName, attr.Name), target, source, idx)
 						}
 					} else if ref := parseNestedRef(li, source); ref.Parent != "" {
@@ -1332,12 +1426,12 @@ func dedupAnchorSet(slugs []string) map[string]bool {
 	return set
 }
 
-// normalizeDotPath strips array indexers ([*], [0], [N]) from each segment of a
+// NormalizeDotPath strips array indexers ([*], [0], [N]) from each segment of a
 // dot path and validates that each segment is a bare identifier. It returns the
 // normalized path and true, e.g.
 // "catalog_properties[0].data_lake_access_properties[0]" ->
 // "catalog_properties.data_lake_access_properties".
-func normalizeDotPath(raw string) (string, bool) {
+func NormalizeDotPath(raw string) (string, bool) {
 	segments := strings.Split(raw, ".")
 	for i, seg := range segments {
 		if j := strings.IndexAny(seg, "[*"); j >= 0 {
@@ -1349,6 +1443,56 @@ func normalizeDotPath(raw string) (string, bool) {
 		segments[i] = seg
 	}
 	return strings.Join(segments, "."), true
+}
+
+func appendToLastOccurrence(b *DocBlock, attr DocAttribute) {
+	if n := len(b.Occurrences); n > 0 {
+		b.Occurrences[n-1].Attributes = append(b.Occurrences[n-1].Attributes, attr)
+	}
+}
+
+// proseCurrent is the block a prose lead-in is compared against: none under
+// an unparseable heading, whose bullets belong to no section.
+func proseCurrent(current string, orphaned bool) string {
+	if orphaned {
+		return ""
+	}
+	return current
+}
+
+// proseIntroducesOtherBlock reports whether a paragraph might introduce a list
+// for some block other than current: it ends with a colon and names, in
+// backticks, something whose last dot segment isn't current's leaf. Only a
+// candidate; the check package decides against the schema. "The
+// `cloudwatch_logs` object takes the following arguments:" does; a byline
+// with no backticked name, or "The `rule` block also supports:" under a
+// `rule` heading, doesn't.
+func proseIntroducesOtherBlock(text, current string) bool {
+	if !strings.HasSuffix(strings.TrimSpace(text), ":") {
+		return false
+	}
+	leaf := current
+	if i := strings.LastIndex(leaf, "."); i >= 0 {
+		leaf = leaf[i+1:]
+	}
+	named := false
+	for i, part := range strings.Split(text, "`") {
+		if i%2 == 0 || part == "" {
+			continue
+		}
+		name, _ := NormalizeDotPath(part)
+		if name == "" {
+			continue
+		}
+		named = true
+		if j := strings.LastIndex(name, "."); j >= 0 {
+			name = name[j+1:]
+		}
+		if name == leaf {
+			return false
+		}
+	}
+	return named
 }
 
 // NestedBlockLeadIn recognizes a legacy prose sentence that introduces a nested
@@ -1377,7 +1521,7 @@ func NestedBlockLeadIn(text string) (string, bool) {
 	if !strings.ContainsAny(token, ".[") {
 		return "", false
 	}
-	return normalizeDotPath(token)
+	return NormalizeDotPath(token)
 }
 
 // parseNestedRef detects list items whose name is a dot-notation reference

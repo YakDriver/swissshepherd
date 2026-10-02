@@ -11,12 +11,12 @@ All enabled by default; disable individually via the rule's config block.
 | Sub-check     | What it validates                                                                                                                 |
 |---------------|-----------------------------------------------------------------------------------------------------------------------------------|
 | `byline`      | First paragraph after section heading matches expected byline text (from type)                                                    |
-| `coverage`    | Every schema attr is documented; every documented attr exists in schema; every block heading in Argument Reference matches a schema block |
-| `deprecated`  | Deprecation status matches between schema and docs (both directions)                                                              |
+| `coverage`    | Every schema field is documented, in the section its path resolves to; every documented field exists at every path its section documents; a section shared by several paths is right for all of them; headings that document nothing, or the same key twice, are reported (see [Coverage: which section documents a block](#coverage-which-section-documents-a-block)) |
+| `deprecated`  | Deprecation status matches between schema and docs (both directions); a mismatch is an error                                     |
 | `description` | Descriptions don't start with weak/redundant/meta prefixes ("The ", "This ", "Contains ", "Used ", etc.)                              |
 | `format`      | No code blocks in arg/attr sections; single-line attrs; uninterrupted lists                                                       |
-| `heading`     | Block headings match the preferred template style                                                                                  |
-| `labels`      | Arguments carry a present, schema-correct label — (Required)/(Optional), or (Read-Only) for read-only attributes when allow_inline_read_only = true; attributes carry none                                                                |
+| `heading`     | Block headings match the preferred template style. Style only: whether a heading documents the right block is `coverage`'s job     |
+| `labels`      | Arguments carry a present, schema-correct label — (Required)/(Optional), or (Read-Only) for read-only attributes when allow_inline_read_only = true; attributes carry none. A wrong label is an error, a missing one a warning |
 | `ordering`    | Attributes alphabetical (single-byline lists as one group; split required/optional bylines as separate groups)                    |
 
 ## Config
@@ -82,21 +82,21 @@ For the full rationale behind the parent-configurability model and the `ConfigUn
 
 ### Nested fields documented under a shared or prose-introduced subsection
 
-Two long-standing documentation conventions attach a nested block's fields to it without a dedicated per-path heading. When `nested_object_attributes` is enabled, coverage understands both:
+Coverage decides which section documents a block from section headings alone, never from links or position, because a reader looking at a section can't see what links to it (see [Coverage: one section per path](coverage-path-resolution.md)). Two conventions attach a nested block's fields to it without a dedicated per-path heading:
 
-- **Shared subsection.** Structurally-identical sibling blocks are often documented once under a single subsection that each sibling links to, e.g.
+- **Shared subsection.** Structurally identical sibling blocks can be documented once, under a heading that names each of them:
 
   ```markdown
-  * `management` - Endpoint ... See [Endpoint](#endpoint).
-  * `intercluster` - Endpoint ... See [Endpoint](#endpoint).
+  * `management` - Endpoint ... See [`intercluster` and `management`](#intercluster-and-management).
+  * `intercluster` - Endpoint ... See [`intercluster` and `management`](#intercluster-and-management).
 
-  #### Endpoint
+  #### `intercluster` and `management`
 
   * `dns_name` - ...
   * `ip_addresses` - ...
   ```
 
-  Coverage follows each sibling bullet's in-page link to the shared subsection, so both `endpoints.management` and `endpoints.intercluster` are credited with the `Endpoint` block's fields. The link is followed only for the sibling's own bullet, so unrelated paths are never mis-credited. Siblings with different names sharing one subsection (e.g. `available_labels`/`consumed_labels` under `### Labels`) work the same way.
+  A subsection with a heading that doesn't name the blocks, such as `#### Endpoint` linked from both bullets, doesn't document them: the bullets' links are navigation, and coverage reports the blocks' fields as undocumented. Earlier versions followed such links (issue #51); that was reversed in #77.
 
 - **Legacy indexed prose lead-in.** Older docs introduce a nested block's fields with a sentence instead of a heading:
 
@@ -109,6 +109,8 @@ Two long-standing documentation conventions attach a nested block's fields to it
 
   swissshepherd recognizes this lead-in (a backtick-quoted dotted/indexed path followed by `block ... supports:`/`exports:`) as a block boundary, keying the following bullets to the dot-path — just as a `#### catalog_properties.data_lake_access_properties` heading would. This avoids a cascade of misattributed coverage, ordering, and "list interrupted" findings.
 
+- **Other prose lead-ins** ("The `cloudwatch_logs` object takes the following arguments:") also document the block they name, with a style warning asking for a heading. See [Prose-introduced lists](#prose-introduced-lists).
+
 ## Schema model: Required / Optional / Read-Only
 
 The `coverage` sub-check enforces presence of every schema attribute at every depth of nesting. swissshepherd uses the same three-category mental model as tfplugindocs:
@@ -117,7 +119,7 @@ The `coverage` sub-check enforces presence of every schema attribute at every de
 - **Optional** — may be set in configuration. Documented in `## Argument Reference` with `(Optional)`. Includes attributes that are both Optional and Computed (configurable, so still `(Optional)`).
 - **Read-Only** — never set in configuration; always populated by the provider. Documented in `## Attribute Reference`, or — when `allow_inline_read_only = true` — inline in `## Argument Reference` with `(Read-Only)`.
 
-When a genuinely configurable argument (`Required`/`Optional` and not `Computed`) is instead documented under `## Attribute Reference`, the `labels` sub-check reports a *misplacement* — directing the author to move it to Argument Reference rather than to strip its (correct) label (issues #60, #62). For the design and rationale behind that detection — attribute-granular classification, heading→schema-path resolution, path-based severity (a genuine root scalar is a warning; every nested move is an error), and the measured corpus evidence — see [Argument/Attribute-Reference Misplacement](argument-attribute-misplacement.md).
+When a genuinely configurable argument (`Required`/`Optional` and not `Computed`) is instead documented under `## Attribute Reference`, the `labels` sub-check reports a *misplacement* — directing the author to move it to Argument Reference rather than to strip its (correct) label (issues #60, #62). For the design and rationale behind that detection — attribute-granular classification, heading→schema-path resolution, path-based severity (a genuine root scalar is a warning; every nested move is an error), and the measured corpus evidence — see [Argument/Attribute-Reference Misplacement](argument-attribute-misplacement.md). When such an argument carries no label at all, `labels` can't tell it from a computed output, so `coverage` reports it instead, with the label to add: `argument "name" is documented under Attribute Reference but is a configurable argument in the schema; move it to Argument Reference and label it (Required)`. Severity matches the labeled case: a warning at the root, an error when nested (a warning if the field is deprecated).
 
 ### Label correctness
 
@@ -169,6 +171,83 @@ For nested blocks, Read-Only attributes can be documented in any of the followin
   ````
 
 The default (`allow_inline_read_only = false`) preserves the AWS provider's traditional separation: `## Argument Reference` for configurable attributes, `## Attribute Reference` for Read-Only ones. Setting the toggle to `true` permits the tfplugindocs-aligned permissive convention without requiring all docs to convert at once.
+
+## Coverage: which section documents a block
+
+A section's identity comes from its heading alone. Links and position never decide which block a section documents: a reader looking at a section can't see what links to it. The design, its acceptance cases, and the measured corpus impact are in [Coverage: one section per path](coverage-path-resolution.md) (#77).
+
+### Resolution
+
+For each schema path, `coverage` looks for one section in Argument Reference and one in Attribute Reference. For `w.x.y.z` it tries these heading keys in order, taking the first one that names a section:
+
+1. the full path, `w.x.y.z`;
+2. two adjacent ancestors and the leaf, nearest first: `x.y.z`, then `w.x.z`;
+3. one ancestor and the leaf, nearest first: `y.z`, `x.z`, then `w.z`;
+4. the bare leaf, `z`.
+
+A dotted key that is itself a different schema path is skipped, so `x.z` never documents `w.x.y.z` when the schema also has a block at `x.z`. Paths in `skip_blocks` are skipped entirely.
+
+Every field a section lists must exist at **every** path that resolves to it. A field the schema expects at a path counts as documented if it's listed in either of that path's sections, so the misplacement findings, not "is not documented", handle a field in the wrong reference section.
+
+### Shared sections
+
+A section with a short heading (`` ### `z` Block ``) can serve several paths. That's fine when the paths are interchangeable, and wrong when they aren't. A shared section is valid only if, across every path it serves:
+
+- every field that must be listed for one path (its only home is this reference section) exists at all of them;
+- each listed field has the same label and the same deprecation status; and
+- child blocks it lists are themselves interchangeable at every depth.
+
+Otherwise `coverage` reports the section once per conflicting field, naming two of the paths and suggesting a qualified heading:
+
+```text
+section "z" (line 24) in Argument Reference documents 2 paths; "a2" must be listed for "x.y.z" but doesn't exist at "t.u.z". Qualifying means up to 2 sections: give "x.y.z" a heading that resolves only to paths where "a2" exists, e.g. "`x.y.z` Block"
+```
+
+Existence and child-content conflicts are warnings, because the per-path field findings already report the errors. Label and deprecation conflicts are errors: no single marker is right for every path. This replaces the `heading` sub-check's former "is ambiguous" warning, so it now needs `coverage` enabled.
+
+The per-path field findings point at the cause too. A phantom field in a shared section names the other paths where the field does exist; a missing field names the other paths the section serves where it doesn't, so the fix is a qualified heading, not another bullet.
+
+### Headings that document nothing
+
+| Finding | Severity | Meaning |
+|---|---|---|
+| `heading "…" … isn't a recognized block heading, so its bullets aren't checked against the schema` | warning | An H3+ heading in a reference section matches no `block_heading_styles` template. Its bullets belong to no section; only `description` still checks them. Suggests a heading when the text names a schema block. |
+| `heading "…" … documents no block (…), so its fields aren't checked against the schema` | warning | The heading parses, but no schema path resolves to its key. Headings with no bullets are skipped. |
+| `block "P" is not documented (M paths beneath it are also undocumented; K other undocumented paths share the name "L")` | error | No section resolves to `P`, which has configurable fields. Only the shallowest undocumented block in a subtree is reported; the counts say how much lies beneath it. |
+
+### Duplicate headings
+
+When two headings in one reference section normalize to the same key, `coverage` keeps both occurrences and asks whether some assignment of headings to the paths that key serves makes every block exact: listed fields exist, fields whose only home is this section are listed, and labels and deprecation markers are right.
+
+- If no assignment works, each path with no fitting heading, and each heading that fits no path, is an **error** naming the closest match and its differences. A heading isn't reported again when its closest path already is, with the same differences.
+- If one works, it's still a **warning**: a reader can't tell from the headings which block each documents. The fix is to give each occurrence the heading of its path.
+
+The per-path field findings and the shared-section finding are not emitted for a duplicated key; the fit rule stands in for them.
+
+### Prose-introduced lists
+
+A colon-terminated paragraph that names a schema block in backticks is treated as a heading for that block:
+
+```markdown
+The `cloudwatch_logs` object takes the following arguments:
+
+* `role_arn` - (Required) IAM role ARN.
+```
+
+The list documents `cloudwatch_logs` and gets every check a section gets. Like a heading, the prose stays in effect until the next heading or lead-in, so a code block interrupting its list doesn't end it. A warning asks for a real heading: `list introduced by prose ("…") in Argument Reference documents "cloudwatch_logs" without a block heading; use a block heading, e.g. "`cloudwatch_logs` Block"`.
+
+This is a parsing decision, not a coverage one: it applies whether or not `coverage` is enabled, so `ordering`, `description`, `labels`, and `format` judge a prose list's bullets against the block it names. The same holds for bullets under an unparseable heading, which belong to no section for every sub-check.
+
+Exceptions, where reading prose as a heading would credit the wrong block:
+
+- Prose that names nothing in the schema ("…the same arguments as `aws_instance`, with the addition of:") continues its section.
+- Prose that names the section's own block ("The `rule` block also supports:" under a `rule` heading) continues it.
+- Before any list, prose directly under a reference section heading, or under a heading that resolves to a schema path, introduces that heading's own list. Under an unparseable or unresolved heading, it opens the named block.
+- Markdown can't end a list, so authors sometimes resume the enclosing section after a blank line. A trailing run of bullets that are fields of the enclosing section, and not of the named block, stays in the enclosing section, and the warning adds `The list runs on into fields of the enclosing section from line N; end it before them`. A section field anywhere else in the list belongs to the named block and is reported there.
+
+### Phantom fields
+
+A listed field that doesn't exist at a path its section serves is an **error**: `documented argument "x" in block "p" does not exist in schema` under Argument Reference, `documented attribute …` under Attribute Reference.
 
 ## Coverage: phantom block headings
 

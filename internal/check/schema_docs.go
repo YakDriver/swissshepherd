@@ -8,8 +8,9 @@ import (
 	"bytes"
 	"fmt"
 	"maps"
+	"regexp"
 	"slices"
-	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/YakDriver/swissshepherd/internal/doc"
@@ -120,9 +121,18 @@ func enabled(b *bool) bool { return b == nil || *b }
 
 func (r *SchemaDocsRule) Check(ctx CheckContext) []Result {
 	var results []Result
+	if ctx.Doc != nil {
+		ctx.Doc = withProseSections(ctx.Schema, ctx.Doc)
+	}
 
+	var idx map[*doc.DocBlock][]string
+	var shared []sharedSection
+	if ctx.Schema != nil && ctx.Doc != nil && enabled(r.Coverage) {
+		idx = r.sectionIndex(ctx)
+		shared = r.sharedSections(ctx, idx)
+	}
 	if enabled(r.Coverage) {
-		results = append(results, r.checkCoverage(ctx)...)
+		results = append(results, r.checkCoverage(ctx, idx, shared)...)
 	}
 	if enabled(r.Ordering) {
 		results = append(results, r.checkOrdering(ctx)...)
@@ -143,7 +153,7 @@ func (r *SchemaDocsRule) Check(ctx CheckContext) []Result {
 		results = append(results, r.checkBylines(ctx)...)
 	}
 	if enabled(r.Deprecated) {
-		results = append(results, r.checkDeprecated(ctx)...)
+		results = append(results, r.checkDeprecated(ctx, shared)...)
 	}
 
 	return results
@@ -151,40 +161,31 @@ func (r *SchemaDocsRule) Check(ctx CheckContext) []Result {
 
 // --- Coverage ---
 
-func (r *SchemaDocsRule) checkCoverage(ctx CheckContext) []Result {
+func (r *SchemaDocsRule) checkCoverage(ctx CheckContext, idx map[*doc.DocBlock][]string, shared []sharedSection) []Result {
 	rs := ctx.Schema
 	if rs == nil {
 		return nil
 	}
 
 	var results []Result
-	reportedMissingBlocks := make(map[string]bool)
-	reportedExtraAttrs := make(map[string]bool)
+	missing := r.undocumentedBlocks(ctx)
 
-	// Iterate schema blocks in sorted path order. Several undocumented blocks
-	// can share a leaf name (e.g. many `...display_options` siblings across a
-	// large nested schema); the reportedMissingBlocks / reportedExtraAttrs dedup
-	// below keeps only one representative per leaf, so the iteration order would
-	// otherwise leak Go's randomized map ordering into which path is reported
-	// (see issue #65). Sorting makes the representative deterministic.
+	// Findings are keyed by schema path, never by leaf name: same-named blocks
+	// under different parents are different defects (#77). Sorted iteration
+	// keeps output order deterministic (#65).
 	for _, blockPath := range slices.Sorted(maps.Keys(rs.Blocks)) {
 		schemaBlock := rs.Blocks[blockPath]
 		if slices.Contains(r.skipBlocks(), blockPath) {
 			continue
 		}
 
-		docBlockName := leafName(blockPath)
-		docBlocks := findAllDocBlocksIn(ctx.Doc.Blocks(), docBlockName, blockPath, nil)
+		docBlocks := resolveSections(rs, ctx.Doc, blockPath)
 
 		if len(docBlocks) == 0 {
-			if hasConfigurableAttributes(schemaBlock) {
-				if reportedMissingBlocks[docBlockName] {
-					continue
-				}
-				reportedMissingBlocks[docBlockName] = true
+			if msg, ok := missing.message(blockPath); ok {
 				results = append(results, Result{
 					Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityError,
-					Message: fmt.Sprintf("block %q is not documented", displayPath(blockPath)),
+					Message: msg,
 					Block:   blockPath,
 				})
 			}
@@ -196,23 +197,33 @@ func (r *SchemaDocsRule) checkCoverage(ctx CheckContext) []Result {
 		// its leaf name (e.g. `### \`probabilistic\`` Block), under its
 		// full path (e.g. via a dot-notation reference like
 		// `rule[*].probabilistic[*].x` routed during parsing), or both.
+		//
+		// A section whose key has several headings is judged by the fit rule
+		// (checkDuplicateHeadings) instead: its fields aren't checked for
+		// existence here, and fields whose only home is its reference section
+		// aren't checked for absence.
 		documented := make(map[string]bool)
 		var malformed []doc.MalformedAttr
-		var allDocAttrs []doc.DocAttribute
 		for _, b := range docBlocks {
 			for _, attr := range b.Attributes {
 				documented[attr.Name] = true
 			}
 			malformed = append(malformed, b.MalformedAttributes...)
-			allDocAttrs = append(allDocAttrs, b.Attributes...)
 		}
+		argSection := resolveSection(rs, ctx.Doc.ArgumentBlocks, blockPath)
+		argDuplicated := duplicated(argSection)
+		attrSection := resolveSection(rs, ctx.Doc.AttributeBlocks, blockPath)
 
 		for _, attr := range schemaBlock.Attributes {
 			if r.shouldSkipAttribute(attr) {
 				continue
 			}
+			if argDuplicated && !schemaBlock.ConfigUnknown && !attr.Computed {
+				continue
+			}
 			if !documented[attr.Name] {
-				msg := fmt.Sprintf("attribute %q in block %q is not documented", attr.Name, displayPath(blockPath))
+				msg := fmt.Sprintf("attribute %q in block %q is not documented", attr.Name, displayPath(blockPath)) +
+					missingPointer(rs, idx, argSection, blockPath, attr.Name)
 				if m, ok := findMalformed(malformed, attr.Name); ok {
 					msg = fmt.Sprintf("attribute %q in block %q is documented but missing the \" - \" separator (expected: * `%s` - (Required|Optional) ...)", attr.Name, displayPath(blockPath), attr.Name)
 					results = append(results, Result{
@@ -223,6 +234,8 @@ func (r *SchemaDocsRule) checkCoverage(ctx CheckContext) []Result {
 						Rule: r.Name(), Resource: ctx.Resource, Severity: severity(attr), Message: msg, Block: blockPath,
 					})
 				}
+			} else if res, ok := r.outsideHome(ctx, blockPath, attr, argSection, attrSection); ok {
+				results = append(results, res)
 			} else if m, ok := findMalformed(malformed, attr.Name); ok {
 				results = append(results, Result{
 					Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityWarning,
@@ -244,21 +257,30 @@ func (r *SchemaDocsRule) checkCoverage(ctx CheckContext) []Result {
 			schemaAttrNames[leafName(child)] = true
 		}
 
-		for _, docAttr := range allDocAttrs {
-			if !schemaAttrNames[docAttr.Name] && !slices.Contains(r.phantom(), docAttr.Name) {
-				if existsInSiblingBlock(rs, leafName(blockPath), docAttr.Name) {
+		for _, b := range docBlocks {
+			if duplicated(b) {
+				continue
+			}
+			kind := "attribute"
+			if b == argSection {
+				kind = "argument"
+			}
+			for _, docAttr := range b.Attributes {
+				if schemaAttrNames[docAttr.Name] || slices.Contains(r.phantom(), docAttr.Name) {
 					continue
 				}
-				key := docBlockName + "." + docAttr.Name
-				if reportedExtraAttrs[key] {
-					continue
+				msg := fmt.Sprintf("documented %s %q in block %q does not exist in schema", kind, docAttr.Name, displayPath(blockPath))
+				var where []string
+				for _, q := range idx[b] {
+					if q != blockPath && blockHasField(rs.Blocks[q], docAttr.Name) {
+						where = append(where, q)
+					}
 				}
-				reportedExtraAttrs[key] = true
+				if len(where) > 0 {
+					msg += fmt.Sprintf("; section %q also documents %s, where %q exists", b.Name, pointerList(where), docAttr.Name)
+				}
 				results = append(results, Result{
-					Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityWarning,
-					Message: fmt.Sprintf("documented attribute %q in block %q does not exist in schema", docAttr.Name, displayPath(blockPath)),
-					Block:   blockPath,
-					Line:    docAttr.Line,
+					Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityError, Message: msg, Block: blockPath, Line: docAttr.Line,
 				})
 			}
 		}
@@ -278,8 +300,1030 @@ func (r *SchemaDocsRule) checkCoverage(ctx CheckContext) []Result {
 	results = append(results, r.checkAttributeCoverage(ctx)...)
 
 	results = append(results, r.checkPhantomBlocks(ctx)...)
+	results = append(results, r.checkOrphans(ctx)...)
+	results = append(results, r.checkDuplicateHeadings(ctx)...)
+	results = append(results, r.checkUnresolvedSections(ctx)...)
+	results = append(results, r.sharedSectionResults(ctx, shared)...)
 
 	return results
+}
+
+// outsideHome reports a pure-configurable argument at p that is documented
+// only under Attribute Reference, with no label (§2 home section). The union
+// of p's sections counts it as documented, and labels reads an unlabeled
+// bullet there as a computed output, so nothing else reports it. A labeled
+// bullet is left to labels' move finding, so the two never both fire.
+// Severity follows that finding: a warning for a root scalar (#62).
+func (r *SchemaDocsRule) outsideHome(ctx CheckContext, p string, attr schema.Attribute, argSection, attrSection *doc.DocBlock) (Result, bool) {
+	if attrSection == nil || !configurableArgAtPath(ctx.Schema, p, attr.Name) {
+		return Result{}, false
+	}
+	if argSection != nil && slices.ContainsFunc(argSection.Attributes, func(a doc.DocAttribute) bool { return a.Name == attr.Name }) {
+		return Result{}, false
+	}
+	i := slices.IndexFunc(attrSection.Attributes, func(a doc.DocAttribute) bool { return a.Name == attr.Name })
+	if i < 0 {
+		return Result{}, false
+	}
+	da := attrSection.Attributes[i]
+	if da.Required || da.Optional || da.ReadOnly {
+		return Result{}, false
+	}
+	label := "(Optional)"
+	if attr.Required {
+		label = "(Required)"
+	}
+	where := ""
+	sev := severity(attr)
+	if p == "" {
+		sev = SeverityWarning
+	} else {
+		where = fmt.Sprintf(" in block %q", displayPath(p))
+	}
+	return Result{
+		Rule: r.Name(), Resource: ctx.Resource, Severity: sev, Block: p, Line: da.Line,
+		Message: fmt.Sprintf("argument %q%s is documented under Attribute Reference but is a configurable argument in the schema; move it to Argument Reference and label it %s", attr.Name, where, label),
+	}, true
+}
+
+// --- Shared sections ---
+
+// sectionIndex maps each section to the schema paths it serves, sorted: the
+// paths that resolve to it under resolveSection, excluding skip_blocks
+// (docs/rules/coverage-path-resolution.md §2). Argument and Attribute
+// Reference sections are distinct blocks, so one map holds both.
+func (r *SchemaDocsRule) sectionIndex(ctx CheckContext) map[*doc.DocBlock][]string {
+	idx := make(map[*doc.DocBlock][]string)
+	for _, p := range slices.Sorted(maps.Keys(ctx.Schema.Blocks)) {
+		if p == "" || slices.Contains(r.skipBlocks(), p) {
+			continue
+		}
+		for _, blocks := range []map[string]*doc.DocBlock{ctx.Doc.ArgumentBlocks, ctx.Doc.AttributeBlocks} {
+			if b := resolveSection(ctx.Schema, blocks, p); b != nil {
+				idx[b] = append(idx[b], p)
+			}
+		}
+	}
+	return idx
+}
+
+// shareConflict is one way a shared section can't be right for all the paths
+// it serves (§6): kind 1, field X must be listed for Q but doesn't exist at P;
+// 2, X's label differs; 3, X's deprecation differs; 4, child block X differs
+// below this level.
+type shareConflict struct {
+	kind        int
+	field, q, p string
+	qVal, pVal  string // labels, for kind 2
+}
+
+// sharedSection is a section serving several paths that has conflicts.
+type sharedSection struct {
+	inAttrs   bool
+	key       string
+	block     *doc.DocBlock
+	served    []string
+	conflicts []shareConflict
+}
+
+// sharedSections evaluates the shared-section invariant for every section
+// that serves two or more paths: it is valid only when every schema-derived
+// property swissshepherd compares is identical across those paths (§6). Each
+// disjunct is evaluated over the whole served set, never against one
+// representative path, because interchangeability isn't transitive.
+// Duplicated keys are left to the fit rule.
+func (r *SchemaDocsRule) sharedSections(ctx CheckContext, idx map[*doc.DocBlock][]string) []sharedSection {
+	e := &shareEval{r: r, rs: ctx.Schema, memo: make(map[string][]shareConflict)}
+	var out []sharedSection
+	for _, inAttrs := range []bool{false, true} {
+		blocks := ctx.Doc.ArgumentBlocks
+		if inAttrs {
+			blocks = ctx.Doc.AttributeBlocks
+		}
+		for _, key := range slices.Sorted(maps.Keys(blocks)) {
+			b := blocks[key]
+			served := idx[b]
+			if len(served) < 2 || duplicated(b) {
+				continue
+			}
+			listed := make(map[string]bool, len(b.Attributes))
+			for _, a := range b.Attributes {
+				listed[a.Name] = true
+			}
+			conflicts := e.eval(served, inAttrs, listed)
+			// Disjunct 1 reports one representative per section: the
+			// field-existence errors already enumerate the rest.
+			var first *shareConflict
+			var rest []shareConflict
+			for i, c := range conflicts {
+				if c.kind != 1 {
+					rest = append(rest, c)
+					continue
+				}
+				if first == nil || c.q < first.q || (c.q == first.q && (c.field < first.field || (c.field == first.field && c.p < first.p))) {
+					first = &conflicts[i]
+				}
+			}
+			if first != nil {
+				rest = append([]shareConflict{*first}, rest...)
+			}
+			if len(rest) > 0 {
+				out = append(out, sharedSection{inAttrs: inAttrs, key: key, block: b, served: served, conflicts: rest})
+			}
+		}
+	}
+	return out
+}
+
+type shareEval struct {
+	r    *SchemaDocsRule
+	rs   *schema.ResourceSchema
+	memo map[string][]shareConflict
+}
+
+// eval returns the conflicts among paths for one reference section. listed
+// holds the fields the section lists; nil at child level, where no section is
+// involved: there every field that exists is compared for labels and
+// deprecation, since the children's own sections would list it.
+func (e *shareEval) eval(paths []string, inAttrs bool, listed map[string]bool) []shareConflict {
+	fieldSet := make(map[string]bool)
+	for _, p := range paths {
+		b := e.rs.Blocks[p]
+		for _, a := range b.Attributes {
+			fieldSet[a.Name] = true
+		}
+		for _, c := range b.ChildBlocks {
+			fieldSet[leafName(c)] = true
+		}
+	}
+	for f := range listed {
+		fieldSet[f] = true
+	}
+
+	var out []shareConflict
+	for _, f := range slices.Sorted(maps.Keys(fieldSet)) {
+		if slices.Contains(e.r.implicit(), f) || slices.Contains(e.r.phantom(), f) {
+			continue
+		}
+		// exist is schema presence: a field coverage ignores (deprecated,
+		// under ignore_deprecated) still exists, so listing it isn't wrong.
+		// Ignored fields can't force a listing or a marker comparison.
+		var exist, single, compared []string
+		for _, p := range paths {
+			b := e.rs.Blocks[p]
+			if !blockHasField(b, f) {
+				continue
+			}
+			exist = append(exist, p)
+			if e.ignored(b, f) {
+				continue
+			}
+			compared = append(compared, p)
+			if e.r.homeOnlyIn(e.rs, p, f, inAttrs) {
+				single = append(single, p)
+			}
+		}
+		if len(single) > 0 && len(exist) < len(paths) {
+			missing := slices.IndexFunc(paths, func(p string) bool { return !slices.Contains(exist, p) })
+			out = append(out, shareConflict{kind: 1, field: f, q: single[0], p: paths[missing]})
+		}
+		if !(listed == nil || listed[f] || len(single) > 0) || len(compared) < 2 {
+			continue
+		}
+		// A field can be an attribute at some paths and a child block at
+		// others, and an object-typed attribute is both: with
+		// nested_object_attributes its fields are expanded into a block at
+		// p.f that ChildBlocks doesn't list. Labels and deprecation are
+		// compared among the attributes, contents among the blocks.
+		var asAttr, children []string
+		for _, p := range compared {
+			if _, ok := attrAt(e.rs.Blocks[p], f); ok {
+				asAttr = append(asAttr, p)
+			}
+			if c := p + "." + f; !slices.Contains(e.r.skipBlocks(), c) {
+				if _, ok := e.rs.Blocks[c]; ok {
+					children = append(children, c)
+				}
+			}
+		}
+		// A ConfigUnknown block's labels are unknowable, so they're never
+		// compared (never guess).
+		labelsKnown := !slices.ContainsFunc(asAttr, func(p string) bool { return e.rs.Blocks[p].ConfigUnknown })
+		if len(asAttr) > 1 {
+			rep := asAttr[0]
+			sa, _ := attrAt(e.rs.Blocks[rep], f)
+			for _, p := range asAttr[1:] {
+				pa, _ := attrAt(e.rs.Blocks[p], f)
+				if !inAttrs && labelsKnown && labelFor(sa) != labelFor(pa) {
+					out = append(out, shareConflict{kind: 2, field: f, q: rep, p: p, qVal: labelFor(sa), pVal: labelFor(pa)})
+					break
+				}
+			}
+			for _, p := range asAttr[1:] {
+				pa, _ := attrAt(e.rs.Blocks[p], f)
+				if sa.Deprecated != pa.Deprecated {
+					q, other := rep, p
+					if !sa.Deprecated {
+						q, other = p, rep
+					}
+					out = append(out, shareConflict{kind: 3, field: f, q: q, p: other})
+					break
+				}
+			}
+		}
+		if len(children) < 2 {
+			continue
+		}
+		// Conflicts among the children name child paths (each is p+"."+f), so
+		// the parents are recovered by dropping the leaf.
+		if cs := e.below(children); len(cs) > 0 {
+			out = append(out, shareConflict{kind: 4, field: f, q: strings.TrimSuffix(cs[0].q, "."+f), p: strings.TrimSuffix(cs[0].p, "."+f)})
+		}
+	}
+	return out
+}
+
+// below returns the conflicts among a set of same-named child blocks in
+// either reference section, memoized by the sorted set.
+func (e *shareEval) below(children []string) []shareConflict {
+	key := strings.Join(children, "\x00")
+	if cs, ok := e.memo[key]; ok {
+		return cs
+	}
+	e.memo[key] = nil // a tree has no cycles, but don't recurse into an entry being built
+	cs := append(e.eval(children, false, nil), e.eval(children, true, nil)...)
+	e.memo[key] = cs
+	return cs
+}
+
+// ignored reports whether coverage's filters drop f at block b.
+func (e *shareEval) ignored(b *schema.Block, f string) bool {
+	a, ok := attrAt(b, f)
+	return ok && e.r.IgnoreDeprecated && a.Deprecated
+}
+
+func attrAt(b *schema.Block, f string) (schema.Attribute, bool) {
+	if i := slices.IndexFunc(b.Attributes, func(a schema.Attribute) bool { return a.Name == f }); i >= 0 {
+		return b.Attributes[i], true
+	}
+	return schema.Attribute{}, false
+}
+
+// labelFor is the one schema-correct label for an attribute.
+func labelFor(a schema.Attribute) string {
+	switch {
+	case a.Required:
+		return "(Required)"
+	case a.Optional:
+		return "(Optional)"
+	}
+	return "(Read-Only)"
+}
+
+// homeOnlyIn reports whether field f at path p may be documented only in the
+// given reference section (§2 field homes).
+func (r *SchemaDocsRule) homeOnlyIn(rs *schema.ResourceSchema, p, f string, inAttrs bool) bool {
+	b := rs.Blocks[p]
+	if b.ConfigUnknown {
+		return false
+	}
+	readOnlyHome := inAttrs && !r.allowInlineReadOnly()
+	if a, ok := attrAt(b, f); ok {
+		switch {
+		case (a.Required || a.Optional) && !a.Computed:
+			return !inAttrs
+		case a.Computed && !a.Required && !a.Optional:
+			return readOnlyHome
+		}
+		return false
+	}
+	c := childBlockPath(p, f)
+	switch {
+	case blockTreeHasPureConfigurable(rs, c, make(map[string]bool)):
+		return !inAttrs
+	case blockTreeHasConfigurable(rs, c):
+		return false
+	}
+	return readOnlyHome
+}
+
+// blockTreeHasConfigurable reports whether any Required or Optional field
+// exists in the subtree at path.
+func blockTreeHasConfigurable(rs *schema.ResourceSchema, path string) bool {
+	b, ok := rs.Blocks[path]
+	if !ok {
+		return false
+	}
+	if slices.ContainsFunc(b.Attributes, func(a schema.Attribute) bool { return a.Required || a.Optional }) {
+		return true
+	}
+	return slices.ContainsFunc(b.ChildBlocks, func(c string) bool { return blockTreeHasConfigurable(rs, childBlockPath(path, c)) })
+}
+
+// sharedSectionResults renders the shared-section findings.
+func (r *SchemaDocsRule) sharedSectionResults(ctx CheckContext, shared []sharedSection) []Result {
+	var results []Result
+	for _, sh := range shared {
+		n := len(sh.served)
+		for _, c := range sh.conflicts {
+			head := fmt.Sprintf("section %q (line %d) in %s documents %d paths; ", sh.key, sh.block.HeadingLine, referenceName(sh.inAttrs), n)
+			var what, cond string
+			switch c.kind {
+			case 1:
+				what = fmt.Sprintf("%q must be listed for %q but doesn't exist at %q", c.field, displayPath(c.q), displayPath(c.p))
+				cond = fmt.Sprintf("paths where %q exists", c.field)
+			case 2:
+				what = fmt.Sprintf("%q is %s at %q and %s at %q, so one section can't label it correctly", c.field, c.qVal, displayPath(c.q), c.pVal, displayPath(c.p))
+				cond = fmt.Sprintf("paths where %q has the same label", c.field)
+			case 3:
+				what = fmt.Sprintf("%q is deprecated at %q but not at %q, so one section can't mark it correctly", c.field, displayPath(c.q), displayPath(c.p))
+				cond = fmt.Sprintf("paths where %q has the same deprecation", c.field)
+			case 4:
+				what = fmt.Sprintf("%q differs below this level between %q and %q, so the section's %q bullet can't lead to the right %q for both", c.field, displayPath(c.q), displayPath(c.p), c.field, c.field)
+				cond = fmt.Sprintf("paths whose %q blocks match at every depth", c.field)
+			}
+			// A label or deprecation conflict means the section's marker is
+			// wrong for some path: an error, as under the fit rule and in
+			// labels and deprecation. Existence and child-content conflicts
+			// are already errors at each path; this finding only explains them.
+			sev := SeverityWarning
+			if c.kind == 2 || c.kind == 3 {
+				sev = SeverityError
+			}
+			results = append(results, Result{
+				Rule: r.Name(), Resource: ctx.Resource, Severity: sev, Line: sh.block.HeadingLine, Block: c.q,
+				Message: head + what + fmt.Sprintf(". Qualifying means up to %d sections: give %q a heading that resolves only to %s, e.g. %q",
+					n, displayPath(c.q), cond, doc.RenderHeading(r.pathTemplate(), c.q)),
+			})
+		}
+	}
+	return results
+}
+
+// missingPointer is appended to a missing-field finding when the section
+// documenting p also serves paths where f doesn't exist: listing f there would
+// make it wrong for them, so the fix is a qualified heading, not a bullet.
+func missingPointer(rs *schema.ResourceSchema, idx map[*doc.DocBlock][]string, section *doc.DocBlock, p, f string) string {
+	if section == nil {
+		return ""
+	}
+	var without []string
+	for _, q := range idx[section] {
+		if q != p && !blockHasField(rs.Blocks[q], f) {
+			without = append(without, q)
+		}
+	}
+	if len(without) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("; the section documenting it (%q, line %d) also documents %s, where %q does not exist", section.Name, section.HeadingLine, pointerList(without), f)
+}
+
+// pointerList renders up to three paths, sorted, with a count of the rest.
+func pointerList(paths []string) string {
+	shown := make([]string, 0, 3)
+	for _, p := range paths[:min(3, len(paths))] {
+		shown = append(shown, strconv.Quote(displayPath(p)))
+	}
+	out := strings.Join(shown, ", ")
+	if len(paths) > 3 {
+		out += fmt.Sprintf(" (and %d more)", len(paths)-3)
+	}
+	return out
+}
+
+// checkUnresolvedSections reports parsed headings that no schema path
+// resolves to, so their fields are compared against nothing
+// (docs/rules/coverage-path-resolution.md §5). Excluded, to avoid reporting a
+// heading twice: Argument Reference headings whose name is no schema block,
+// which checkPhantomBlocks reports, and Attribute Reference headings naming an
+// object-typed attribute, which checkPhantomBlocks deliberately allows.
+func (r *SchemaDocsRule) checkUnresolvedSections(ctx CheckContext) []Result {
+	rs := ctx.Schema
+	if rs == nil {
+		return nil
+	}
+	leaves := make(map[string]bool, len(rs.Blocks))
+	for p := range rs.Blocks {
+		if p != "" {
+			leaves[leafName(p)] = true
+		}
+	}
+	objectLeaves := nestedAttributeLeaves(rs)
+
+	var results []Result
+	for _, inAttrs := range []bool{false, true} {
+		blocks := ctx.Doc.ArgumentBlocks
+		if inAttrs {
+			blocks = ctx.Doc.AttributeBlocks
+		}
+		served := make(map[*doc.DocBlock]bool)
+		for p := range rs.Blocks {
+			if b := resolveSection(rs, blocks, p); b != nil {
+				served[b] = true
+			}
+		}
+		for _, key := range slices.Sorted(maps.Keys(blocks)) {
+			b := blocks[key]
+			// A heading with no bullets hides no unchecked fields.
+			if key == "" || b.Heading == "" || served[b] || (len(b.Attributes) == 0 && len(b.MalformedAttributes) == 0) {
+				continue
+			}
+			leaf := leafName(key)
+			if objectLeaves[leaf] || (!inAttrs && !leaves[leaf]) {
+				continue
+			}
+			why := "no schema block has that name"
+			if leaves[leaf] {
+				why = fmt.Sprintf("every block named %q resolves to another heading", leaf)
+				if strings.Contains(key, ".") && !keyMatchesSomePath(rs, key) {
+					why = fmt.Sprintf("no block named %q sits under %q", leaf, key[:strings.LastIndex(key, ".")])
+				}
+			}
+			results = append(results, Result{
+				Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityWarning, Line: b.HeadingLine,
+				Message: fmt.Sprintf("heading %q in %s documents no block (%s), so its fields aren't checked against the schema", b.Heading, referenceName(inAttrs), why),
+			})
+		}
+	}
+	return results
+}
+
+// keyMatchesSomePath reports whether key is a candidate heading key for any
+// schema path.
+func keyMatchesSomePath(rs *schema.ResourceSchema, key string) bool {
+	for p := range rs.Blocks {
+		if p != "" && slices.Contains(sectionKeyCandidates(p), key) {
+			return true
+		}
+	}
+	return false
+}
+
+// duplicated reports whether a section's key has more than one heading.
+func duplicated(b *doc.DocBlock) bool {
+	return b != nil && len(b.Occurrences) > 1
+}
+
+// checkDuplicateHeadings applies the fit rule to keys with several headings in
+// one reference section (docs/rules/coverage-path-resolution.md §5). Position
+// doesn't say which heading documents which path, so instead it asks whether
+// any assignment makes every block exact. An error when some served path has
+// no heading that fits it, or some heading fits no served path: then a block
+// lacks its exact fields whichever way they're matched. Otherwise a warning,
+// because a reader still can't tell from either heading which block it
+// documents. There is no passing case.
+func (r *SchemaDocsRule) checkDuplicateHeadings(ctx CheckContext) []Result {
+	rs := ctx.Schema
+	if rs == nil {
+		return nil
+	}
+	var results []Result
+	for _, inAttrs := range []bool{false, true} {
+		blocks := ctx.Doc.ArgumentBlocks
+		if inAttrs {
+			blocks = ctx.Doc.AttributeBlocks
+		}
+		section := referenceName(inAttrs)
+		for _, key := range slices.Sorted(maps.Keys(blocks)) {
+			b := blocks[key]
+			if !duplicated(b) {
+				continue
+			}
+			var served []string
+			for _, p := range slices.Sorted(maps.Keys(rs.Blocks)) {
+				if p != "" && !slices.Contains(r.skipBlocks(), p) && resolveSection(rs, blocks, p) == b {
+					served = append(served, p)
+				}
+			}
+			if len(served) == 0 {
+				continue // resolves to nothing: the unresolved-section warning's job
+			}
+			var lines []string
+			for _, o := range b.Occurrences {
+				lines = append(lines, strconv.Itoa(o.Line))
+			}
+			lineList := strings.Join(lines, ", ")
+
+			// Only headings with bullets are fitted. A heading with none ("See
+			// `ebs_config` above.") documents nothing; flagging its fields as
+			// missing would name the wrong defect. It still counts as a
+			// duplicate below.
+			var occs []doc.Occurrence
+			for _, o := range b.Occurrences {
+				if len(o.Attributes) > 0 {
+					occs = append(occs, o)
+				}
+			}
+
+			// mis[i][j] lists how occurrence i fails to fit served path j.
+			mis := make([][][]string, len(occs))
+			for i, o := range occs {
+				mis[i] = make([][]string, len(served))
+				for j, p := range served {
+					mis[i][j] = r.fitMismatches(rs, o, p, inAttrs)
+				}
+			}
+			before := len(results)
+			// reported holds each path error's differences, so a heading whose
+			// closest path already carries the same differences isn't
+			// reported again: the path's message names every heading line.
+			reported := make(map[int]string)
+			for j, p := range served {
+				best := 0
+				for i := range mis {
+					if closer(mis[i][j], mis[best][j]) {
+						best = i
+					}
+				}
+				if len(occs) == 0 {
+					break
+				}
+				if d := mis[best][j]; len(d) > 0 {
+					reported[j] = strings.Join(d, "\x00")
+					results = append(results, Result{
+						Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityError, Block: p, Line: occs[best].Line,
+						Message: fmt.Sprintf("none of the %d headings for %q in %s (lines %s) documents block %q exactly; the closest, at line %d: %s",
+							len(b.Occurrences), key, section, lineList, displayPath(p), occs[best].Line, summarize(d)),
+					})
+				}
+			}
+			for i, o := range occs {
+				best := 0
+				for j := range served {
+					if closer(mis[i][j], mis[i][best]) {
+						best = j
+					}
+				}
+				if d := mis[i][best]; len(d) > 0 {
+					if prev, ok := reported[best]; ok && prev == strings.Join(d, "\x00") {
+						continue
+					}
+					results = append(results, Result{
+						Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityError, Block: served[best], Line: o.Line,
+						Message: fmt.Sprintf("heading %q (line %d) in %s documents no block exactly; the closest is %q: %s",
+							o.Heading, o.Line, section, displayPath(served[best]), summarize(d)),
+					})
+				}
+			}
+			if len(results) > before {
+				continue
+			}
+			shown := served
+			more := ""
+			if len(shown) > 3 {
+				more = fmt.Sprintf(" and %d more", len(shown)-3)
+				shown = shown[:3]
+			}
+			results = append(results, Result{
+				Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityWarning, Line: b.Occurrences[0].Line,
+				Message: fmt.Sprintf("%d headings in %s normalize to %q (lines %s), so a reader can't tell which block each documents; give each the heading of the path it documents (%s%s)",
+					len(b.Occurrences), section, key, lineList, strings.Join(shown, ", "), more),
+			})
+		}
+	}
+	return results
+}
+
+// closer reports whether difference list a is a nearer fit than b: fewer
+// content differences (fields that don't exist or aren't listed) first, then
+// fewer differences overall. A heading whose fields are right but whose label
+// is wrong is nearer than one listing a field that isn't there.
+func closer(a, b []string) bool {
+	content := func(d []string) int {
+		n := 0
+		for _, s := range d {
+			if strings.HasSuffix(s, "doesn't exist there") || strings.HasSuffix(s, "isn't listed") {
+				n++
+			}
+		}
+		return n
+	}
+	if ca, cb := content(a), content(b); ca != cb {
+		return ca < cb
+	}
+	return len(a) < len(b)
+}
+
+// summarize joins up to three differences, with a count of the rest.
+func summarize(d []string) string {
+	if len(d) <= 3 {
+		return strings.Join(d, "; ")
+	}
+	return fmt.Sprintf("%s; and %d more", strings.Join(d[:3], "; "), len(d)-3)
+}
+
+// fitMismatches lists the ways occurrence o fails to document path p exactly
+// in one reference section: listed fields that don't exist at p, fields whose
+// only home is that section and that aren't listed, and listed fields whose
+// label or deprecation marker is wrong for p. None means o fits p. Uses
+// coverage's own filters, so a difference only in a skipped or allowed field
+// never counts.
+func (r *SchemaDocsRule) fitMismatches(rs *schema.ResourceSchema, o doc.Occurrence, p string, inAttrs bool) []string {
+	b := rs.Blocks[p]
+	var n []string
+	listed := make(map[string]bool, len(o.Attributes))
+	for _, a := range o.Attributes {
+		listed[a.Name] = true
+		if slices.Contains(r.phantom(), a.Name) {
+			continue
+		}
+		if !blockHasField(b, a.Name) {
+			n = append(n, fmt.Sprintf("%q doesn't exist there", a.Name))
+			continue
+		}
+		i := slices.IndexFunc(b.Attributes, func(sa schema.Attribute) bool { return sa.Name == a.Name })
+		if i < 0 {
+			continue // a child block bullet carries no label or marker to compare
+		}
+		sa := b.Attributes[i]
+		if a.Deprecated != sa.Deprecated && !(r.IgnoreDeprecated && sa.Deprecated) {
+			n = append(n, fmt.Sprintf("%q deprecation marker is wrong", a.Name))
+		}
+		if !inAttrs && !b.ConfigUnknown && (a.Required || a.Optional || a.ReadOnly) {
+			// The one schema-correct label, as labelCorrectness defines it.
+			wantOptional := sa.Optional && !sa.Required
+			wantReadOnly := !sa.Required && !sa.Optional
+			if a.Required != sa.Required || a.Optional != wantOptional || a.ReadOnly != wantReadOnly {
+				want := "(Read-Only)"
+				switch {
+				case sa.Required:
+					want = "(Required)"
+				case wantOptional:
+					want = "(Optional)"
+				}
+				n = append(n, fmt.Sprintf("%q should be %s", a.Name, want))
+			}
+		}
+	}
+	if b.ConfigUnknown {
+		slices.Sort(n)
+		return n
+	}
+	for _, sa := range b.Attributes {
+		if listed[sa.Name] || slices.Contains(r.implicit(), sa.Name) || (r.IgnoreDeprecated && sa.Deprecated) {
+			continue
+		}
+		pure := (sa.Required || sa.Optional) && !sa.Computed
+		computedOnly := sa.Computed && !sa.Required && !sa.Optional
+		if (!inAttrs && pure) || (inAttrs && computedOnly && !r.allowInlineReadOnly()) {
+			n = append(n, fmt.Sprintf("%q isn't listed", sa.Name))
+		}
+	}
+	if !inAttrs {
+		for _, c := range b.ChildBlocks {
+			if !listed[leafName(c)] && blockTreeHasPureConfigurable(rs, childBlockPath(p, c), make(map[string]bool)) {
+				n = append(n, fmt.Sprintf("%q isn't listed", leafName(c)))
+			}
+		}
+	}
+	// Schema attribute order comes from map iteration; sort for stable output.
+	slices.Sort(n)
+	return n
+}
+
+// checkOrphans reports headings whose bullets belong to no section, so their
+// fields are compared against nothing (docs/rules/coverage-path-resolution.md
+// §5), and prose lists that stand in for a heading. When an unparseable
+// heading names a schema block, the finding suggests a heading for it. The
+// suggestion is advisory: an unparseable heading still documents nothing, so
+// this doesn't loosen headings-only resolution.
+func (r *SchemaDocsRule) checkOrphans(ctx CheckContext) []Result {
+	var results []Result
+	add := func(line int, msg string, names []string) {
+		if key := suggestHeadingKey(ctx.Schema, names); key != "" {
+			msg += fmt.Sprintf("; use a block heading, e.g. %q", doc.RenderHeading(r.pathTemplate(), key))
+		}
+		results = append(results, Result{Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityWarning, Message: msg, Line: line})
+	}
+	for _, o := range ctx.Doc.Orphans {
+		add(o.Line, fmt.Sprintf("heading %q in %s isn't a recognized block heading, so its bullets aren't checked against the schema", o.Text, referenceName(o.InAttributes)), headingNames(o.Text))
+	}
+	for _, ps := range proseSections(ctx.Schema, ctx.Doc) {
+		msg := fmt.Sprintf("list introduced by prose (%q) in %s documents %q without a block heading; use a block heading, e.g. %q",
+			truncate(ps.Text, 80), referenceName(ps.InAttributes), ps.key, doc.RenderHeading(r.pathTemplate(), ps.key))
+		if ps.resumeLine > 0 {
+			msg += fmt.Sprintf(". The list runs on into fields of the enclosing section from line %d; end it before them", ps.resumeLine)
+		}
+		results = append(results, Result{Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityWarning, Line: ps.Line, Message: msg})
+	}
+	slices.SortFunc(results, func(a, b Result) int { return a.Line - b.Line })
+	return results
+}
+
+func referenceName(inAttributes bool) string {
+	if inAttributes {
+		return "Attribute Reference"
+	}
+	return "Argument Reference"
+}
+
+// proseSection is a prose lead-in that stands in for a block heading, with
+// the section key its list documents. Bullets that resume the enclosing
+// section (resumed, from line resumeLine) stay there.
+type proseSection struct {
+	doc.ProseLeadIn
+	key        string
+	resumeLine int
+}
+
+// proseSections returns the prose lead-ins that introduce another block's list
+// ("The `cloudwatch_logs` object takes the following arguments:"): the prose
+// names a schema block in backticks, and the list follows the section's own
+// bullets. The prose is a heading in all but syntax, so its list documents the
+// named block, keyed as suggestHeadingKey would key a heading for it (§5).
+// Prose naming nothing in the schema ("…the same arguments as
+// `aws_instance`, with the addition of:") continues its section, as does prose
+// before any list under a reference section heading (the byline's place) or a
+// heading that resolves to a schema path: that prose introduces the heading's
+// own list. Under an unparseable or unresolved heading it opens the block.
+//
+// Markdown gives a prose list no end: a bullet after a blank line continues
+// it, and authors resume the enclosing section that way
+// (aws_codepipeline_custom_action_type). So a trailing run of bullets that
+// are fields of the enclosing section and not of the named block stays in the
+// section, and the warning says where the list should end. Crediting them to
+// the named block would report correct fields as nonexistent.
+func proseSections(rs *schema.ResourceSchema, d *doc.Document) []proseSection {
+	if rs == nil {
+		return nil
+	}
+	var out []proseSection
+	for _, pl := range d.ProseLeadIns {
+		key := suggestHeadingKey(rs, backtickedNames(pl.Text))
+		if len(pl.Bullets) == 0 || key == "" || (!pl.Orphaned && key == pl.Section) {
+			continue
+		}
+		if pl.AfterHeading && !pl.Orphaned && (pl.Section == "" || keyMatchesSomePath(rs, pl.Section)) {
+			continue
+		}
+		ps := proseSection{ProseLeadIn: pl, key: key}
+		if !pl.Orphaned {
+			n := len(pl.Bullets)
+			for n > 0 && sectionField(rs, pl.Section, pl.Bullets[n-1].Name) && !sectionField(rs, key, pl.Bullets[n-1].Name) {
+				n--
+			}
+			if n == 0 {
+				continue // the whole list is the section's own
+			}
+			if n < len(pl.Bullets) {
+				ps.resumeLine = pl.Bullets[n].Line
+				ps.Bullets = pl.Bullets[:n]
+			}
+		}
+		out = append(out, ps)
+	}
+	return out
+}
+
+// sectionField reports whether name is a field at some schema path the
+// section key could document.
+func sectionField(rs *schema.ResourceSchema, key, name string) bool {
+	for p, b := range rs.Blocks {
+		if (p == key || (p != "" && slices.Contains(sectionKeyCandidates(p), key))) && blockHasField(b, name) {
+			return true
+		}
+	}
+	return false
+}
+
+func blockHasField(b *schema.Block, name string) bool {
+	for _, a := range b.Attributes {
+		if a.Name == name {
+			return true
+		}
+	}
+	return slices.ContainsFunc(b.ChildBlocks, func(c string) bool { return leafName(c) == name })
+}
+
+// withProseSections returns d with each prose-introduced list (proseSections)
+// moved from the section the parser credited it to into a section for the
+// block the prose names, as one occurrence of that key, so every sub-check
+// reads it as it would a list under a heading. d itself is not modified.
+func withProseSections(rs *schema.ResourceSchema, d *doc.Document) *doc.Document {
+	sections := proseSections(rs, d)
+	if len(sections) == 0 {
+		return d
+	}
+	c := *d
+	c.ArgumentBlocks = maps.Clone(d.ArgumentBlocks)
+	c.AttributeBlocks = maps.Clone(d.AttributeBlocks)
+	// Blocks are cloned on first write so d's are never modified.
+	cloned := make(map[*doc.DocBlock]bool)
+	own := func(blocks map[string]*doc.DocBlock, key string) *doc.DocBlock {
+		b := blocks[key]
+		if b == nil {
+			b = &doc.DocBlock{Name: key}
+		} else if !cloned[b] {
+			cb := *b
+			cb.Attributes = slices.Clone(b.Attributes)
+			cb.MalformedAttributes = slices.Clone(b.MalformedAttributes)
+			cb.Occurrences = slices.Clone(b.Occurrences)
+			for i := range cb.Occurrences {
+				cb.Occurrences[i].Attributes = slices.Clone(cb.Occurrences[i].Attributes)
+			}
+			b = &cb
+		}
+		cloned[b] = true
+		blocks[key] = b
+		return b
+	}
+	for _, ps := range sections {
+		blocks := c.ArgumentBlocks
+		if ps.InAttributes {
+			blocks = c.AttributeBlocks
+		}
+		lines := make(map[int]bool, len(ps.Bullets))
+		for _, a := range ps.Bullets {
+			lines[a.Line] = true
+		}
+		// The parser credits the bullets to the section and mirrors them into
+		// every alias of a combined heading ("`a` and `b`"), so they're
+		// removed from every section that holds them, by line.
+		var malformed []doc.MalformedAttr
+		moved := func(a doc.DocAttribute) bool { return lines[a.Line] }
+		for _, key := range slices.Sorted(maps.Keys(blocks)) {
+			b := blocks[key]
+			if key == ps.key || (!slices.ContainsFunc(b.Attributes, moved) && !slices.ContainsFunc(b.MalformedAttributes, func(m doc.MalformedAttr) bool { return lines[m.Line] })) {
+				continue
+			}
+			from := own(blocks, key)
+			from.Attributes = slices.DeleteFunc(from.Attributes, moved)
+			for i := range from.Occurrences {
+				from.Occurrences[i].Attributes = slices.DeleteFunc(from.Occurrences[i].Attributes, moved)
+			}
+			from.MalformedAttributes = slices.DeleteFunc(from.MalformedAttributes, func(m doc.MalformedAttr) bool {
+				if lines[m.Line] {
+					if key == ps.Section {
+						malformed = append(malformed, m)
+					}
+					return true
+				}
+				return false
+			})
+		}
+		to := own(blocks, ps.key)
+		if to.HeadingLine == 0 {
+			to.HeadingLine = ps.Line
+		}
+		to.Attributes = append(to.Attributes, ps.Bullets...)
+		to.MalformedAttributes = append(to.MalformedAttributes, malformed...)
+		to.Occurrences = append(to.Occurrences, doc.Occurrence{Heading: ps.Text, Line: ps.Line, Attributes: slices.Clone(ps.Bullets)})
+	}
+	return &c
+}
+
+// pathTemplate is the first preferred heading style that takes a path, as
+// checkHeadings uses for its suggestions.
+func (r *SchemaDocsRule) pathTemplate() string {
+	for _, t := range r.Preferred {
+		if strings.Contains(t, "{Path}") {
+			return t
+		}
+	}
+	return "`{Path}` Block"
+}
+
+var headingNameRe = regexp.MustCompile(`[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)*`)
+
+// headingNames returns the lower-case identifiers in a heading, backticked or
+// not: "source: auth" -> [source auth].
+func headingNames(text string) []string {
+	return headingNameRe.FindAllString(strings.ToLower(text), -1)
+}
+
+// backtickedNames returns the identifiers quoted in backticks, with array
+// indexers stripped.
+func backtickedNames(text string) []string {
+	var out []string
+	for i, part := range strings.Split(text, "`") {
+		if i%2 == 0 {
+			continue
+		}
+		if name, ok := doc.NormalizeDotPath(part); ok {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
+// suggestHeadingKey picks the heading key for the block that names refer to,
+// or "" when no name is a schema block. Candidates are schema paths ending in
+// one of the names; the ones containing the most of the other names as
+// segments win ("source: auth" prefers source.auth over
+// secondary_sources.auth). A single winner is suggested by leaf when that
+// leaf is unique in the schema, else by full path. Several winners sharing a
+// leaf are suggested by that leaf: one shared section, which coverage then
+// checks path by path.
+func suggestHeadingKey(rs *schema.ResourceSchema, names []string) string {
+	if rs == nil || len(names) == 0 {
+		return ""
+	}
+	best, bestScore := []string(nil), -1
+	for _, p := range slices.Sorted(maps.Keys(rs.Blocks)) {
+		if p == "" {
+			continue
+		}
+		segs := strings.Split(p, ".")
+		for _, n := range names {
+			if p != n && !strings.HasSuffix(p, "."+n) {
+				continue
+			}
+			score := 0
+			for _, other := range names {
+				if other != n && slices.Contains(segs, other) {
+					score++
+				}
+			}
+			switch {
+			case score > bestScore:
+				best, bestScore = []string{p}, score
+			case score == bestScore && !slices.Contains(best, p):
+				best = append(best, p)
+			}
+		}
+	}
+	if len(best) == 0 {
+		return ""
+	}
+	leaf := leafName(best[0])
+	for _, p := range best[1:] {
+		if leafName(p) != leaf {
+			return ""
+		}
+	}
+	if len(best) > 1 {
+		return leaf
+	}
+	if _, unique := uniqueSchemaPathForLeaf(rs, leaf); unique {
+		return leaf
+	}
+	return best[0]
+}
+
+// undocumented is the set of schema paths with configurable fields and no
+// section in either reference section.
+type undocumented map[string]bool
+
+func (r *SchemaDocsRule) undocumentedBlocks(ctx CheckContext) undocumented {
+	m := make(undocumented)
+	for p, b := range ctx.Schema.Blocks {
+		if p == "" || slices.Contains(r.skipBlocks(), p) || !hasConfigurableAttributes(b) {
+			continue
+		}
+		if len(resolveSections(ctx.Schema, ctx.Doc, p)) == 0 {
+			m[p] = true
+		}
+	}
+	return m
+}
+
+// message returns the missing-block finding for p, or false when p is beneath
+// another undocumented block. Only the shallowest undocumented block in a
+// subtree is reported: its descendants can't be reached from the docs, so the
+// real defect is the missing ancestor section, and once it exists the next run
+// reports them (docs/rules/coverage-path-resolution.md §6). Ancestors without
+// configurable fields are never reported, so they never absorb descendants.
+// The message carries both counts so no work is hidden.
+func (u undocumented) message(p string) (string, bool) {
+	if !u[p] {
+		return "", false
+	}
+	for a := p; strings.Contains(a, "."); {
+		a = a[:strings.LastIndex(a, ".")]
+		if u[a] {
+			return "", false
+		}
+	}
+	leaf := leafName(p)
+	beneath, sameName := 0, 0
+	for q := range u {
+		if strings.HasPrefix(q, p+".") {
+			beneath++
+		}
+		if q != p && leafName(q) == leaf {
+			sameName++
+		}
+	}
+	msg := fmt.Sprintf("block %q is not documented", displayPath(p))
+	var notes []string
+	if beneath > 0 {
+		notes = append(notes, fmt.Sprintf("%d %s beneath it %s also undocumented", beneath, plural(beneath, "path", "paths"), plural(beneath, "is", "are")))
+	}
+	if sameName > 0 {
+		notes = append(notes, fmt.Sprintf("%d other undocumented %s %s the name %q", sameName, plural(sameName, "path", "paths"), plural(sameName, "shares", "share"), leaf))
+	}
+	if len(notes) > 0 {
+		msg += " (" + strings.Join(notes, "; ") + ")"
+	}
+	return msg, true
+}
+
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return one
+	}
+	return many
 }
 
 // checkPhantomBlocks reports doc blocks in the Argument Reference section
@@ -296,9 +1340,8 @@ func (r *SchemaDocsRule) checkCoverage(ctx CheckContext) []Result {
 // false positives on standard provider doc patterns.
 //
 // A doc block name matches the schema if any schema block path has the
-// same leaf name. (Matching by leaf alone is consistent with how the
-// rest of the rule resolves doc blocks against the schema, including
-// findDocBlock and existsInSiblingBlock.)
+// same leaf name. (resolveSection's candidate keys always end in the leaf,
+// so a heading whose leaf matches no schema block can't document anything.)
 func (r *SchemaDocsRule) checkPhantomBlocks(ctx CheckContext) []Result {
 	if ctx.Schema == nil {
 		return nil
@@ -409,8 +1452,8 @@ func (r *SchemaDocsRule) checkAttributeCoverage(ctx CheckContext) []Result {
 			continue
 		}
 
-		argDocs := findAllDocBlocksIn(ctx.Doc.ArgumentBlocks, leafName(blockPath), blockPath, ctx.Doc.BlockAnchors)
-		attrDocs := findAllDocBlocksIn(ctx.Doc.AttributeBlocks, leafName(blockPath), blockPath, ctx.Doc.BlockAnchors)
+		argDoc := resolveSection(ctx.Schema, ctx.Doc.ArgumentBlocks, blockPath)
+		attrDoc := resolveSection(ctx.Schema, ctx.Doc.AttributeBlocks, blockPath)
 
 		for _, attr := range schemaBlock.Attributes {
 			// Only Read-Only (computed-only) attributes are covered here.
@@ -425,8 +1468,11 @@ func (r *SchemaDocsRule) checkAttributeCoverage(ctx CheckContext) []Result {
 				continue
 			}
 
-			inAttrs := anyDocBlockHasAttr(attrDocs, attr.Name)
-			inArgs := anyDocBlockHasAttr(argDocs, attr.Name)
+			if duplicated(attrDoc) && !allowInline && !schemaBlock.ConfigUnknown {
+				continue // judged by the fit rule (checkDuplicateHeadings)
+			}
+			inAttrs := docBlockHasAttr(attrDoc, attr.Name)
+			inArgs := docBlockHasAttr(argDoc, attr.Name)
 
 			// Documented in Attribute Reference always satisfies the rule.
 			// Documented inline in Argument Reference satisfies the rule
@@ -478,15 +1524,6 @@ func docBlockHasAttr(b *doc.DocBlock, name string) bool {
 	}
 	for _, a := range b.Attributes {
 		if a.Name == name {
-			return true
-		}
-	}
-	return false
-}
-
-func anyDocBlockHasAttr(blocks []*doc.DocBlock, name string) bool {
-	for _, b := range blocks {
-		if docBlockHasAttr(b, name) {
 			return true
 		}
 	}
@@ -562,6 +1599,27 @@ func (r *SchemaDocsRule) checkDescriptions(ctx CheckContext) []Result {
 	var results []Result
 	results = append(results, checkDescriptionBlocks(ctx.Resource, r.Name(), r.prefixes(), ctx.Doc.ArgumentBlocks, seen)...)
 	results = append(results, checkDescriptionBlocks(ctx.Resource, r.Name(), r.prefixes(), ctx.Doc.AttributeBlocks, seen)...)
+
+	// Bullets that belong to no section still get the description check: it
+	// doesn't depend on which block they document. The finding names the
+	// heading instead of a block.
+	check := func(attrs []doc.DocAttribute, where string) {
+		for _, attr := range attrs {
+			for _, prefix := range r.prefixes() {
+				if attr.Description != "" && strings.HasPrefix(attr.Description, prefix) {
+					results = append(results, Result{
+						Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityError,
+						Message: fmt.Sprintf("attribute %q description should not start with %q (%s)", attr.Name, strings.TrimSpace(prefix), where),
+						Line:    attr.Line,
+					})
+					break
+				}
+			}
+		}
+	}
+	for _, o := range ctx.Doc.Orphans {
+		check(o.Bullets, fmt.Sprintf("under heading %q", o.Text))
+	}
 	return results
 }
 
@@ -602,16 +1660,8 @@ func (r *SchemaDocsRule) checkHeadings(ctx CheckContext) []Result {
 	}
 
 	schemaLeaves := make(map[string]bool)
-	ambiguousLeaves := make(map[string]bool)
-	leafAttrs := make(map[string]string)
-	for path, block := range rs.Blocks {
-		leaf := leafName(path)
-		schemaLeaves[leaf] = true
-		sig := blockSignature(block)
-		if prev, exists := leafAttrs[leaf]; exists && prev != sig {
-			ambiguousLeaves[leaf] = true
-		}
-		leafAttrs[leaf] = sig
+	for path := range rs.Blocks {
+		schemaLeaves[leafName(path)] = true
 	}
 
 	var results []Result
@@ -628,49 +1678,9 @@ func (r *SchemaDocsRule) checkHeadings(ctx CheckContext) []Result {
 				continue
 			}
 
-			// Ambiguity check is orthogonal to preferred-style check: a
-			// heading can be in a perfectly preferred style and still
-			// collide with multiple schema blocks sharing its leaf. The
-			// only safe disambiguator is a doc key that resolves to
-			// exactly one schema block under findAllDocBlocksIn.
-			//
-			// Skipping by "block.Name contains a dot" is too coarse —
-			// {Parent}-template composites and other partial-path keys
-			// can still match multiple schema paths via the existing
-			// 2- and 3-segment composite-suffix lookups. Instead,
-			// compute the actual set of schema paths this doc key
-			// would resolve to. If it's 1, the heading uniquely
-			// identifies a schema block. If it's ≥2, the heading is
-			// still ambiguous and we warn with the precise collision
-			// list.
-			if ambiguousLeaves[blockLeaf] {
-				resolved := schemaPathsResolvedByDocKey(rs, blocks, block.Name)
-				if len(resolved) > 1 {
-					pathTemplate := ""
-					for _, tmpl := range r.Preferred {
-						if strings.Contains(tmpl, "{Path}") {
-							pathTemplate = tmpl
-							break
-						}
-					}
-					if pathTemplate == "" {
-						pathTemplate = "`{Path}` Block"
-					}
-					sort.Strings(resolved)
-					example := doc.RenderHeading(pathTemplate, resolved[0])
-					results = append(results, Result{
-						Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityWarning,
-						Message: fmt.Sprintf(
-							"block %q heading %q is ambiguous (resolves to %d schema blocks: %s); use the full dot-path form, e.g. %q",
-							block.Name, block.Heading, len(resolved), strings.Join(resolved, ", "), example,
-						),
-						Block: block.Name,
-					})
-				}
-			}
-
 			// Preferred-style check: does the heading match one of the
-			// preferred templates? Independent of ambiguity.
+			// preferred templates? Whether a heading serves several blocks
+			// is coverage's shared-section finding (#77).
 			if r.Preferred.Match(block.Heading) != "" {
 				continue
 			}
@@ -718,63 +1728,6 @@ func (r *SchemaDocsRule) checkHeadings(ctx CheckContext) []Result {
 		}
 	}
 	return results
-}
-
-// blockSignature returns an order-independent signature of a block's
-// immediate attribute names, used to decide whether two schema blocks
-// sharing a leaf name are structurally distinct. The names are sorted
-// so that blocks with the same attribute set but different schema
-// declaration order compare equal — otherwise identical blocks would be
-// falsely flagged as an ambiguous leaf.
-func blockSignature(block *schema.Block) string {
-	names := make([]string, 0, len(block.Attributes))
-	for _, a := range block.Attributes {
-		names = append(names, a.Name)
-	}
-	slices.Sort(names)
-	return strings.Join(names, ",")
-}
-
-// schemaPathsResolvedByDocKey returns every schema path P for which the
-// doc heading keyed by docKey is P's MOST-SPECIFIC matching heading,
-// given the full set of doc headings in docBlocks. It is the right
-// notion of "does this doc key disambiguate to a single schema block?"
-// — a 1-element result means yes, ≥2 means the key genuinely covers
-// multiple schema blocks and is ambiguous.
-//
-// The most-specific qualifier is essential. findAllDocBlocksIn matches a
-// schema path not only against an exact-path doc key but also against
-// non-contiguous composites (e.g. parts[0].parts[1].leaf) and the bare
-// leaf. Evaluating docKey in isolation therefore over-counts: a parent
-// heading like "spec.http2_route.match" would appear to also "resolve" a
-// descendant like "spec.http2_route.match.header.match" via the
-// composite matcher, even when that descendant has its own exact
-// full-path heading that should own it. By consulting the real
-// docBlocks and taking findAllDocBlocksIn's most-specific match
-// (returned first), a path counts toward docKey only when no more
-// specific heading claims it — eliminating the phantom, self-suggesting
-// ambiguity warnings.
-func schemaPathsResolvedByDocKey(rs *schema.ResourceSchema, docBlocks map[string]*doc.DocBlock, docKey string) []string {
-	if rs == nil || docKey == "" {
-		return nil
-	}
-	docLeaf := leafName(docKey)
-	var matches []string
-	for path := range rs.Blocks {
-		if path == "" {
-			continue
-		}
-		if leafName(path) != docLeaf {
-			continue
-		}
-		// The heading that owns this schema path is its most-specific
-		// match, which findAllDocBlocksIn returns first. Count the path
-		// toward docKey only when docKey is that owner.
-		if best := findAllDocBlocksIn(docBlocks, leafName(path), path, nil); len(best) > 0 && best[0].Name == docKey {
-			matches = append(matches, path)
-		}
-	}
-	return matches
 }
 
 // --- Format (raw-line checks) ---
@@ -1158,7 +2111,7 @@ func (r *SchemaDocsRule) labelCorrectness(ctx CheckContext, blockName string, at
 			msg = fmt.Sprintf("argument %q in block %q is labeled %s but is computed-only in the schema; move it to Attribute Reference and remove the label", attr.Name, displayPath(blockName), have)
 		}
 		return &Result{
-			Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityWarning,
+			Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityError,
 			Message: msg,
 			Block:   blockName,
 			Line:    attr.Line,
@@ -1170,7 +2123,7 @@ func (r *SchemaDocsRule) labelCorrectness(ctx CheckContext, blockName string, at
 		msg = fmt.Sprintf("argument %q in block %q is labeled %s but is %s in the schema; use %s", attr.Name, displayPath(blockName), have, state, want)
 	}
 	return &Result{
-		Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityWarning,
+		Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityError,
 		Message: msg,
 		Block:   blockName,
 		Line:    attr.Line,
@@ -1559,10 +2512,11 @@ func resolveSubsectionPath(rs *schema.ResourceSchema, docBlocks map[string]*doc.
 	if _, ok := rs.Blocks[key]; ok {
 		return key, resolveBareExact, true
 	}
-	// Unique-leaf inference, gated to real headings. A heading-less synthetic
-	// block (dot-path reference bullet or prose lead-in) must never be inferred
-	// by leaf; it resolves only by the exact-path branch above.
-	if b := docBlocks[key]; b != nil && b.Heading != "" {
+	// Unique-leaf inference, gated to headings and prose lead-ins, which are
+	// headings in all but syntax (coverage-path-resolution.md §5): both record
+	// occurrences. Routed content (dot-path reference bullets) records none and
+	// resolves only by the exact-path branch above.
+	if b := docBlocks[key]; b != nil && (b.Heading != "" || len(b.Occurrences) > 0) {
 		if p, ok := uniqueSchemaPathForLeaf(rs, key); ok {
 			return p, resolveUniqueLeaf, true
 		}
@@ -1740,115 +2694,63 @@ func severity(attr schema.Attribute) Severity {
 	return SeverityError
 }
 
-func findDocBlock(d *doc.Document, leaf string, fullPath string) *doc.DocBlock {
-	return findDocBlockIn(d.Blocks(), leaf, fullPath)
-}
-
-// findDocBlockIn applies the same composite-path resolution as findDocBlock
-// but against a caller-supplied map. Used to resolve a path within the
-// AttributeBlocks-only or ArgumentBlocks-only view when a check needs to
-// distinguish where a documented attribute lives.
-//
-// Returns the first matching block. For coverage checks that need the full
-// set of documented attributes for a schema path (which can be split
-// across multiple doc blocks — e.g. a leaf-keyed `### \`probabilistic\“
-// heading and a dot-notation-routed `rule.probabilistic` block from a
-// reference like `rule[*].probabilistic[*].x` in the attribute section),
-// use findAllDocBlocksIn.
-func findDocBlockIn(blocks map[string]*doc.DocBlock, leaf string, fullPath string) *doc.DocBlock {
-	matches := findAllDocBlocksIn(blocks, leaf, fullPath, nil)
-	if len(matches) == 0 {
-		return nil
+// resolveSection returns the one section in blocks (a single reference
+// section: Argument or Attribute Reference) that documents schema path p, or
+// nil. Resolution uses heading keys only, never links or position
+// (docs/rules/coverage-path-resolution.md §4). The first key that names a
+// section wins, in this order: the exact path; three-segment composites
+// a.b.leaf, nearest adjacent ancestors first; two-segment composites a.leaf,
+// nearest ancestor first; the bare leaf. A dotted partial key that is itself a
+// different schema path claims only that path, so it is skipped: a heading
+// naming a.b documents a.b, not an undocumented a.x.b. The bare leaf is never
+// skipped, even when it is also a root-level path: it is a leaf-name heading
+// and serves every path with that leaf, and whether that is correct is decided
+// per path by the field checks.
+func resolveSection(rs *schema.ResourceSchema, blocks map[string]*doc.DocBlock, p string) *doc.DocBlock {
+	if p == "" {
+		return blocks[""]
 	}
-	return matches[0]
-}
-
-// findAllDocBlocksIn returns every DocBlock that the schema path could
-// resolve to: full path, then 3- and 2-segment composites suffixed by
-// leaf, then leaf alone. Order matters for the single-block consumer
-// (findDocBlockIn returns the first), but for coverage-style checks the
-// caller should iterate all of them so attributes documented under
-// alternative key shapes (e.g. leaf vs full path) are all counted.
-//
-// anchors (Document.BlockAnchors) enables shared-subsection resolution: when
-// the parent block documents this leaf with a bullet that links to another
-// subsection (`management` - ... See [Endpoint](#endpoint)), that subsection's
-// block is included too. This is precise — anchored on the exact parent+leaf
-// bullet — so it never mis-credits sibling paths. Pass nil to disable.
-func findAllDocBlocksIn(blocks map[string]*doc.DocBlock, leaf string, fullPath string, anchors map[string]string) []*doc.DocBlock {
-	if fullPath == "" {
-		if b := blocks[""]; b != nil {
-			return []*doc.DocBlock{b}
-		}
-		return nil
-	}
-
-	seen := make(map[*doc.DocBlock]bool)
-	var matches []*doc.DocBlock
-	add := func(b *doc.DocBlock) {
-		if b == nil || seen[b] {
-			return
-		}
-		seen[b] = true
-		matches = append(matches, b)
-	}
-
-	add(blocks[fullPath])
-	parts := strings.Split(fullPath, ".")
-	if len(parts) >= 3 {
-		for i := len(parts) - 3; i >= 0; i-- {
-			add(blocks[parts[i]+"."+parts[i+1]+"."+leaf])
-		}
-	}
-	if len(parts) >= 2 {
-		for i := len(parts) - 2; i >= 0; i-- {
-			add(blocks[parts[i]+"."+leaf])
-		}
-	}
-	add(blocks[leaf])
-
-	// Shared-subsection link: locate the bullet for this leaf in the parent
-	// block and, if it links to a differently-named subsection, include that
-	// subsection's block. Only the leaf's own bullet is followed, so a
-	// structurally-identical sibling (endpoints.management vs
-	// endpoints.intercluster) each resolves to the shared block, while
-	// unrelated paths are untouched. The parent of a single-segment path is
-	// the root block ("").
-	if anchors != nil {
-		parent := strings.Join(parts[:len(parts)-1], ".")
-		for _, pb := range findAllDocBlocksIn(blocks, leafName(parent), parent, nil) {
-			for _, a := range pb.Attributes {
-				if a.Name == leaf && a.LinkAnchor != "" {
-					if target, ok := anchors[a.LinkAnchor]; ok && target != leaf {
-						add(blocks[target])
-					}
-				}
-			}
-		}
-	}
-	return matches
-}
-
-func existsInSiblingBlock(rs *schema.ResourceSchema, leaf, attrName string) bool {
-	for path, block := range rs.Blocks {
-		if leafName(path) != leaf {
+	for _, key := range sectionKeyCandidates(p) {
+		b := blocks[key]
+		if b == nil {
 			continue
 		}
-		for _, attr := range block.Attributes {
-			if attr.Name == attrName {
-				return true
+		if key != p && strings.Contains(key, ".") && rs != nil {
+			if _, isPath := rs.Blocks[key]; isPath {
+				continue
 			}
 		}
-		if slices.Contains(block.ChildBlocks, attrName) {
-			return true
-		}
-		for _, child := range block.ChildBlocks {
-			if leafName(child) == attrName {
-				return true
-			}
-		}
+		return b
 	}
-	return false
+	return nil
+}
+
+// sectionKeyCandidates lists the heading keys that can document path p, in
+// resolution order.
+func sectionKeyCandidates(p string) []string {
+	parts := strings.Split(p, ".")
+	leaf := parts[len(parts)-1]
+	keys := []string{p}
+	for i := len(parts) - 3; i >= 0; i-- {
+		keys = append(keys, parts[i]+"."+parts[i+1]+"."+leaf)
+	}
+	for i := len(parts) - 2; i >= 0; i-- {
+		keys = append(keys, parts[i]+"."+leaf)
+	}
+	return append(keys, leaf)
+}
+
+// resolveSections returns the sections documenting p in Argument and
+// Attribute Reference, skipping either that doesn't resolve.
+func resolveSections(rs *schema.ResourceSchema, d *doc.Document, p string) []*doc.DocBlock {
+	var out []*doc.DocBlock
+	if b := resolveSection(rs, d.ArgumentBlocks, p); b != nil {
+		out = append(out, b)
+	}
+	if b := resolveSection(rs, d.AttributeBlocks, p); b != nil {
+		out = append(out, b)
+	}
+	return out
 }
 
 func leafName(path string) string {
@@ -2012,15 +2914,31 @@ func (r *SchemaDocsRule) checkSectionByline(ctx CheckContext, section *doc.Secti
 
 // checkDeprecated verifies that attributes marked deprecated in the schema
 // are also marked as deprecated in the documentation.
-func (r *SchemaDocsRule) checkDeprecated(ctx CheckContext) []Result {
+//
+// A field whose deprecation differs across the paths a shared section serves
+// is reported once by the shared-section finding (disjunct 3); per path it
+// would produce contradictory findings, so it's skipped here.
+func (r *SchemaDocsRule) checkDeprecated(ctx CheckContext, shared []sharedSection) []Result {
 	if ctx.Schema == nil {
 		return nil
 	}
+	conflicted := make(map[*doc.DocBlock]map[string]bool)
+	for _, sh := range shared {
+		for _, c := range sh.conflicts {
+			if c.kind == 3 {
+				if conflicted[sh.block] == nil {
+					conflicted[sh.block] = make(map[string]bool)
+				}
+				conflicted[sh.block][c.field] = true
+			}
+		}
+	}
 
 	var results []Result
-	for blockPath, schemaBlock := range ctx.Schema.Blocks {
-		docBlock := findDocBlock(ctx.Doc, leafName(blockPath), blockPath)
-		if docBlock == nil {
+	for _, blockPath := range slices.Sorted(maps.Keys(ctx.Schema.Blocks)) {
+		schemaBlock := ctx.Schema.Blocks[blockPath]
+		sections := resolveSections(ctx.Schema, ctx.Doc, blockPath)
+		if len(sections) == 0 {
 			continue
 		}
 
@@ -2029,46 +2947,54 @@ func (r *SchemaDocsRule) checkDeprecated(ctx CheckContext) []Result {
 			schemaAttrs[a.Name] = a
 		}
 
-		docAttrs := make(map[string]*doc.DocAttribute, len(docBlock.Attributes))
-		for i := range docBlock.Attributes {
-			docAttrs[docBlock.Attributes[i].Name] = &docBlock.Attributes[i]
-		}
-
-		// Schema deprecated but doc not marked.
-		for _, attr := range schemaBlock.Attributes {
-			if !attr.Deprecated {
+		for _, docBlock := range sections {
+			// Merged bullets of a duplicated key would be compared against
+			// every path; the fit rule judges each heading's markers instead.
+			if duplicated(docBlock) && enabled(r.Coverage) {
 				continue
 			}
-			da, ok := docAttrs[attr.Name]
-			if !ok {
-				continue // not documented — coverage check handles this
+			skip := conflicted[docBlock]
+			docAttrs := make(map[string]*doc.DocAttribute, len(docBlock.Attributes))
+			for i := range docBlock.Attributes {
+				docAttrs[docBlock.Attributes[i].Name] = &docBlock.Attributes[i]
 			}
-			if !da.Deprecated {
-				results = append(results, Result{
-					Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityWarning,
-					Message: fmt.Sprintf("attribute %q in block %q is deprecated in schema but not marked as deprecated in docs", attr.Name, displayPath(blockPath)),
-					Block:   blockPath,
-					Line:    da.Line,
-				})
-			}
-		}
 
-		// Doc marked deprecated but schema is not.
-		for _, da := range docBlock.Attributes {
-			if !da.Deprecated {
-				continue
+			// Schema deprecated but doc not marked.
+			for _, attr := range schemaBlock.Attributes {
+				if !attr.Deprecated || skip[attr.Name] {
+					continue
+				}
+				da, ok := docAttrs[attr.Name]
+				if !ok {
+					continue // not documented here — coverage handles absence
+				}
+				if !da.Deprecated {
+					results = append(results, Result{
+						Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityError,
+						Message: fmt.Sprintf("attribute %q in block %q is deprecated in schema but not marked as deprecated in docs", attr.Name, displayPath(blockPath)),
+						Block:   blockPath,
+						Line:    da.Line,
+					})
+				}
 			}
-			sa, ok := schemaAttrs[da.Name]
-			if !ok {
-				continue // phantom — coverage check handles this
-			}
-			if !sa.Deprecated {
-				results = append(results, Result{
-					Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityWarning,
-					Message: fmt.Sprintf("attribute %q in block %q is marked deprecated in docs but not in schema; either mark as deprecated in schema or remove the deprecation notice", da.Name, displayPath(blockPath)),
-					Block:   blockPath,
-					Line:    da.Line,
-				})
+
+			// Doc marked deprecated but schema is not.
+			for _, da := range docBlock.Attributes {
+				if !da.Deprecated || skip[da.Name] {
+					continue
+				}
+				sa, ok := schemaAttrs[da.Name]
+				if !ok {
+					continue // phantom — coverage check handles this
+				}
+				if !sa.Deprecated {
+					results = append(results, Result{
+						Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityError,
+						Message: fmt.Sprintf("attribute %q in block %q is marked deprecated in docs but not in schema; either mark as deprecated in schema or remove the deprecation notice", da.Name, displayPath(blockPath)),
+						Block:   blockPath,
+						Line:    da.Line,
+					})
+				}
 			}
 		}
 	}
