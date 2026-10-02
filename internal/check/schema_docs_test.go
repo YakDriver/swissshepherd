@@ -4,6 +4,7 @@
 package check_test
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -591,6 +592,62 @@ func TestHeading_PathKeyedBadStyleStillWarns(t *testing.T) {
 		for _, r := range results {
 			t.Logf("  result: %s", r.Message)
 		}
+	}
+}
+
+// TestDescription_OneFindingPerBullet: findings are deduped by bullet, not
+// by section key and field name (#86). Same-named bullets in the two
+// reference sections, or twice under one key, are separate defects; one
+// bullet credited to every alias of a combined heading is one.
+func TestDescription_OneFindingPerBullet(t *testing.T) {
+	t.Parallel()
+
+	off := false
+	testCases := map[string]struct {
+		md   string
+		want []string // finding messages, in order
+	}{
+		"same name in both reference sections": {
+			md: "## Argument Reference\n\n* `id` - (Optional) The ID to use.\n\n## Attribute Reference\n\n* `id` - The ID.\n",
+			want: []string{
+				`attribute "id" description should not start with "The" (block "(root)") line 3`,
+				`attribute "id" description should not start with "The" (block "(root)") line 7`,
+			},
+		},
+		"same name twice under one key": {
+			md: "## Argument Reference\n\n* `a` - (Optional) A.\n\n### `a` Block\n\n* `x` - (Optional) The X.\n\n### `a` Block\n\n* `x` - (Optional) The other X.\n",
+			want: []string{
+				`attribute "x" description should not start with "The" (block "a") line 7`,
+				`attribute "x" description should not start with "The" (block "a") line 11`,
+			},
+		},
+		"combined heading": {
+			md: "## Argument Reference\n\n* `b` - (Optional) B.\n* `a` - (Optional) A.\n\n### `b` and `a`\n\n* `x` - (Optional) The X.\n",
+			want: []string{
+				`attribute "x" description should not start with "The" (block "a") line 8`,
+			},
+		},
+	}
+	for name, tc := range testCases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			d, err := doc.ParseWithTemplates([]byte(tc.md), "aws_thing", doc.HeadingTemplates{"`{Block}` Block", "`{Block}`"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			rule := check.SchemaDocsRule{Coverage: &off, Ordering: &off, Format: &off, Byline: &off, Heading: &off, Labels: &off, Deprecated: &off}
+			// Run repeatedly: which alias names the finding must not depend
+			// on map order.
+			for range 20 {
+				var got []string
+				for _, r := range rule.Check(check.CheckContext{Resource: "aws_thing", Doc: d}) {
+					got = append(got, fmt.Sprintf("%s line %d", r.Message, r.Line))
+				}
+				if !slices.Equal(got, tc.want) {
+					t.Fatalf("got:\n  %s\nwant:\n  %s", strings.Join(got, "\n  "), strings.Join(tc.want, "\n  "))
+				}
+			}
+		})
 	}
 }
 

@@ -32,7 +32,7 @@ swissshepherd compares a Terraform provider's schema against its markdown docume
 - **Phantom documentation** — documented arguments or attributes that don't exist at a block the section documents
 - **Shared and duplicate sections** — one section serving several blocks that aren't interchangeable, two headings for the same key, and headings that document no block
 - **Ordering violations** — arguments or attributes not in alphabetical order
-- **Description style issues** — descriptions starting with articles or fluff words
+- **Description style issues** — descriptions starting with articles or fluff words, reported once per bullet
 - **Misplaced computed attributes** — computed-only attributes in the Argument Reference section
 - **Heading style mismatches** — nested block headings not matching the preferred format, and prose lead-ins standing in for a heading
 - **Format / structure issues** — code blocks inside argument sections, multi-line attribute descriptions, interrupted attribute lists
