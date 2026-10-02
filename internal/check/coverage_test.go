@@ -17,7 +17,7 @@ import (
 	"github.com/YakDriver/swissshepherd/internal/schema"
 )
 
-func TestSchemaDocsRule_Complete(t *testing.T) {
+func TestCoverage_FixtureComplete(t *testing.T) {
 	t.Parallel()
 
 	ps, err := schema.LoadFile("../../testdata/schema/test_provider.json", "registry.terraform.io/hashicorp/test")
@@ -51,7 +51,7 @@ func TestSchemaDocsRule_Complete(t *testing.T) {
 	}
 }
 
-func TestSchemaDocsRule_Incomplete(t *testing.T) {
+func TestCoverage_FixtureIncomplete(t *testing.T) {
 	t.Parallel()
 
 	ps, err := schema.LoadFile("../../testdata/schema/test_provider.json", "registry.terraform.io/hashicorp/test")
@@ -85,7 +85,7 @@ func TestSchemaDocsRule_Incomplete(t *testing.T) {
 	}
 }
 
-func TestSchemaDocsRule_SkipsImplicit(t *testing.T) {
+func TestCoverage_SkipsImplicit(t *testing.T) {
 	t.Parallel()
 
 	ps, err := schema.LoadFile("../../testdata/schema/test_provider.json", "registry.terraform.io/hashicorp/test")
@@ -117,11 +117,11 @@ func resultMessages(results []check.Result) []string {
 	return msgs
 }
 
-// TestSchemaDocsRule_MultiLevelParentDisambiguation tests that blocks with
+// TestCoverage_MultiLevelParentDisambiguation tests that blocks with
 // the same leaf name but different parent paths are correctly disambiguated.
 // Regression test for issue where s3.s3_output_format_config.aggregation_config
 // and upsolver.s3_output_format_config.aggregation_config were confused.
-func TestSchemaDocsRule_MultiLevelParentDisambiguation(t *testing.T) {
+func TestCoverage_MultiLevelParentDisambiguation(t *testing.T) {
 	t.Parallel()
 
 	// Schema with two similar paths that differ only in the second-to-last segment
@@ -178,14 +178,14 @@ func TestSchemaDocsRule_MultiLevelParentDisambiguation(t *testing.T) {
 	}
 }
 
-// TestSchemaDocsRule_NestedBlock_LeafAndDotNotation_Coverage is the
+// TestCoverage_NestedBlock_LeafAndDotNotation_Coverage is the
 // aws_xray_indexing_rule pattern: a nested schema block is documented
 // under its leaf-name H3 heading in Argument Reference (input attrs)
 // AND under a dot-notation reference in Attribute Reference (computed
 // attrs). The full set of documented attributes for the schema's full
 // path must be the union of both doc blocks; previously a single-block
 // lookup picked one and silently dropped the other.
-func TestSchemaDocsRule_NestedBlock_LeafAndDotNotation_Coverage(t *testing.T) {
+func TestCoverage_NestedBlock_LeafAndDotNotation_Coverage(t *testing.T) {
 	t.Parallel()
 
 	rs := &schema.ResourceSchema{
@@ -245,14 +245,14 @@ var (
 	sharedRe  = regexp.MustCompile(`^section "[^"]*" \(line \d+\) in (?:Argument|Attribute) Reference documents \d+ paths; `)
 )
 
-// TestSchemaDocsRule_DuplicateBlockNames covers same-named blocks under
+// TestCoverage_DuplicateBlockNames covers same-named blocks under
 // different parents with different fields (the aws_appmesh_virtual_node
 // pattern). A merged section is checked against each path it serves, so a
 // field listed there that doesn't exist at a path is reported for that path,
 // even when a same-named sibling has it (#77). Before #77 the sibling's field
 // suppressed the finding (existsInSiblingBlock, fa4e9e4). Qualified headings
 // that document each path exactly pass.
-func TestSchemaDocsRule_DuplicateBlockNames(t *testing.T) {
+func TestCoverage_DuplicateBlockNames(t *testing.T) {
 	t.Parallel()
 
 	appmesh := &schema.ResourceSchema{Name: "aws_test_resource", Blocks: map[string]*schema.Block{
@@ -414,11 +414,11 @@ func TestSchemaDocsRule_DuplicateBlockNames(t *testing.T) {
 	}
 }
 
-// TestSchemaDocsRule_DuplicateBlockNames_MissingAttrStillReported ensures
+// TestCoverage_DuplicateBlockNames_MissingAttrStillReported ensures
 // that a genuinely undocumented attribute is still reported even when sibling
 // blocks exist. The sibling suppression only applies to phantom checks, not
 // missing-documentation checks.
-func TestSchemaDocsRule_DuplicateBlockNames_MissingAttrStillReported(t *testing.T) {
+func TestCoverage_DuplicateBlockNames_MissingAttrStillReported(t *testing.T) {
 	t.Parallel()
 
 	rs := &schema.ResourceSchema{
@@ -493,12 +493,12 @@ This resource exports no additional attributes.
 	}
 }
 
-// TestSchemaDocsRule_PhantomBlockHeading exercises the case where a doc has
+// TestCoverage_PhantomBlockHeading exercises the case where a doc has
 // a block heading that does not correspond to any schema block. The
 // trigger pattern is from website/docs/r/workspaces_ip_group.html.markdown:
 // an "### `rules`" block heading is followed by a stray "#### Arguments"
 // subheading. The H4 gets parsed as a phantom "arguments" block.
-func TestSchemaDocsRule_PhantomBlockHeading(t *testing.T) {
+func TestCoverage_PhantomBlockHeading(t *testing.T) {
 	t.Parallel()
 
 	rs := &schema.ResourceSchema{
@@ -556,7 +556,7 @@ func TestSchemaDocsRule_PhantomBlockHeading(t *testing.T) {
 	}
 }
 
-// TestSchemaDocsRule_NestedAttributeHeadingNotPhantom is a regression
+// TestCoverage_NestedAttributeHeadingNotPhantom is a regression
 // test for the false positive on aws_workspaces_pool (PR
 // hashicorp/terraform-provider-aws#42678). Object-typed nested
 // attributes — list(object({...})), set(object), or a bare object —
@@ -564,7 +564,7 @@ func TestSchemaDocsRule_PhantomBlockHeading(t *testing.T) {
 // sub-attributes, even though they are attributes rather than blocks.
 // They live as Attribute.Children, not rs.Blocks entries, so the
 // phantom-block check must recognize them by name and not flag them.
-func TestSchemaDocsRule_NestedAttributeHeadingNotPhantom(t *testing.T) {
+func TestCoverage_NestedAttributeHeadingNotPhantom(t *testing.T) {
 	t.Parallel()
 
 	// application_settings and timeout_settings are optional
@@ -636,11 +636,11 @@ func TestSchemaDocsRule_NestedAttributeHeadingNotPhantom(t *testing.T) {
 	}
 }
 
-// TestSchemaDocsRule_PhantomStillFiresWithNestedAttributes confirms the
+// TestCoverage_PhantomStillFiresWithNestedAttributes confirms the
 // nested-attribute allowance does not mask genuine phantom headings: a
 // heading whose name matches neither a block nor an object-typed
 // attribute must still be reported.
-func TestSchemaDocsRule_PhantomStillFiresWithNestedAttributes(t *testing.T) {
+func TestCoverage_PhantomStillFiresWithNestedAttributes(t *testing.T) {
 	t.Parallel()
 
 	rs := &schema.ResourceSchema{
@@ -691,9 +691,9 @@ func TestSchemaDocsRule_PhantomStillFiresWithNestedAttributes(t *testing.T) {
 	}
 }
 
-// TestSchemaDocsRule_PhantomBlockToggle confirms the phantom-block check
+// TestCoverage_PhantomBlockToggle confirms the phantom-block check
 // is gated by the coverage sub-check toggle.
-func TestSchemaDocsRule_PhantomBlockToggle(t *testing.T) {
+func TestCoverage_PhantomBlockToggle(t *testing.T) {
 	t.Parallel()
 
 	rs := &schema.ResourceSchema{
@@ -730,7 +730,7 @@ func TestSchemaDocsRule_PhantomBlockToggle(t *testing.T) {
 	}
 }
 
-func TestSchemaDocsRule_Correct(t *testing.T) {
+func TestCoverage_ReadOnlyFixtureCorrect(t *testing.T) {
 	t.Parallel()
 
 	ps, err := schema.LoadFile("../../testdata/schema/test_provider.json", "registry.terraform.io/hashicorp/test")
@@ -754,7 +754,7 @@ func TestSchemaDocsRule_Correct(t *testing.T) {
 	}
 }
 
-func TestSchemaDocsRule_Wrong(t *testing.T) {
+func TestCoverage_ReadOnlyFixtureMisplaced(t *testing.T) {
 	t.Parallel()
 
 	ps, err := schema.LoadFile("../../testdata/schema/test_provider.json", "registry.terraform.io/hashicorp/test")
@@ -796,12 +796,12 @@ func TestSchemaDocsRule_Wrong(t *testing.T) {
 	}
 }
 
-// TestSchemaDocsRule_NestedReadOnly_MissingFromBoth_Errors closes the gap
+// TestCoverage_NestedReadOnly_MissingFromBoth_Errors closes the gap
 // where a Read-Only (computed-only) attribute on a nested block is silently
 // undocumented. The schema declares network.private_ip; the doc has neither
 // a nested attr-block heading for it nor a dot-notation reference at root.
 // swissshepherd must report it.
-func TestSchemaDocsRule_NestedReadOnly_MissingFromBoth_Errors(t *testing.T) {
+func TestCoverage_NestedReadOnly_MissingFromBoth_Errors(t *testing.T) {
 	t.Parallel()
 
 	rs := &schema.ResourceSchema{
@@ -850,10 +850,10 @@ func TestSchemaDocsRule_NestedReadOnly_MissingFromBoth_Errors(t *testing.T) {
 	}
 }
 
-// TestSchemaDocsRule_NestedReadOnly_DotNotation_Passes confirms the existing
+// TestCoverage_NestedReadOnly_DotNotation_Passes confirms the existing
 // AWS provider convention works: a Read-Only nested attribute documented as
 // `network[*].private_ip` in the root Attribute Reference satisfies coverage.
-func TestSchemaDocsRule_NestedReadOnly_DotNotation_Passes(t *testing.T) {
+func TestCoverage_NestedReadOnly_DotNotation_Passes(t *testing.T) {
 	t.Parallel()
 
 	rs := &schema.ResourceSchema{
@@ -896,10 +896,10 @@ func TestSchemaDocsRule_NestedReadOnly_DotNotation_Passes(t *testing.T) {
 	}
 }
 
-// TestSchemaDocsRule_NestedReadOnly_NestedBlockHeading_Passes confirms the
+// TestCoverage_NestedReadOnly_NestedBlockHeading_Passes confirms the
 // alternative form: a `### \`network\` Block` heading inside Attribute
 // Reference with private_ip listed beneath also satisfies coverage.
-func TestSchemaDocsRule_NestedReadOnly_NestedBlockHeading_Passes(t *testing.T) {
+func TestCoverage_NestedReadOnly_NestedBlockHeading_Passes(t *testing.T) {
 	t.Parallel()
 
 	rs := &schema.ResourceSchema{
@@ -943,11 +943,11 @@ func TestSchemaDocsRule_NestedReadOnly_NestedBlockHeading_Passes(t *testing.T) {
 	}
 }
 
-// TestSchemaDocsRule_NestedReadOnly_InlineToggleOff_Errors confirms that a
+// TestCoverage_NestedReadOnly_InlineToggleOff_Errors confirms that a
 // (Read-Only) label inline in Argument Reference is NOT accepted as
 // documentation when the toggle is off — coverage still requires it in
 // Attribute Reference. (Misplacement warning is exercised in step 4.)
-func TestSchemaDocsRule_NestedReadOnly_InlineToggleOff_Errors(t *testing.T) {
+func TestCoverage_NestedReadOnly_InlineToggleOff_Errors(t *testing.T) {
 	t.Parallel()
 
 	rs := &schema.ResourceSchema{
@@ -999,10 +999,10 @@ func TestSchemaDocsRule_NestedReadOnly_InlineToggleOff_Errors(t *testing.T) {
 	}
 }
 
-// TestSchemaDocsRule_NestedReadOnly_InlineToggleOn_Passes confirms that with
+// TestCoverage_NestedReadOnly_InlineToggleOn_Passes confirms that with
 // the toggle on, a (Read-Only) label inline in Argument Reference satisfies
 // coverage — the tfplugindocs-aligned permissive convention.
-func TestSchemaDocsRule_NestedReadOnly_InlineToggleOn_Passes(t *testing.T) {
+func TestCoverage_NestedReadOnly_InlineToggleOn_Passes(t *testing.T) {
 	t.Parallel()
 
 	rs := &schema.ResourceSchema{
@@ -1046,10 +1046,10 @@ func TestSchemaDocsRule_NestedReadOnly_InlineToggleOn_Passes(t *testing.T) {
 	}
 }
 
-// TestSchemaDocsRule_TopLevelReadOnly_InlineToggleOn_Passes confirms the
+// TestCoverage_TopLevelReadOnly_InlineToggleOn_Passes confirms the
 // toggle applies at root too: a top-level Read-Only attribute documented
 // inline in Argument Reference with (Read-Only) is accepted.
-func TestSchemaDocsRule_TopLevelReadOnly_InlineToggleOn_Passes(t *testing.T) {
+func TestCoverage_TopLevelReadOnly_InlineToggleOn_Passes(t *testing.T) {
 	t.Parallel()
 
 	rs := &schema.ResourceSchema{
@@ -1087,10 +1087,10 @@ func TestSchemaDocsRule_TopLevelReadOnly_InlineToggleOn_Passes(t *testing.T) {
 	}
 }
 
-// TestSchemaDocsRule_TopLevelReadOnly_MissingFromAttrs_Errors is a regression
+// TestCoverage_TopLevelReadOnly_MissingFromAttrs_Errors is a regression
 // test for the existing top-level computed coverage check: a Read-Only
 // attribute missing from Attribute Reference is reported.
-func TestSchemaDocsRule_TopLevelReadOnly_MissingFromAttrs_Errors(t *testing.T) {
+func TestCoverage_TopLevelReadOnly_MissingFromAttrs_Errors(t *testing.T) {
 	t.Parallel()
 
 	rs := &schema.ResourceSchema{
@@ -1132,12 +1132,12 @@ func TestSchemaDocsRule_TopLevelReadOnly_MissingFromAttrs_Errors(t *testing.T) {
 	}
 }
 
-// TestSchemaDocsRule_DeeplyNestedReadOnly_DotNotation_Passes confirms that a
+// TestCoverage_DeeplyNestedReadOnly_DotNotation_Passes confirms that a
 // multi-level dot-notation reference at the root Attribute Reference
 // (e.g. `analyzer_configuration.unused_access_configuration.computed_summary`)
 // satisfies coverage for an attribute on a deeply-nested schema block.
 // Mirrors the path style produced by tfplugindocs's anchor IDs.
-func TestSchemaDocsRule_DeeplyNestedReadOnly_DotNotation_Passes(t *testing.T) {
+func TestCoverage_DeeplyNestedReadOnly_DotNotation_Passes(t *testing.T) {
 	t.Parallel()
 
 	rs := &schema.ResourceSchema{
@@ -1192,11 +1192,11 @@ func joinMessages(results []check.Result) string {
 	return strings.Join(msgs, "\n  ")
 }
 
-// TestSchemaDocsRule_NoFalseComputedMisplacement verifies that computed-only
+// TestCoverage_NoFalseComputedMisplacement verifies that computed-only
 // attributes documented in the Attribute Reference section are NOT flagged as
 // misplaced in the Argument Reference section, even when broad heading
 // templates cause attribute-section items to bleed into ArgumentBlocks.
-func TestSchemaDocsRule_NoFalseComputedMisplacement(t *testing.T) {
+func TestCoverage_NoFalseComputedMisplacement(t *testing.T) {
 	t.Parallel()
 
 	// Templates broad enough to cause bleed (includes "{Block}" which matches anything)
@@ -1243,13 +1243,13 @@ func TestSchemaDocsRule_NoFalseComputedMisplacement(t *testing.T) {
 	}
 }
 
-// TestSharedSubsection_HeadingsOnly: sibling blocks may share one
+// TestCoverage_SharedSubsectionHeadingsOnly: sibling blocks may share one
 // subsection, but only through its heading. A link from each sibling bullet
 // to a differently named subsection doesn't document the siblings, because a
 // reader at that subsection can't tell which blocks it covers
 // (docs/rules/coverage-path-resolution.md §4). This reverses issue #51's
 // link-following. A combined heading naming every sibling does share.
-func TestSharedSubsection_HeadingsOnly(t *testing.T) {
+func TestCoverage_SharedSubsectionHeadingsOnly(t *testing.T) {
 	t.Parallel()
 
 	endpoints := func() *schema.ResourceSchema {
@@ -1346,10 +1346,10 @@ func TestSharedSubsection_HeadingsOnly(t *testing.T) {
 	}
 }
 
-// TestProseLeadIn_NoCascade: a legacy prose lead-in introducing a nested
+// TestCoverage_ProseLeadInNoCascade: a legacy prose lead-in introducing a nested
 // block's read-only fields is recognized, so its bullets are covered and don't
 // cascade into phantom/root/ordering findings (issue #53).
-func TestProseLeadIn_NoCascade(t *testing.T) {
+func TestCoverage_ProseLeadInNoCascade(t *testing.T) {
 	t.Parallel()
 
 	rs := &schema.ResourceSchema{
@@ -1430,9 +1430,9 @@ func hasMessage(results []check.Result, substr string) bool {
 	return false
 }
 
-// TestNestedObject_On_MissingField_Errors: with the schema expanded and the
+// TestCoverage_NestedObjectMissingField: with the schema expanded and the
 // doc parsed with nested capture, an undocumented object field is flagged.
-func TestNestedObject_On_MissingField_Errors(t *testing.T) {
+func TestCoverage_NestedObjectMissingField(t *testing.T) {
 	t.Parallel()
 
 	rs := objectAttrSchema()
@@ -1457,9 +1457,9 @@ func TestNestedObject_On_MissingField_Errors(t *testing.T) {
 	}
 }
 
-// TestNestedObject_Off_NoFindings: without expansion and without nested
+// TestCoverage_NestedObjectOff: without expansion and without nested
 // capture (the default), object fields are neither required nor style-checked.
-func TestNestedObject_Off_NoFindings(t *testing.T) {
+func TestCoverage_NestedObjectOff(t *testing.T) {
 	t.Parallel()
 
 	rs := objectAttrSchema() // NOT expanded
@@ -1508,11 +1508,11 @@ func configurableObjectSchema() *schema.ResourceSchema {
 	}
 }
 
-// TestNestedObject_ConfigUnknown_ArgumentReferenceSatisfies: a configurable
+// TestCoverage_ConfigUnknownInArgumentReference: a configurable
 // object's field documented as an (Optional) argument in Argument Reference
 // satisfies coverage — it must NOT be demanded in Attribute Reference (issues
 // #50/#52).
-func TestNestedObject_ConfigUnknown_ArgumentReferenceSatisfies(t *testing.T) {
+func TestCoverage_ConfigUnknownInArgumentReference(t *testing.T) {
 	t.Parallel()
 
 	rs := configurableObjectSchema()
@@ -1536,11 +1536,11 @@ func TestNestedObject_ConfigUnknown_ArgumentReferenceSatisfies(t *testing.T) {
 	}
 }
 
-// TestNestedObject_ConfigUnknown_UndocumentedIsNeutral: a genuinely
+// TestCoverage_ConfigUnknownUndocumentedIsNeutral: a genuinely
 // undocumented field of a configurable object is still flagged, but with a
 // neutral "is not documented" message — not a spurious "Attribute Reference"
 // demand.
-func TestNestedObject_ConfigUnknown_UndocumentedIsNeutral(t *testing.T) {
+func TestCoverage_ConfigUnknownUndocumentedIsNeutral(t *testing.T) {
 	t.Parallel()
 
 	rs := configurableObjectSchema()
@@ -1718,46 +1718,6 @@ func TestCoverage_OrphanedBullets(t *testing.T) {
 			slices.Sort(tc.want)
 			if !slices.Equal(got, tc.want) {
 				t.Errorf("orphan findings =\n  %q\nwant\n  %q", got, tc.want)
-			}
-		})
-	}
-}
-
-// TestDescriptions_OrphanedBullets: bullets that belong to no section still
-// get the description check, which doesn't depend on the block. The finding
-// names the heading instead. A prose-introduced list belongs to the block it
-// names, so its finding names that block (#77).
-func TestDescriptions_OrphanedBullets(t *testing.T) {
-	t.Parallel()
-
-	rs := &schema.ResourceSchema{Blocks: map[string]*schema.Block{
-		"":                       {Attributes: []schema.Attribute{{Name: "name", Required: true}}, ChildBlocks: []string{"action"}},
-		"action":                 {ChildBlocks: []string{"action.cloudwatch_logs"}},
-		"action.cloudwatch_logs": {Attributes: optional("role_arn")},
-	}}
-	testCases := map[string]struct {
-		body string
-		want string
-	}{
-		"under an unparseable heading": {
-			body: "### Waiting for Capacity\n\n* `role_arn` - (Optional) The role.\n",
-			want: `attribute "role_arn" description should not start with "The" (under heading "Waiting for Capacity")`,
-		},
-		"in a prose-introduced list": {
-			body: "* `name` - (Required) Name.\n\nThe `cloudwatch_logs` object takes the following arguments:\n\n* `role_arn` - (Optional) The role.\n",
-			want: `attribute "role_arn" description should not start with "The" (block "cloudwatch_logs")`,
-		},
-	}
-	for name, tc := range testCases {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			d, err := doc.ParseWithTemplates([]byte("## Argument Reference\n\n"+tc.body), "aws_thing", doc.HeadingTemplates{"`{Path}` Block", "`{Block}` Block"})
-			if err != nil {
-				t.Fatal(err)
-			}
-			results := (&check.SchemaDocsRule{IgnoreDeprecated: true}).Check(check.CheckContext{Resource: "aws_thing", Schema: rs, Doc: d})
-			if !hasMessage(results, tc.want) {
-				t.Errorf("missing %q in:\n  %s", tc.want, joinMessages(results))
 			}
 		})
 	}
@@ -2896,7 +2856,7 @@ func TestCoverageAcceptance_nonTransitive(t *testing.T) {
 // finding (#77, docs/rules/coverage-path-resolution.md §6). These tests kept
 // their scenarios and now assert that finding.
 
-// TestSchemaDocsRule_FullPathHeadings_DescendantsOwnHeadings is a
+// TestCoverage_FullPathHeadings_DescendantsOwnHeadings is a
 // regression test for the self-suggesting ambiguity false positive on
 // aws_appmesh_gateway_route / aws_appmesh_route. A parent block
 // (spec.http2_route.match) and its descendants
@@ -2912,7 +2872,7 @@ func TestCoverageAcceptance_nonTransitive(t *testing.T) {
 // author had already written. With most-specific-match resolution, each
 // descendant is owned by its own full-path heading, so the parent
 // resolves to exactly one block.
-func TestSchemaDocsRule_FullPathHeadings_DescendantsOwnHeadings(t *testing.T) {
+func TestCoverage_FullPathHeadings_DescendantsOwnHeadings(t *testing.T) {
 	t.Parallel()
 
 	rs := &schema.ResourceSchema{
@@ -2964,7 +2924,7 @@ func TestSchemaDocsRule_FullPathHeadings_DescendantsOwnHeadings(t *testing.T) {
 	}
 }
 
-// TestSchemaDocsRule_IdenticalRepeatedBlocks_NotAmbiguous is a
+// TestCoverage_IdenticalRepeatedBlocks_NotAmbiguous is a
 // regression test for the order-dependent block-signature bug. Two
 // blocks sharing a leaf ("config") have the identical attribute set but
 // list the attributes in different declaration order. Because schema
@@ -2973,7 +2933,7 @@ func TestSchemaDocsRule_FullPathHeadings_DescendantsOwnHeadings(t *testing.T) {
 // leaf ambiguous (nondeterministically). A shared heading for two
 // structurally identical blocks is unambiguous, so no warning is
 // expected.
-func TestSchemaDocsRule_IdenticalRepeatedBlocks_NotAmbiguous(t *testing.T) {
+func TestCoverage_IdenticalRepeatedBlocks_NotAmbiguous(t *testing.T) {
 	t.Parallel()
 
 	rs := &schema.ResourceSchema{
@@ -3022,12 +2982,12 @@ func TestSchemaDocsRule_IdenticalRepeatedBlocks_NotAmbiguous(t *testing.T) {
 	}
 }
 
-// TestSchemaDocsRule_GenuineAmbiguity_StillWarns guards against
+// TestCoverage_GenuineAmbiguity_StillWarns guards against
 // over-suppression. Two blocks share the leaf "config" but are
 // structurally DISTINCT, and only the bare top-level heading exists —
 // the nested block has no dedicated heading, so the bare key genuinely
 // covers both. This is a real ambiguity and must still get a shared-section finding.
-func TestSchemaDocsRule_GenuineAmbiguity_StillWarns(t *testing.T) {
+func TestCoverage_GenuineAmbiguity_StillWarns(t *testing.T) {
 	t.Parallel()
 
 	rs := &schema.ResourceSchema{
@@ -3077,13 +3037,13 @@ func TestSchemaDocsRule_GenuineAmbiguity_StillWarns(t *testing.T) {
 	}
 }
 
-// TestSchemaDocsRule_PathKeyedHeadings_PartialPathStillAmbiguous
+// TestCoverage_PathKeyedHeadings_PartialPathStillAmbiguous
 // covers the case Copilot flagged: a partial-path key like
 // `header.match` (from a `{Parent}` template or similar) still
 // resolves to multiple schema paths under the suffix-composite
 // lookup. The ambiguity warning must fire in this case even though
 // the doc key contains a dot.
-func TestSchemaDocsRule_PathKeyedHeadings_PartialPathStillAmbiguous(t *testing.T) {
+func TestCoverage_PathKeyedHeadings_PartialPathStillAmbiguous(t *testing.T) {
 	t.Parallel()
 
 	rs := &schema.ResourceSchema{

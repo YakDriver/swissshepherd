@@ -4,6 +4,7 @@
 package doc_test
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -151,7 +152,7 @@ func TestSections_FencedCodeBlocksCollected(t *testing.T) {
 	}
 }
 
-func TestSections_TitleCaptursCodeBlocks_WhenMisplaced(t *testing.T) {
+func TestSections_TitleCapturesCodeBlocksWhenMisplaced(t *testing.T) {
 	t.Parallel()
 
 	// A code block between the H1 and the first H2 is exactly the misuse the
@@ -303,4 +304,290 @@ func TestSections_DoesNotBreakExistingBlocks(t *testing.T) {
 	if d.Sections == nil || d.Sections.Title == nil || !strings.Contains(d.Sections.Title.Text, "test_instance") {
 		t.Errorf("fixture should have Title section containing resource name; got %+v", d.Sections)
 	}
+}
+
+// TestParse_CanonicalSectionsExactMatch confirms canonical level-2 section
+// classification uses exact heading text. Variants like "Importing" or
+// "Examples" must NOT be absorbed into the Import / Example fields; they
+// belong in UnknownHeadings so section_presence can report them as
+// unknown sections (or accept them as custom ones if the Type spec
+// declares them).
+func TestParse_CanonicalSectionsExactMatch(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name        string
+		heading     string
+		wantUnknown bool
+	}{
+		// Exact canonical match: classified as the named section.
+		{"exact import", "Import", false},
+		{"exact signature", "Signature", false},
+		{"exact timeouts", "Timeouts", false},
+		{"exact example usage", "Example Usage", false},
+
+		// Non-canonical variants: must be unknown headings.
+		{"variant importing", "Importing", true},
+		{"variant import notes", "Import Notes", true},
+		{"variant examples", "Examples", true},
+		{"variant timeout", "Timeout", true},
+		{"variant signatures", "Signatures", true},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			source := "# Resource: aws_test\n\n## " + tt.heading + "\n\nbody.\n"
+			d, err := doc.Parse([]byte(source), "test")
+			if err != nil {
+				t.Fatalf("parse error: %v", err)
+			}
+
+			var unknownTexts []string
+			for _, h := range d.Sections.UnknownHeadings {
+				unknownTexts = append(unknownTexts, h.Text)
+			}
+
+			isUnknown := slices.Contains(unknownTexts, tt.heading)
+
+			if tt.wantUnknown != isUnknown {
+				t.Errorf("heading %q: wantUnknown=%v, isUnknown=%v (unknowns: %v)",
+					tt.heading, tt.wantUnknown, isUnknown, unknownTexts)
+			}
+		})
+	}
+}
+
+// TestParse_UnknownHeadingClosesPreviousSection confirms that when an
+// unknown level-2 heading appears between two canonical sections, the
+// previous section's EndOffset is finalized at the unknown heading
+// rather than bleeding past it. Without this, slicing Sections.Example.
+// Source(...) would include all subsequent body content up to EOF.
+func TestParse_UnknownHeadingClosesPreviousSection(t *testing.T) {
+	t.Parallel()
+
+	source := "# Resource: aws_test\n\n" +
+		"## Example Usage\n\n" +
+		"example body line one.\n\n" +
+		"## Notes\n\n" +
+		"unknown body line.\n\n" +
+		"## Argument Reference\n\n" +
+		"args body line.\n"
+
+	d, err := doc.Parse([]byte(source), "test")
+	if err != nil {
+		t.Fatalf("parse error: %v", err)
+	}
+	if d.Sections.Example == nil {
+		t.Fatal("Example section should be parsed")
+	}
+	if d.Sections.Example.EndOffset == 0 {
+		t.Fatal("Example.EndOffset should be set, not zero")
+	}
+	end := d.Sections.Example.EndOffset
+	body := source[d.Sections.Example.StartOffset:end]
+	if strings.Contains(body, "## Notes") || strings.Contains(body, "unknown body line") {
+		t.Errorf("Example section bled past the unknown heading. Body:\n%s", body)
+	}
+}
+
+func TestSection_ChildHeadings(t *testing.T) {
+	t.Parallel()
+
+	source := `# Resource: test
+
+## Example Usage
+
+### Basic Usage
+
+Some text.
+
+### Advanced Usage
+
+More text.
+
+## Argument Reference
+
+### ` + "`config`" + ` Block
+
+* ` + "`name`" + ` - (Required) Name.
+`
+
+	d, err := doc.Parse([]byte(source), "test")
+	if err != nil {
+		t.Fatalf("parse error: %v", err)
+	}
+
+	// Example section should have two child headings.
+	ex := d.Sections.Example
+	if ex == nil {
+		t.Fatal("expected Example section")
+	}
+	if got := len(ex.ChildHeadings); got != 2 {
+		t.Fatalf("Example.ChildHeadings: got %d, want 2", got)
+	}
+	if ex.ChildHeadings[0].Text != "Basic Usage" {
+		t.Errorf("ChildHeadings[0].Text = %q, want %q", ex.ChildHeadings[0].Text, "Basic Usage")
+	}
+	if ex.ChildHeadings[0].Level != 3 {
+		t.Errorf("ChildHeadings[0].Level = %d, want 3", ex.ChildHeadings[0].Level)
+	}
+	if ex.ChildHeadings[1].Text != "Advanced Usage" {
+		t.Errorf("ChildHeadings[1].Text = %q, want %q", ex.ChildHeadings[1].Text, "Advanced Usage")
+	}
+
+	// Arguments section should have the config block as a child heading.
+	args := d.Sections.Arguments
+	if args == nil {
+		t.Fatal("expected Arguments section")
+	}
+	if got := len(args.ChildHeadings); got != 1 {
+		t.Fatalf("Arguments.ChildHeadings: got %d, want 1", got)
+	}
+	if args.ChildHeadings[0].Text != "config Block" {
+		t.Errorf("ChildHeadings[0].Text = %q, want %q", args.ChildHeadings[0].Text, "config Block")
+	}
+}
+
+func TestSection_ListItems(t *testing.T) {
+	t.Parallel()
+
+	source := `# Resource: test
+
+## Timeouts
+
+[Configuration options](https://developer.hashicorp.com/terraform/language/resources/syntax#operation-timeouts):
+
+* ` + "`create`" + ` - (Default ` + "`60m`" + `)
+* ` + "`update`" + ` - (Default ` + "`180m`" + `)
+* ` + "`delete`" + ` - (Default ` + "`90m`" + `)
+
+## Import
+
+Import using the ID.
+`
+
+	d, err := doc.Parse([]byte(source), "test")
+	if err != nil {
+		t.Fatalf("parse error: %v", err)
+	}
+
+	tm := d.Sections.Timeouts
+	if tm == nil {
+		t.Fatal("expected Timeouts section")
+	}
+	if got := len(tm.ListItems); got != 3 {
+		t.Fatalf("Timeouts.ListItems: got %d, want 3", got)
+	}
+
+	want := []struct {
+		name  string
+		value string
+	}{
+		{"create", "(Default `60m`)"},
+		{"update", "(Default `180m`)"},
+		{"delete", "(Default `90m`)"},
+	}
+	for i, w := range want {
+		if tm.ListItems[i].Name != w.name {
+			t.Errorf("ListItems[%d].Name = %q, want %q", i, tm.ListItems[i].Name, w.name)
+		}
+		if tm.ListItems[i].Value != w.value {
+			t.Errorf("ListItems[%d].Value = %q, want %q", i, tm.ListItems[i].Value, w.value)
+		}
+		if tm.ListItems[i].Line == 0 {
+			t.Errorf("ListItems[%d].Line should be non-zero", i)
+		}
+	}
+
+	// Import section should have no list items (just prose).
+	imp := d.Sections.Import
+	if imp == nil {
+		t.Fatal("expected Import section")
+	}
+	if got := len(imp.ListItems); got != 0 {
+		t.Errorf("Import.ListItems: got %d, want 0", got)
+	}
+}
+
+func TestSection_SourceRange(t *testing.T) {
+	t.Parallel()
+
+	source := `# Resource: test
+
+## Example Usage
+
+Example content here.
+
+## Argument Reference
+
+* ` + "`name`" + ` - (Required) Name.
+
+## Import
+
+Import using the ID.
+`
+
+	d, err := doc.Parse([]byte(source), "test")
+	if err != nil {
+		t.Fatalf("parse error: %v", err)
+	}
+
+	// Title section starts at 0.
+	title := d.Sections.Title
+	if title == nil {
+		t.Fatal("expected Title section")
+	}
+	if title.StartOffset != 0 {
+		t.Errorf("Title.StartOffset = %d, want 0", title.StartOffset)
+	}
+
+	// Example section starts after the title.
+	ex := d.Sections.Example
+	if ex == nil {
+		t.Fatal("expected Example section")
+	}
+	if ex.StartOffset == 0 {
+		t.Error("Example.StartOffset should be > 0")
+	}
+	if ex.EndOffset <= ex.StartOffset {
+		t.Errorf("Example.EndOffset (%d) should be > StartOffset (%d)", ex.EndOffset, ex.StartOffset)
+	}
+
+	// The Example section's source should contain "Example content here."
+	slice := string([]byte(source)[ex.StartOffset:ex.EndOffset])
+	if !contains(slice, "Example content here.") {
+		t.Errorf("Example source range does not contain expected text:\n%s", slice)
+	}
+	// But should NOT contain "Argument Reference"
+	if contains(slice, "Argument Reference") {
+		t.Error("Example source range should not contain Argument Reference")
+	}
+
+	// Import section ends at EOF.
+	imp := d.Sections.Import
+	if imp == nil {
+		t.Fatal("expected Import section")
+	}
+	if imp.EndOffset != len(source) {
+		t.Errorf("Import.EndOffset = %d, want %d (EOF)", imp.EndOffset, len(source))
+	}
+	impSlice := string([]byte(source)[imp.StartOffset:imp.EndOffset])
+	if !contains(impSlice, "Import using the ID.") {
+		t.Errorf("Import source range does not contain expected text:\n%s", impSlice)
+	}
+}
+
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(s) > 0 && findSubstring(s, substr))
+}
+
+func findSubstring(s, sub string) bool {
+	for i := 0; i <= len(s)-len(sub); i++ {
+		if s[i:i+len(sub)] == sub {
+			return true
+		}
+	}
+	return false
 }

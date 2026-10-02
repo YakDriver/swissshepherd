@@ -451,7 +451,7 @@ fragility causes a miss, never a false alarm.
 ### MEASURED (terraform-provider-aws, 2,662 docs) — decision: DO NOT BUILD
 
 Measured with a build-tagged pipeline test (`internal/check/measure_prose_test.go`,
-`-tags measure`, reusing the real runner + redesign §4 resolution + a *generalized*
+`-tags measure`; removed in #89, last version at `9b2f892`; reusing the real runner + redesign §4 resolution + a *generalized*
 anchor bridge that follows nested parents, not just root):
 
 | metric | count |
@@ -488,8 +488,8 @@ shared-subsection handling as a low-priority follow-up (fold into / alongside
 ### Snapshot caveat & rot guard (applies to §9 buckets too)
 
 Both the §12 (prose/bridge) and §9 (resolution-class) numbers come from
-`measure_prose_test.go`, which is `-tags measure` and therefore **never runs in
-CI**. They are a point-in-time snapshot of an **already-cleaned corpus** — the
+`measure_prose_test.go` (removed in #89; restore it from `9b2f892` to re-run),
+which was `-tags measure` and therefore **never ran in CI**. They are a point-in-time snapshot of an **already-cleaned corpus** — the
 `budgets_budget` misplacements that motivated #60 have since been fixed and
 `ignore_targets` masks known offenders, so the counts (9 prose / 3 resources; 7
 unique-leaf / 0 contested) will drift as those change and understate the natural

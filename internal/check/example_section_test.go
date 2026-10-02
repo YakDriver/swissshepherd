@@ -1,10 +1,12 @@
 // Copyright IBM Corp. 2019, 2026
 // SPDX-License-Identifier: MPL-2.0
 
-package check
+package check_test
 
 import (
 	"testing"
+
+	"github.com/YakDriver/swissshepherd/internal/check"
 
 	"github.com/YakDriver/swissshepherd/internal/doc"
 )
@@ -80,16 +82,16 @@ func TestExampleSectionRule(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			rule := &ExampleSectionRule{AllowLanguages: tt.langs}
-			ctx := CheckContext{Resource: "aws_thing", Doc: d}
+			rule := &check.ExampleSectionRule{AllowLanguages: tt.langs}
+			ctx := check.CheckContext{Resource: "aws_thing", Doc: d}
 			results := rule.Check(ctx)
 
 			var errs, warns int
 			for _, r := range results {
 				switch r.Severity {
-				case SeverityError:
+				case check.SeverityError:
 					errs++
-				case SeverityWarning:
+				case check.SeverityWarning:
 					warns++
 				}
 			}
