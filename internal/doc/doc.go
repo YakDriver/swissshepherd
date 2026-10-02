@@ -377,6 +377,12 @@ type ProseLeadIn struct {
 	InAttributes bool
 	Section      string         // key of the section the following bullets are credited to
 	Bullets      []DocAttribute // the following list's bullets
+	// AfterHeading is set when no list has been read since the section's
+	// heading, so the prose may instead introduce the section's own list.
+	AfterHeading bool
+	// Orphaned is set under an unparseable heading: the bullets are credited
+	// to no section, and Section is meaningless.
+	Orphaned bool
 }
 
 // Document represents a parsed documentation file.
@@ -718,11 +724,14 @@ func extractBlocks(tree ast.Node, source []byte, idx *lineIndex, doc *Document, 
 	// (docs/rules/coverage-path-resolution.md §5).
 	var orphaned bool
 	// listSinceHeading is set once a bullet list has been read since the last
-	// heading. A colon-terminated paragraph after it that names a different
-	// block introduces bullets for that block, not for the current section.
+	// heading. A colon-terminated paragraph that names a different block may
+	// introduce bullets for that block rather than the current section; before
+	// any list it may instead introduce the section's own (AfterHeading).
 	var listSinceHeading bool
-	// pendingProse is the index in doc.ProseLeadIns whose list comes next, or -1.
-	pendingProse := -1
+	// activeProse is the index in doc.ProseLeadIns whose lists come next, or
+	// -1. Like a heading, a prose lead-in is in effect until the next heading
+	// or lead-in, so a code block interrupting its list doesn't end it.
+	activeProse := -1
 	// orphanIdx is the index in doc.Orphans of the heading now in effect, or -1.
 	orphanIdx := -1
 	// underHeading is true while bullets belong to the last occurrence of the
@@ -794,7 +803,7 @@ func extractBlocks(tree ast.Node, source []byte, idx *lineIndex, doc *Document, 
 				underHeading = false
 				orphaned = false
 				listSinceHeading = false
-				pendingProse = -1
+				activeProse = -1
 				inArguments = strings.HasPrefix(headingText, "Argument")
 				inAttributes = strings.HasPrefix(headingText, "Attribute")
 				sawRequiredByline = false
@@ -848,7 +857,7 @@ func extractBlocks(tree ast.Node, source []byte, idx *lineIndex, doc *Document, 
 				orphaned = len(blockNames) == 0
 				underHeading = !orphaned
 				listSinceHeading = false
-				pendingProse = -1
+				activeProse = -1
 				if orphaned {
 					currentBlockAliases = nil
 					doc.Orphans = append(doc.Orphans, Orphan{
@@ -948,6 +957,7 @@ func extractBlocks(tree ast.Node, source []byte, idx *lineIndex, doc *Document, 
 					underHeading = false
 					orphaned = false
 					listSinceHeading = false
+					activeProse = -1
 					currentBlockName = path
 					currentBlockAliases = nil
 					sawRequiredByline = false
@@ -956,11 +966,12 @@ func extractBlocks(tree ast.Node, source []byte, idx *lineIndex, doc *Document, 
 						target = doc.AttributeBlocks
 					}
 					ensureBlock(target, path, "")
-				} else if listSinceHeading && !orphaned && proseIntroducesOtherBlock(text, currentBlockName) {
+				} else if proseIntroducesOtherBlock(text, proseCurrent(currentBlockName, orphaned)) {
 					doc.ProseLeadIns = append(doc.ProseLeadIns, ProseLeadIn{
 						Line: nodeLineNumber(n, idx), Text: strings.TrimSpace(text), InAttributes: inAttributes, Section: currentBlockName,
+						AfterHeading: !listSinceHeading, Orphaned: orphaned,
 					})
-					pendingProse = len(doc.ProseLeadIns) - 1
+					activeProse = len(doc.ProseLeadIns) - 1
 				}
 			}
 			return ast.WalkSkipChildren, nil
@@ -996,8 +1007,7 @@ func extractBlocks(tree ast.Node, source []byte, idx *lineIndex, doc *Document, 
 				return ast.WalkSkipChildren, nil
 			}
 			listSinceHeading = true
-			prose := pendingProse
-			pendingProse = -1
+			prose := activeProse
 
 			// If we saw a "required:" byline before this list, mark the block as split.
 			if inArguments && sawRequiredByline {
@@ -1018,7 +1028,7 @@ func extractBlocks(tree ast.Node, source []byte, idx *lineIndex, doc *Document, 
 						if prose >= 0 {
 							doc.ProseLeadIns[prose].Bullets = append(doc.ProseLeadIns[prose].Bullets, attr)
 						}
-						if orphaned && orphanIdx >= 0 {
+						if orphaned && orphanIdx >= 0 && prose < 0 {
 							doc.Orphans[orphanIdx].Bullets = append(doc.Orphans[orphanIdx].Bullets, attr)
 						}
 						// Flag attributes with malformed separator (e.g. `mode`- instead of `mode` -).
@@ -1439,6 +1449,15 @@ func appendToLastOccurrence(b *DocBlock, attr DocAttribute) {
 	if n := len(b.Occurrences); n > 0 {
 		b.Occurrences[n-1].Attributes = append(b.Occurrences[n-1].Attributes, attr)
 	}
+}
+
+// proseCurrent is the block a prose lead-in is compared against: none under
+// an unparseable heading, whose bullets belong to no section.
+func proseCurrent(current string, orphaned bool) string {
+	if orphaned {
+		return ""
+	}
+	return current
 }
 
 // proseIntroducesOtherBlock reports whether a paragraph might introduce a list

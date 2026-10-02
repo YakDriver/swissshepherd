@@ -122,7 +122,7 @@ func enabled(b *bool) bool { return b == nil || *b }
 func (r *SchemaDocsRule) Check(ctx CheckContext) []Result {
 	var results []Result
 	if ctx.Doc != nil {
-		ctx.Doc = withoutOrphanProse(ctx.Schema, ctx.Doc)
+		ctx.Doc = withProseSections(ctx.Schema, ctx.Doc)
 	}
 
 	var idx map[*doc.DocBlock][]string
@@ -960,12 +960,12 @@ func (r *SchemaDocsRule) fitMismatches(rs *schema.ResourceSchema, o doc.Occurren
 	return n
 }
 
-// checkOrphans reports headings and prose lists whose bullets belong to no
-// section, so their fields are compared against nothing (docs/rules/coverage-
-// path-resolution.md §5). When the text names a schema block, the finding
-// suggests a heading for it. The suggestion is advisory: an unparseable
-// heading still documents nothing, so this doesn't loosen headings-only
-// resolution.
+// checkOrphans reports headings whose bullets belong to no section, so their
+// fields are compared against nothing (docs/rules/coverage-path-resolution.md
+// §5), and prose lists that stand in for a heading. When an unparseable
+// heading names a schema block, the finding suggests a heading for it. The
+// suggestion is advisory: an unparseable heading still documents nothing, so
+// this doesn't loosen headings-only resolution.
 func (r *SchemaDocsRule) checkOrphans(ctx CheckContext) []Result {
 	var results []Result
 	add := func(line int, msg string, names []string) {
@@ -977,8 +977,13 @@ func (r *SchemaDocsRule) checkOrphans(ctx CheckContext) []Result {
 	for _, o := range ctx.Doc.Orphans {
 		add(o.Line, fmt.Sprintf("heading %q in %s isn't a recognized block heading, so its bullets aren't checked against the schema", o.Text, referenceName(o.InAttributes)), headingNames(o.Text))
 	}
-	for _, pl := range orphanProse(ctx.Schema, ctx.Doc) {
-		add(pl.Line, fmt.Sprintf("list introduced by prose (%q) in %s has no block heading, so its bullets aren't checked against the schema", truncate(pl.Text, 80), referenceName(pl.InAttributes)), backtickedNames(pl.Text))
+	for _, ps := range proseSections(ctx.Schema, ctx.Doc) {
+		msg := fmt.Sprintf("list introduced by prose (%q) in %s documents %q without a block heading; use a block heading, e.g. %q",
+			truncate(ps.Text, 80), referenceName(ps.InAttributes), ps.key, doc.RenderHeading(r.pathTemplate(), ps.key))
+		if ps.resumeLine > 0 {
+			msg += fmt.Sprintf(". The list runs on into fields of the enclosing section from line %d; end it before them", ps.resumeLine)
+		}
+		results = append(results, Result{Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityWarning, Line: ps.Line, Message: msg})
 	}
 	slices.SortFunc(results, func(a, b Result) int { return a.Line - b.Line })
 	return results
@@ -991,37 +996,73 @@ func referenceName(inAttributes bool) string {
 	return "Argument Reference"
 }
 
-// orphanProse returns the prose lead-ins whose list certainly documents some
-// other block: the prose names a schema block in backticks, and none of the
-// list's bullets is a field at any path the section's key could document.
-// Prose that continues the section ("…supports the same arguments as
-// `aws_instance`, with the addition of:") lists the section's own fields and is
-// left alone; deciding which block a mixed list belongs to would be a guess.
-func orphanProse(rs *schema.ResourceSchema, d *doc.Document) []doc.ProseLeadIn {
+// proseSection is a prose lead-in that stands in for a block heading, with
+// the section key its list documents. Bullets that resume the enclosing
+// section (resumed, from line resumeLine) stay there.
+type proseSection struct {
+	doc.ProseLeadIn
+	key        string
+	resumeLine int
+}
+
+// proseSections returns the prose lead-ins that introduce another block's list
+// ("The `cloudwatch_logs` object takes the following arguments:"): the prose
+// names a schema block in backticks, and the list follows the section's own
+// bullets. The prose is a heading in all but syntax, so its list documents the
+// named block, keyed as suggestHeadingKey would key a heading for it (§5).
+// Prose naming nothing in the schema ("…the same arguments as
+// `aws_instance`, with the addition of:") continues its section, as does prose
+// before any list under a reference section heading (the byline's place) or a
+// heading that resolves to a schema path: that prose introduces the heading's
+// own list. Under an unparseable or unresolved heading it opens the block.
+//
+// Markdown gives a prose list no end: a bullet after a blank line continues
+// it, and authors resume the enclosing section that way
+// (aws_codepipeline_custom_action_type). So a trailing run of bullets that
+// are fields of the enclosing section and not of the named block stays in the
+// section, and the warning says where the list should end. Crediting them to
+// the named block would report correct fields as nonexistent.
+func proseSections(rs *schema.ResourceSchema, d *doc.Document) []proseSection {
 	if rs == nil {
 		return nil
 	}
-	var out []doc.ProseLeadIn
+	var out []proseSection
 	for _, pl := range d.ProseLeadIns {
-		if len(pl.Bullets) == 0 || suggestHeadingKey(rs, backtickedNames(pl.Text)) == "" {
+		key := suggestHeadingKey(rs, backtickedNames(pl.Text))
+		if len(pl.Bullets) == 0 || key == "" || (!pl.Orphaned && key == pl.Section) {
 			continue
 		}
-		own := false
-		for p, b := range rs.Blocks {
-			if p != pl.Section && (pl.Section == "" || leafName(p) != leafName(pl.Section)) {
-				continue
+		if pl.AfterHeading && !pl.Orphaned && (pl.Section == "" || keyMatchesSomePath(rs, pl.Section)) {
+			continue
+		}
+		ps := proseSection{ProseLeadIn: pl, key: key}
+		if !pl.Orphaned {
+			n := len(pl.Bullets)
+			for n > 0 && sectionField(rs, pl.Section, pl.Bullets[n-1].Name) && !sectionField(rs, key, pl.Bullets[n-1].Name) {
+				n--
 			}
-			for _, a := range pl.Bullets {
-				if blockHasField(b, a.Name) {
-					own = true
-				}
+			if n == 0 {
+				continue // the whole list is the section's own
+			}
+			if n < len(pl.Bullets) {
+				ps.resumeLine = pl.Bullets[n].Line
+				ps.Bullets = pl.Bullets[:n]
 			}
 		}
-		if !own {
-			out = append(out, pl)
-		}
+		out = append(out, ps)
 	}
 	return out
+}
+
+// sectionField reports whether name is a field at some schema path the
+// section key could document.
+func sectionField(rs *schema.ResourceSchema, key, name string) bool {
+	for p, b := range rs.Blocks {
+		if (p == key || (p != "" && slices.Contains(sectionKeyCandidates(p), key))) && blockHasField(b, name) {
+			return true
+		}
+	}
+	return false
 }
 
 func blockHasField(b *schema.Block, name string) bool {
@@ -1033,46 +1074,71 @@ func blockHasField(b *schema.Block, name string) bool {
 	return slices.ContainsFunc(b.ChildBlocks, func(c string) bool { return leafName(c) == name })
 }
 
-// withoutOrphanProse returns d with the bullets of orphaned prose lists
-// (orphanProse) removed from the sections they were credited to, so every
-// sub-check treats them as belonging to no section, as the parser does for
-// unparseable headings. d itself is not modified.
-func withoutOrphanProse(rs *schema.ResourceSchema, d *doc.Document) *doc.Document {
-	orphans := orphanProse(rs, d)
-	if len(orphans) == 0 {
+// withProseSections returns d with each prose-introduced list (proseSections)
+// moved from the section the parser credited it to into a section for the
+// block the prose names, as one occurrence of that key, so every sub-check
+// reads it as it would a list under a heading. d itself is not modified.
+func withProseSections(rs *schema.ResourceSchema, d *doc.Document) *doc.Document {
+	sections := proseSections(rs, d)
+	if len(sections) == 0 {
 		return d
 	}
-	drop := map[bool]map[string]map[int]bool{false: {}, true: {}}
-	for _, pl := range orphans {
-		byKey := drop[pl.InAttributes]
-		if byKey[pl.Section] == nil {
-			byKey[pl.Section] = make(map[int]bool)
-		}
-		for _, a := range pl.Bullets {
-			byKey[pl.Section][a.Line] = true
-		}
-	}
-	filter := func(blocks map[string]*doc.DocBlock, byKey map[string]map[int]bool) map[string]*doc.DocBlock {
-		out := maps.Clone(blocks)
-		for key, lines := range byKey {
-			b := blocks[key]
-			if b == nil {
-				continue
-			}
-			c := *b
-			drop := func(a doc.DocAttribute) bool { return lines[a.Line] }
-			c.Attributes = slices.DeleteFunc(slices.Clone(b.Attributes), drop)
-			c.Occurrences = slices.Clone(b.Occurrences)
-			for i := range c.Occurrences {
-				c.Occurrences[i].Attributes = slices.DeleteFunc(slices.Clone(c.Occurrences[i].Attributes), drop)
-			}
-			out[key] = &c
-		}
-		return out
-	}
 	c := *d
-	c.ArgumentBlocks = filter(d.ArgumentBlocks, drop[false])
-	c.AttributeBlocks = filter(d.AttributeBlocks, drop[true])
+	c.ArgumentBlocks = maps.Clone(d.ArgumentBlocks)
+	c.AttributeBlocks = maps.Clone(d.AttributeBlocks)
+	// Blocks are cloned on first write so d's are never modified.
+	cloned := make(map[*doc.DocBlock]bool)
+	own := func(blocks map[string]*doc.DocBlock, key string) *doc.DocBlock {
+		b := blocks[key]
+		if b == nil {
+			b = &doc.DocBlock{Name: key}
+		} else if !cloned[b] {
+			cb := *b
+			cb.Attributes = slices.Clone(b.Attributes)
+			cb.MalformedAttributes = slices.Clone(b.MalformedAttributes)
+			cb.Occurrences = slices.Clone(b.Occurrences)
+			for i := range cb.Occurrences {
+				cb.Occurrences[i].Attributes = slices.Clone(cb.Occurrences[i].Attributes)
+			}
+			b = &cb
+		}
+		cloned[b] = true
+		blocks[key] = b
+		return b
+	}
+	for _, ps := range sections {
+		blocks := c.ArgumentBlocks
+		if ps.InAttributes {
+			blocks = c.AttributeBlocks
+		}
+		lines := make(map[int]bool, len(ps.Bullets))
+		for _, a := range ps.Bullets {
+			lines[a.Line] = true
+		}
+		var malformed []doc.MalformedAttr
+		if from := blocks[ps.Section]; from != nil && !ps.Orphaned {
+			from = own(blocks, ps.Section)
+			moved := func(a doc.DocAttribute) bool { return lines[a.Line] }
+			from.Attributes = slices.DeleteFunc(from.Attributes, moved)
+			for i := range from.Occurrences {
+				from.Occurrences[i].Attributes = slices.DeleteFunc(from.Occurrences[i].Attributes, moved)
+			}
+			from.MalformedAttributes = slices.DeleteFunc(from.MalformedAttributes, func(m doc.MalformedAttr) bool {
+				if lines[m.Line] {
+					malformed = append(malformed, m)
+					return true
+				}
+				return false
+			})
+		}
+		to := own(blocks, ps.key)
+		if to.HeadingLine == 0 {
+			to.HeadingLine = ps.Line
+		}
+		to.Attributes = append(to.Attributes, ps.Bullets...)
+		to.MalformedAttributes = append(to.MalformedAttributes, malformed...)
+		to.Occurrences = append(to.Occurrences, doc.Occurrence{Heading: ps.Text, Line: ps.Line, Attributes: slices.Clone(ps.Bullets)})
+	}
 	return &c
 }
 
@@ -1505,7 +1571,7 @@ func (r *SchemaDocsRule) checkDescriptions(ctx CheckContext) []Result {
 
 	// Bullets that belong to no section still get the description check: it
 	// doesn't depend on which block they document. The finding names the
-	// heading or prose instead of a block.
+	// heading instead of a block.
 	check := func(attrs []doc.DocAttribute, where string) {
 		for _, attr := range attrs {
 			for _, prefix := range r.prefixes() {
@@ -1522,9 +1588,6 @@ func (r *SchemaDocsRule) checkDescriptions(ctx CheckContext) []Result {
 	}
 	for _, o := range ctx.Doc.Orphans {
 		check(o.Bullets, fmt.Sprintf("under heading %q", o.Text))
-	}
-	for _, pl := range orphanProse(ctx.Schema, ctx.Doc) {
-		check(pl.Bullets, fmt.Sprintf("in the list introduced by prose at line %d", pl.Line))
 	}
 	return results
 }

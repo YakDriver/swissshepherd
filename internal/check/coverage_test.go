@@ -1587,10 +1587,13 @@ func coverageMissingBlockMsgs(t *testing.T, src string, rs *schema.ResourceSchem
 	return msgs
 }
 
-// TestCoverage_OrphanedBullets: headings the parser can't read, and lists
-// introduced by prose, leave their bullets in no section. Coverage reports
-// them so those fields aren't silently unchecked, and suggests a heading when
-// the text names a schema block (#77).
+const proseMsg = "list introduced by prose (\"The `cloudwatch_logs` object takes the following arguments:\") in Argument Reference documents \"cloudwatch_logs\" without a block heading; use a block heading, e.g. \"`cloudwatch_logs` Block\""
+
+// TestCoverage_OrphanedBullets: headings the parser can't read leave their
+// bullets in no section, and coverage reports them so those fields aren't
+// silently unchecked. A list introduced by prose naming a schema block
+// documents that block, as under a heading, and gets a style warning. Both
+// suggest a heading when the text names a schema block (#77).
 func TestCoverage_OrphanedBullets(t *testing.T) {
 	t.Parallel()
 
@@ -1626,9 +1629,70 @@ func TestCoverage_OrphanedBullets(t *testing.T) {
 		"prose continuing the section": {
 			md: page("* `source` - (Optional) Source.\n\nThis resource supports the same arguments as `aws_instance`, with the addition of:\n\n* `action` - (Optional) Action.\n"),
 		},
+		// Markdown can't end a list, so authors resume the enclosing section
+		// after a blank line (aws_codepipeline_custom_action_type). The
+		// trailing fields of the section stay there.
+		"prose list resuming the section": {
+			md:   page("* `source` - (Optional) Source.\n\nThe `cloudwatch_logs` object takes the following arguments:\n\n* `role_arn` - (Optional) Role.\n\n* `action` - (Optional) Action.\n"),
+			want: []string{proseMsg + ". The list runs on into fields of the enclosing section from line 11; end it before them"},
+		},
+		// Like a heading, the prose is in effect until the next heading or
+		// lead-in: a code block interrupting its list doesn't end it
+		// (aws_ebs_volumes' filter).
+		"prose list interrupted by a code block": {
+			md: page("* `source` - (Optional) Source.\n\nThe `cloudwatch_logs` object takes the following arguments:\n\n* `role_arn` - (Optional) Role.\n\n```terraform\nx = 1\n```\n\n* `bogus` - (Optional) Bogus.\n"),
+			want: []string{
+				proseMsg,
+				`documented argument "bogus" in block "action.cloudwatch_logs" does not exist in schema`,
+				`documented argument "bogus" in block "error_action.cloudwatch_logs" does not exist in schema`,
+			},
+		},
+		// Under an unparseable heading the bullets would belong to no
+		// section; prose naming a block gives them one.
+		"prose under an unparseable heading": {
+			md: page("### Waiting for Capacity\n\nThe `cloudwatch_logs` object takes the following arguments:\n\n* `bogus` - (Optional) Bogus.\n"),
+			want: []string{
+				"heading \"Waiting for Capacity\" in Argument Reference isn't a recognized block heading, so its bullets aren't checked against the schema",
+				proseMsg,
+				`documented argument "bogus" in block "action.cloudwatch_logs" does not exist in schema`,
+				`documented argument "bogus" in block "error_action.cloudwatch_logs" does not exist in schema`,
+			},
+		},
+		// Before any list, prose under a heading that resolves introduces the
+		// heading's own list; under one that doesn't, it opens the block.
+		"prose right after a resolved heading": {
+			md: page("### `source` Block\n\nWhen `cloudwatch_logs` is used, the following apply:\n\n* `location` - (Optional) Location.\n"),
+		},
+		"prose right after an unresolved heading": {
+			md: page("### `logging_options` Block\n\nThe `cloudwatch_logs` object takes the following arguments:\n\n* `bogus` - (Optional) Bogus.\n"),
+			want: []string{
+				proseMsg,
+				`documented argument "bogus" in block "action.cloudwatch_logs" does not exist in schema`,
+				`documented argument "bogus" in block "error_action.cloudwatch_logs" does not exist in schema`,
+			},
+		},
 		"prose naming a leaf shared by several blocks": {
-			md:   page("The `cloudwatch_logs` object takes the following arguments:\n\n* `role_arn` - (Optional) Role.\n"),
-			want: []string{"list introduced by prose (\"The `cloudwatch_logs` object takes the following arguments:\") in Argument Reference has no block heading, so its bullets aren't checked against the schema; use a block heading, e.g. \"`cloudwatch_logs` Block\""},
+			md:   page("* `source` - (Optional) Source.\n\nThe `cloudwatch_logs` object takes the following arguments:\n\n* `role_arn` - (Optional) Role.\n"),
+			want: []string{proseMsg},
+		},
+		// The prose list is checked as the block it names.
+		"prose list field missing from the named block": {
+			md: page("* `source` - (Optional) Source.\n\nThe `cloudwatch_logs` object takes the following arguments:\n\n* `bogus` - (Optional) Bogus.\n"),
+			want: []string{
+				proseMsg,
+				`documented argument "bogus" in block "action.cloudwatch_logs" does not exist in schema`,
+				`documented argument "bogus" in block "error_action.cloudwatch_logs" does not exist in schema`,
+			},
+		},
+		// A field of the enclosing section listed after the prose belongs to
+		// the named block, as it would under a heading, and is reported there.
+		"prose list mixing the section's own field": {
+			md: page("* `source` - (Optional) Source.\n\nThe `cloudwatch_logs` object takes the following arguments:\n\n* `action` - (Optional) Action.\n* `role_arn` - (Optional) Role.\n"),
+			want: []string{
+				proseMsg,
+				`documented argument "action" in block "action.cloudwatch_logs" does not exist in schema`,
+				`documented argument "action" in block "error_action.cloudwatch_logs" does not exist in schema`,
+			},
 		},
 	}
 	for name, tc := range testCases {
@@ -1641,13 +1705,16 @@ func TestCoverage_OrphanedBullets(t *testing.T) {
 			results := (&check.SchemaDocsRule{IgnoreDeprecated: true}).Check(check.CheckContext{Resource: "aws_thing", Schema: rs, Doc: d})
 			var got []string
 			for _, r := range results {
-				if strings.Contains(r.Message, "aren't checked against the schema") {
+				if strings.Contains(r.Message, "aren't checked against the schema") || strings.Contains(r.Message, "without a block heading") ||
+					strings.Contains(r.Message, "cloudwatch_logs\" does not exist") {
 					got = append(got, r.Message)
 				}
 				if strings.Contains(r.Message, `"(root)" does not exist`) {
 					t.Errorf("orphaned bullet credited to the root: %s", r.Message)
 				}
 			}
+			slices.Sort(got)
+			slices.Sort(tc.want)
 			if !slices.Equal(got, tc.want) {
 				t.Errorf("orphan findings =\n  %q\nwant\n  %q", got, tc.want)
 			}
@@ -1657,7 +1724,8 @@ func TestCoverage_OrphanedBullets(t *testing.T) {
 
 // TestDescriptions_OrphanedBullets: bullets that belong to no section still
 // get the description check, which doesn't depend on the block. The finding
-// names the heading or prose instead (#77).
+// names the heading instead. A prose-introduced list belongs to the block it
+// names, so its finding names that block (#77).
 func TestDescriptions_OrphanedBullets(t *testing.T) {
 	t.Parallel()
 
@@ -1674,9 +1742,9 @@ func TestDescriptions_OrphanedBullets(t *testing.T) {
 			body: "### Waiting for Capacity\n\n* `role_arn` - (Optional) The role.\n",
 			want: `attribute "role_arn" description should not start with "The" (under heading "Waiting for Capacity")`,
 		},
-		"in an orphaned prose list": {
+		"in a prose-introduced list": {
 			body: "* `name` - (Required) Name.\n\nThe `cloudwatch_logs` object takes the following arguments:\n\n* `role_arn` - (Optional) The role.\n",
-			want: `attribute "role_arn" description should not start with "The" (in the list introduced by prose at line 5)`,
+			want: `attribute "role_arn" description should not start with "The" (block "cloudwatch_logs")`,
 		},
 	}
 	for name, tc := range testCases {
