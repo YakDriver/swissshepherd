@@ -152,7 +152,7 @@ func TestSections_FencedCodeBlocksCollected(t *testing.T) {
 	}
 }
 
-func TestSections_TitleCaptursCodeBlocks_WhenMisplaced(t *testing.T) {
+func TestSections_TitleCapturesCodeBlocksWhenMisplaced(t *testing.T) {
 	t.Parallel()
 
 	// A code block between the H1 and the first H2 is exactly the misuse the

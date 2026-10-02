@@ -300,7 +300,7 @@ func TestSchemaDocsRule_DisableNoCodeBlocks(t *testing.T) {
 	}
 }
 
-func TestSchemaDocsRule_Ordered(t *testing.T) {
+func TestOrdering_FixtureInOrder(t *testing.T) {
 	t.Parallel()
 
 	d, err := doc.ParseFile("../../testdata/docs/r/instance.html.markdown")
@@ -318,7 +318,7 @@ func TestSchemaDocsRule_Ordered(t *testing.T) {
 	}
 }
 
-func TestSchemaDocsRule_Unordered(t *testing.T) {
+func TestOrdering_FixtureArgumentsUnordered(t *testing.T) {
 	t.Parallel()
 
 	d, err := doc.ParseFile("../../testdata/docs/r/instance_unordered.html.markdown")
@@ -345,7 +345,7 @@ func TestSchemaDocsRule_Unordered(t *testing.T) {
 	}
 }
 
-func TestSchemaDocsRule_UnorderedAttributes(t *testing.T) {
+func TestOrdering_FixtureAttributesUnordered(t *testing.T) {
 	t.Parallel()
 
 	d, err := doc.ParseFile("../../testdata/docs/r/instance_unordered.html.markdown")
@@ -368,7 +368,7 @@ func TestSchemaDocsRule_UnorderedAttributes(t *testing.T) {
 	}
 }
 
-func TestSchemaDocsRule_Good(t *testing.T) {
+func TestDescription_FixtureGood(t *testing.T) {
 	t.Parallel()
 
 	d, err := doc.ParseFile("../../testdata/docs/r/instance.html.markdown")
@@ -384,7 +384,7 @@ func TestSchemaDocsRule_Good(t *testing.T) {
 	}
 }
 
-func TestSchemaDocsRule_Bad(t *testing.T) {
+func TestDescription_FixtureBadPrefixes(t *testing.T) {
 	t.Parallel()
 
 	d, err := doc.ParseFile("../../testdata/docs/r/instance_bad_style.html.markdown")
@@ -420,9 +420,9 @@ func TestSchemaDocsRule_Bad(t *testing.T) {
 	}
 }
 
-// TestNestedObject_On_WeakDescription_Flagged: description style now reaches
+// TestDescription_NestedObjectWeakPrefix: description style now reaches
 // nested object fields — an "arn" documented as "The ARN." is flagged.
-func TestNestedObject_On_WeakDescription_Flagged(t *testing.T) {
+func TestDescription_NestedObjectWeakPrefix(t *testing.T) {
 	t.Parallel()
 
 	rs := objectAttrSchema()
@@ -451,13 +451,13 @@ func TestNestedObject_On_WeakDescription_Flagged(t *testing.T) {
 	}
 }
 
-// TestSchemaDocsRule_PathKeyedHeadings_PreferredStyle confirms that
+// TestHeading_PathKeyedPreferredStyle confirms that
 // path-keyed doc blocks (e.g. `spec.grpc_route.match`) participate in
 // the preferred-style check rather than being silently skipped. The
 // schema lookup uses the leaf name so the block is recognized as
 // schema-present; the ambiguity branch is bypassed because the
 // heading is already in dot-path form.
-func TestSchemaDocsRule_PathKeyedHeadings_PreferredStyle(t *testing.T) {
+func TestHeading_PathKeyedPreferredStyle(t *testing.T) {
 	t.Parallel()
 
 	rs := &schema.ResourceSchema{
@@ -527,7 +527,7 @@ func TestSchemaDocsRule_PathKeyedHeadings_PreferredStyle(t *testing.T) {
 	}
 }
 
-func TestSchemaDocsRule_PathKeyedHeadings_BadStyleStillWarns(t *testing.T) {
+func TestHeading_PathKeyedBadStyleStillWarns(t *testing.T) {
 	t.Parallel()
 
 	rs := &schema.ResourceSchema{
@@ -594,11 +594,11 @@ func TestSchemaDocsRule_PathKeyedHeadings_BadStyleStillWarns(t *testing.T) {
 	}
 }
 
-// TestDescriptions_OrphanedBullets: bullets that belong to no section still
+// TestDescription_OrphanedBullets: bullets that belong to no section still
 // get the description check, which doesn't depend on the block. The finding
 // names the heading instead. A prose-introduced list belongs to the block it
 // names, so its finding names that block (#77).
-func TestDescriptions_OrphanedBullets(t *testing.T) {
+func TestDescription_OrphanedBullets(t *testing.T) {
 	t.Parallel()
 
 	rs := &schema.ResourceSchema{Blocks: map[string]*schema.Block{

@@ -12,11 +12,11 @@ import (
 	"github.com/YakDriver/swissshepherd/internal/schema"
 )
 
-// TestLabelCorrectness_OptionalComputedLabeledRequired is the issue #68 repro:
+// TestLabels_OptionalComputedLabeledRequired is the issue #68 repro:
 // an Optional+Computed field documented as (Required) must be flagged. Both
 // pure Optional and Optional+Computed must read (Optional); only (Required) is
 // wrong for an Optional+Computed field.
-func TestLabelCorrectness_OptionalComputedLabeledRequired(t *testing.T) {
+func TestLabels_OptionalComputedLabeledRequired(t *testing.T) {
 	t.Parallel()
 
 	src := `# Resource: aws_thing
@@ -48,9 +48,9 @@ func TestLabelCorrectness_OptionalComputedLabeledRequired(t *testing.T) {
 	}
 }
 
-// TestLabelCorrectness_PureOptionalLabeledRequired: a pure Optional scalar at
+// TestLabels_PureOptionalLabeledRequired: a pure Optional scalar at
 // the root labeled (Required) must be flagged.
-func TestLabelCorrectness_PureOptionalLabeledRequired(t *testing.T) {
+func TestLabels_PureOptionalLabeledRequired(t *testing.T) {
 	t.Parallel()
 
 	src := `# Resource: aws_thing
@@ -71,9 +71,9 @@ func TestLabelCorrectness_PureOptionalLabeledRequired(t *testing.T) {
 	}
 }
 
-// TestLabelCorrectness_RequiredLabeledOptional: a Required scalar labeled
+// TestLabels_RequiredLabeledOptional: a Required scalar labeled
 // (Optional) must be flagged in the other direction.
-func TestLabelCorrectness_RequiredLabeledOptional(t *testing.T) {
+func TestLabels_RequiredLabeledOptional(t *testing.T) {
 	t.Parallel()
 
 	src := `# Resource: aws_thing
@@ -93,10 +93,10 @@ func TestLabelCorrectness_RequiredLabeledOptional(t *testing.T) {
 	}
 }
 
-// TestLabelCorrectness_CorrectLabels_NoFindings: correct labels (Required ->
+// TestLabels_CorrectLabels_NoFindings: correct labels (Required ->
 // (Required), Optional -> (Optional), Optional+Computed -> (Optional)) produce
 // no correctness finding.
-func TestLabelCorrectness_CorrectLabels_NoFindings(t *testing.T) {
+func TestLabels_CorrectLabels_NoFindings(t *testing.T) {
 	t.Parallel()
 
 	src := `# Resource: aws_thing
@@ -122,11 +122,11 @@ func TestLabelCorrectness_CorrectLabels_NoFindings(t *testing.T) {
 	}
 }
 
-// TestLabelCorrectness_ForcesNewExtra: a trailing trait such as "Forces new
+// TestLabels_ForcesNewExtra: a trailing trait such as "Forces new
 // resource" must not defeat detection — the parser sets Required/Optional from
 // the leading token, so an Optional field labeled "(Required, Forces new
 // resource)" is still flagged.
-func TestLabelCorrectness_ForcesNewExtra(t *testing.T) {
+func TestLabels_ForcesNewExtra(t *testing.T) {
 	t.Parallel()
 
 	src := `# Resource: aws_thing
@@ -146,10 +146,10 @@ func TestLabelCorrectness_ForcesNewExtra(t *testing.T) {
 	}
 }
 
-// TestLabelCorrectness_UnresolvedHeading_NoGuess: an argument under a heading
+// TestLabels_UnresolvedHeading_NoGuess: an argument under a heading
 // that does not resolve to a schema path yields no correctness finding — the
 // check never guesses.
-func TestLabelCorrectness_UnresolvedHeading_NoGuess(t *testing.T) {
+func TestLabels_UnresolvedHeading_NoGuess(t *testing.T) {
 	t.Parallel()
 
 	src := `# Resource: aws_thing
@@ -173,13 +173,13 @@ func TestLabelCorrectness_UnresolvedHeading_NoGuess(t *testing.T) {
 	}
 }
 
-// TestLabelCorrectness_DuplicateNameDoesNotHideWrongLabel guards the issue #68
+// TestLabels_DuplicateNameDoesNotHideWrongLabel guards the issue #68
 // review finding: a field listed in BOTH Argument Reference (with a wrong
 // label) and Attribute Reference must still be flagged. The template-bleed
 // duplicate-name guard suppresses only the missing-label warning for unlabeled
 // bleed items; it must not silence the schema-backed correctness check for a
 // genuinely labeled argument.
-func TestLabelCorrectness_DuplicateNameDoesNotHideWrongLabel(t *testing.T) {
+func TestLabels_DuplicateNameDoesNotHideWrongLabel(t *testing.T) {
 	t.Parallel()
 
 	src := `# Resource: aws_thing
@@ -205,10 +205,10 @@ func TestLabelCorrectness_DuplicateNameDoesNotHideWrongLabel(t *testing.T) {
 	}
 }
 
-// TestLabelCorrectness_ComputedOnlyNotFlagged: a computed-only field is out of
+// TestLabels_ComputedOnlyNotFlagged: a computed-only field is out of
 // scope for correctness (its placement is checkComputedMisplacement's concern),
 // so no "use (...)" correctness finding fires for it.
-func TestLabelCorrectness_ComputedOnlyNotFlagged(t *testing.T) {
+func TestLabels_ComputedOnlyNotFlagged(t *testing.T) {
 	t.Parallel()
 
 	src := `# Resource: aws_thing
@@ -248,9 +248,9 @@ func labelResultsRO(t *testing.T, src string, rs *schema.ResourceSchema) []check
 		check.CheckContext{Resource: "aws_thing", Schema: rs, Doc: d})
 }
 
-// TestLabelCorrectness_ReadOnlyOnOptional: a (Read-Only) label on a field that
+// TestLabels_ReadOnlyOnOptional: a (Read-Only) label on a field that
 // is Optional in the schema is wrong and must be reported (use (Optional)).
-func TestLabelCorrectness_ReadOnlyOnOptional(t *testing.T) {
+func TestLabels_ReadOnlyOnOptional(t *testing.T) {
 	t.Parallel()
 
 	src := `# Resource: aws_thing
@@ -273,9 +273,9 @@ func TestLabelCorrectness_ReadOnlyOnOptional(t *testing.T) {
 	}
 }
 
-// TestLabelCorrectness_ReadOnlyOnRequired: a (Read-Only) label on a Required
+// TestLabels_ReadOnlyOnRequired: a (Read-Only) label on a Required
 // field must be reported (use (Required)).
-func TestLabelCorrectness_ReadOnlyOnRequired(t *testing.T) {
+func TestLabels_ReadOnlyOnRequired(t *testing.T) {
 	t.Parallel()
 
 	src := `# Resource: aws_thing
@@ -294,9 +294,9 @@ func TestLabelCorrectness_ReadOnlyOnRequired(t *testing.T) {
 	}
 }
 
-// TestLabelCorrectness_ReadOnlyOnComputedOnly: a (Read-Only) label on a
+// TestLabels_ReadOnlyOnComputedOnly: a (Read-Only) label on a
 // genuinely read-only (computed-only) attribute is correct — no finding.
-func TestLabelCorrectness_ReadOnlyOnComputedOnly(t *testing.T) {
+func TestLabels_ReadOnlyOnComputedOnly(t *testing.T) {
 	t.Parallel()
 
 	src := `# Resource: aws_thing
@@ -319,11 +319,11 @@ func TestLabelCorrectness_ReadOnlyOnComputedOnly(t *testing.T) {
 	}
 }
 
-// TestLabelCorrectness_ReadOnlyFlagOff_NoCorrectnessFinding: with
+// TestLabels_ReadOnlyFlagOff_NoCorrectnessFinding: with
 // allow_inline_read_only = false, a (Read-Only) label is not an accepted
 // argument label, so it takes the missing-label path rather than producing a
 // Read-Only correctness finding.
-func TestLabelCorrectness_ReadOnlyFlagOff_NoCorrectnessFinding(t *testing.T) {
+func TestLabels_ReadOnlyFlagOff_NoCorrectnessFinding(t *testing.T) {
 	t.Parallel()
 
 	src := `# Resource: aws_thing
@@ -349,12 +349,12 @@ func TestLabelCorrectness_ReadOnlyFlagOff_NoCorrectnessFinding(t *testing.T) {
 
 // --- Gap B: (Read-Only) label not allowed under Attribute Reference ---
 
-// TestLabelCorrectness_ReadOnlyUnderAttributeReference: a (Read-Only) label on an
+// TestLabels_ReadOnlyUnderAttributeReference: a (Read-Only) label on an
 // attribute documented under Attribute Reference is not allowed — attributes
 // carry no label there — so it is flagged for stripping. This holds regardless
 // of allow_inline_read_only (that flag only permits inline Read-Only in
 // Argument Reference).
-func TestLabelCorrectness_ReadOnlyUnderAttributeReference(t *testing.T) {
+func TestLabels_ReadOnlyUnderAttributeReference(t *testing.T) {
 	t.Parallel()
 
 	src := `# Resource: aws_thing
@@ -380,9 +380,9 @@ func TestLabelCorrectness_ReadOnlyUnderAttributeReference(t *testing.T) {
 	}
 }
 
-// TestLabelCorrectness_UnlabeledUnderAttributeReference: a properly unlabeled
+// TestLabels_UnlabeledUnderAttributeReference: a properly unlabeled
 // Read-Only attribute under Attribute Reference is correct — no strip finding.
-func TestLabelCorrectness_UnlabeledUnderAttributeReference(t *testing.T) {
+func TestLabels_UnlabeledUnderAttributeReference(t *testing.T) {
 	t.Parallel()
 
 	src := `# Resource: aws_thing
@@ -410,12 +410,12 @@ func TestLabelCorrectness_UnlabeledUnderAttributeReference(t *testing.T) {
 
 // --- Gap A2: computed-only mislabeled (Required)/(Optional) in permissive mode ---
 
-// TestLabelCorrectness_ComputedOnlyMislabeledPermissive: with
+// TestLabels_ComputedOnlyMislabeledPermissive: with
 // allow_inline_read_only = true, checkComputedMisplacement is suppressed and
 // coverage accepts inline computed-only bullets, so labelCorrectness must catch
 // a computed-only field labeled (Optional)/(Required) and direct it to
 // (Read-Only). (Copilot #71 review.)
-func TestLabelCorrectness_ComputedOnlyMislabeledPermissive(t *testing.T) {
+func TestLabels_ComputedOnlyMislabeledPermissive(t *testing.T) {
 	t.Parallel()
 
 	src := `# Resource: aws_thing
@@ -438,11 +438,11 @@ func TestLabelCorrectness_ComputedOnlyMislabeledPermissive(t *testing.T) {
 	}
 }
 
-// TestLabelCorrectness_ComputedOnlyMislabeledStrict: with
+// TestLabels_ComputedOnlyMislabeledStrict: with
 // allow_inline_read_only = false, a computed-only field mislabeled in Argument
 // Reference is checkComputedMisplacement's concern, so labelCorrectness must not
 // emit a (Read-Only) "use" finding (avoid double-reporting).
-func TestLabelCorrectness_ComputedOnlyMislabeledStrict(t *testing.T) {
+func TestLabels_ComputedOnlyMislabeledStrict(t *testing.T) {
 	t.Parallel()
 
 	src := `# Resource: aws_thing
@@ -465,12 +465,12 @@ func TestLabelCorrectness_ComputedOnlyMislabeledStrict(t *testing.T) {
 	}
 }
 
-// TestLabelCorrectness_ContradictoryLabelNotBypassed guards against a
+// TestLabels_ContradictoryLabelNotBypassed guards against a
 // contradictory bullet like "(Read-Only, Optional)" — the parser sets a boolean
 // per trait, so both fields are true. The documented label must be built from
 // all categories so it cannot coincide with the single-valued schema label and
 // slip through. (Copilot #71 review.)
-func TestLabelCorrectness_ContradictoryLabelNotBypassed(t *testing.T) {
+func TestLabels_ContradictoryLabelNotBypassed(t *testing.T) {
 	t.Parallel()
 
 	src := `# Resource: aws_thing
@@ -493,11 +493,11 @@ func TestLabelCorrectness_ContradictoryLabelNotBypassed(t *testing.T) {
 	}
 }
 
-// TestLabelCorrectness_AttrRefContradictoryStripsAll: a contradictory bullet
+// TestLabels_AttrRefContradictoryStripsAll: a contradictory bullet
 // under Attribute Reference, e.g. "(Required, Read-Only)" on a computed-only
 // field, must name every label to remove in one finding so the fix does not
 // require a second lint pass. (Copilot #71 review.)
-func TestLabelCorrectness_AttrRefContradictoryStripsAll(t *testing.T) {
+func TestLabels_AttrRefContradictoryStripsAll(t *testing.T) {
 	t.Parallel()
 
 	src := `# Resource: aws_thing
@@ -523,12 +523,12 @@ func TestLabelCorrectness_AttrRefContradictoryStripsAll(t *testing.T) {
 	}
 }
 
-// TestLabelCorrectness_ReadOnlyLabeledConfigurableMoves: a configurable field
+// TestLabels_ReadOnlyLabeledConfigurableMoves: a configurable field
 // mislabeled (Read-Only) under Attribute Reference must be directed to move to
 // Argument Reference (where its label is then corrected), not merely told to
 // strip the label — which would leave the misplaced field silently accepted.
 // (Copilot #71 review.)
-func TestLabelCorrectness_ReadOnlyLabeledConfigurableMoves(t *testing.T) {
+func TestLabels_ReadOnlyLabeledConfigurableMoves(t *testing.T) {
 	t.Parallel()
 
 	src := `# Resource: aws_thing
@@ -560,11 +560,11 @@ func TestLabelCorrectness_ReadOnlyLabeledConfigurableMoves(t *testing.T) {
 	}
 }
 
-// TestLabelCorrectness_ComputedOnlyMislabeledCoverageDisabled: with the coverage
+// TestLabels_ComputedOnlyMislabeledCoverageDisabled: with the coverage
 // sub-check disabled and labels enabled, checkComputedMisplacement never runs, so
 // labels must itself report a computed-only argument mislabeled (Required)/
 // (Optional) rather than dropping the only finding. (Copilot #71 review.)
-func TestLabelCorrectness_ComputedOnlyMislabeledCoverageDisabled(t *testing.T) {
+func TestLabels_ComputedOnlyMislabeledCoverageDisabled(t *testing.T) {
 	t.Parallel()
 
 	src := `# Resource: aws_thing
@@ -594,10 +594,10 @@ func TestLabelCorrectness_ComputedOnlyMislabeledCoverageDisabled(t *testing.T) {
 	}
 }
 
-// TestSchemaDocsRule_NoFalseLabelsWarning verifies that attributes in the
+// TestLabels_NoFalseLabelsWarning verifies that attributes in the
 // Attribute Reference section are NOT flagged for missing (Required)/(Optional)
 // labels, even when broad heading templates cause them to appear in ArgumentBlocks.
-func TestSchemaDocsRule_NoFalseLabelsWarning(t *testing.T) {
+func TestLabels_NoFalseLabelsWarning(t *testing.T) {
 	t.Parallel()
 
 	templates := doc.HeadingTemplates{"`{Block}` Block", "{Block} Block", "{Block}", "{Title}"}
@@ -717,7 +717,7 @@ func TestLabels_ConfigurableBlockUnderAttributeReference(t *testing.T) {
 
 // A computed field referenced by dot-path under Attribute Reference (no label)
 // must not be treated as misplaced, even though its block is configurable in
-// the schema. Guards the false positive found in TestSchemaDocsRule_Complete.
+// the schema. Guards the false positive found in TestCoverage_FixtureComplete.
 func TestLabels_ComputedDotPathReferenceNotMisplaced(t *testing.T) {
 	t.Parallel()
 
