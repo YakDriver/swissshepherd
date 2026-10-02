@@ -2440,3 +2440,176 @@ func TestLabels_BudgetFixtureMisplacement(t *testing.T) {
 		t.Errorf("an unresolved prose heading must never produce a move: %+v", results)
 	}
 }
+
+// TestLabels_ServedPaths: a section is label-checked against every path it
+// serves, so shared and partly qualified sections are checked too (#80).
+// Root -> a -> a.z and root -> b -> b.z; w -> w.a -> w.a.z for qualified keys.
+func TestLabels_ServedPaths(t *testing.T) {
+	t.Parallel()
+
+	block := func(attrs ...schema.Attribute) *schema.Block { return &schema.Block{Attributes: attrs} }
+	req := func(n string) schema.Attribute { return schema.Attribute{Name: n, Required: true} }
+	opt := func(n string) schema.Attribute { return schema.Attribute{Name: n, Optional: true} }
+	ro := func(n string) schema.Attribute { return schema.Attribute{Name: n, Computed: true} }
+	twoZ := func(az, bz *schema.Block) *schema.ResourceSchema {
+		return &schema.ResourceSchema{Name: "aws_thing", Blocks: map[string]*schema.Block{
+			"":    {Attributes: []schema.Attribute{ro("id")}, ChildBlocks: []string{"a", "b"}},
+			"a":   {Attributes: []schema.Attribute{opt("n")}, ChildBlocks: []string{"z"}},
+			"b":   {Attributes: []schema.Attribute{opt("n")}, ChildBlocks: []string{"z"}},
+			"a.z": az,
+			"b.z": bz,
+		}}
+	}
+	const parents = "## Argument Reference\n\n* `a` - (Optional) A.\n* `b` - (Optional) B.\n\n" +
+		"### `a` Block\n\n* `n` - (Optional) N.\n* `z` - (Optional) Z.\n\n" +
+		"### `b` Block\n\n* `n` - (Optional) N.\n* `z` - (Optional) Z.\n\n"
+	const attrs = "\n## Attribute Reference\n\n* `id` - ID.\n"
+	on, off := true, false
+
+	testCases := map[string]struct {
+		rs       *schema.ResourceSchema
+		md       string
+		coverage *bool
+		inline   *bool
+		want     []string // substrings of labels findings, in order
+		also     string   // a substring some other finding must contain
+		without  string   // a substring no finding may contain
+	}{
+		"shared section, label wrong at every path": {
+			rs:   twoZ(block(req("x")), block(req("x"))),
+			md:   parents + "### `z` Block\n\n* `x` - (Optional) X.\n" + attrs,
+			want: []string{`argument "x" in block "z" is labeled (Optional) but is required in the schema; use (Required)`},
+		},
+		"shared section, label right at every path": {
+			rs: twoZ(block(req("x")), block(req("x"))),
+			md: parents + "### `z` Block\n\n* `x` - (Required) X.\n" + attrs,
+		},
+		"partly qualified key": {
+			rs: &schema.ResourceSchema{Name: "aws_thing", Blocks: map[string]*schema.Block{
+				"":      {Attributes: []schema.Attribute{ro("id")}, ChildBlocks: []string{"w", "z"}},
+				"w":     {Attributes: []schema.Attribute{opt("n")}, ChildBlocks: []string{"a"}},
+				"w.a":   {Attributes: []schema.Attribute{opt("n")}, ChildBlocks: []string{"z"}},
+				"w.a.z": block(opt("x")),
+				"z":     block(req("x")),
+			}},
+			md: "## Argument Reference\n\n* `w` - (Optional) W.\n* `z` - (Optional) Z.\n\n### `w` Block\n\n* `n` - (Optional) N.\n* `a` - (Optional) A.\n\n" +
+				"### `w.a` Block\n\n* `n` - (Optional) N.\n* `z` - (Optional) Z.\n\n### `a.z` Block\n\n* `x` - (Required) X.\n\n### `z` Block\n\n* `x` - (Required) X.\n" + attrs,
+			want: []string{`argument "x" in block "a.z" is labeled (Required) but is optional in the schema; use (Optional)`},
+		},
+		// The shared-section finding reports the conflict once; per-path
+		// label findings would contradict each other.
+		"paths disagree": {
+			rs:   twoZ(block(req("x")), block(opt("x"))),
+			md:   parents + "### `z` Block\n\n* `x` - (Optional) X.\n" + attrs,
+			also: `"x" is (Required) at "a.z" and (Optional) at "b.z"`,
+		},
+		"paths disagree, coverage off": {
+			rs:       twoZ(block(req("x")), block(opt("x"))),
+			md:       parents + "### `z` Block\n\n* `x` - (Optional) X.\n" + attrs,
+			coverage: &off,
+		},
+		// A ConfigUnknown block's labels are unknowable, so only the known
+		// path decides.
+		"one path ConfigUnknown": {
+			rs:   twoZ(block(req("x")), &schema.Block{Attributes: []schema.Attribute{ro("x")}, ConfigUnknown: true}),
+			md:   parents + "### `z` Block\n\n* `x` - (Optional) X.\n" + attrs,
+			want: []string{`argument "x" in block "z" is labeled (Optional) but is required in the schema`},
+		},
+		"every path ConfigUnknown": {
+			rs: twoZ(&schema.Block{Attributes: []schema.Attribute{ro("x")}, ConfigUnknown: true}, &schema.Block{Attributes: []schema.Attribute{ro("x")}, ConfigUnknown: true}),
+			md: parents + "### `z` Block\n\n* `x` - (Optional) X.\n" + attrs,
+		},
+		// Strict mode: Read-Only coverage reports the move for each path.
+		"computed-only in a shared section": {
+			rs:   twoZ(block(opt("x"), ro("r")), block(opt("x"), ro("r"))),
+			md:   parents + "### `z` Block\n\n* `x` - (Optional) X.\n* `r` - (Optional) R.\n" + attrs,
+			also: `Read-Only attribute "r" in block "b.z" should be documented in Attribute Reference section`,
+		},
+		"computed-only in a shared section, coverage off": {
+			rs:       twoZ(block(opt("x"), ro("r")), block(opt("x"), ro("r"))),
+			md:       parents + "### `z` Block\n\n* `x` - (Optional) X.\n* `r` - (Optional) R.\n" + attrs,
+			coverage: &off,
+			want:     []string{`argument "r" in block "z" is labeled (Optional) but is computed-only in the schema; move it to Attribute Reference and remove the label`},
+		},
+		// Attribute Reference documents it at every path, so coverage is
+		// satisfied and nothing else reports the labeled duplicate.
+		"computed-only also in Attribute Reference": {
+			rs:   twoZ(block(opt("x"), ro("r")), block(opt("x"), ro("r"))),
+			md:   parents + "### `z` Block\n\n* `x` - (Optional) X.\n* `r` - (Optional) R.\n" + attrs + "\n### `z` Block\n\n* `r` - R.\n",
+			want: []string{`argument "r" in block "z" is labeled (Optional) but is computed-only in the schema; Attribute Reference already documents it, so remove it from Argument Reference`},
+		},
+		// Strict mode: (Read-Only) isn't an Argument Reference label, so a
+		// computed-only field labeled (Read-Only) and also documented in
+		// Attribute Reference is a duplicate to remove.
+		"strict Read-Only, also in Attribute Reference": {
+			rs:   twoZ(block(opt("x"), ro("r")), block(opt("x"), ro("r"))),
+			md:   parents + "### `z` Block\n\n* `x` - (Optional) X.\n* `r` - (Read-Only) R.\n" + attrs + "\n### `z` Block\n\n* `r` - R.\n",
+			want: []string{`argument "r" in block "z" is labeled (Read-Only) but is computed-only in the schema; Attribute Reference already documents it`},
+		},
+		// Coverage reports the move; "add (Required) or (Optional)" would be
+		// the wrong fix.
+		"strict Read-Only, only in Argument Reference": {
+			rs:      twoZ(block(opt("x"), ro("r")), block(opt("x"), ro("r"))),
+			md:      parents + "### `z` Block\n\n* `x` - (Optional) X.\n* `r` - (Read-Only) R.\n" + attrs,
+			also:    `Read-Only attribute "r" in block "b.z" should be documented in Attribute Reference section`,
+			without: `"r" in block "z" is missing`,
+		},
+		// A path without the field doesn't stop the check: Attribute
+		// Reference documents it at every path that has it.
+		"computed-only absent at one path, also in Attribute Reference": {
+			rs:   twoZ(block(opt("x"), ro("r")), block(opt("x"))),
+			md:   parents + "### `z` Block\n\n* `x` - (Optional) X.\n* `r` - (Optional) R.\n" + attrs + "\n### `a.z` Block\n\n* `r` - R.\n",
+			want: []string{`argument "r" in block "z" is labeled (Optional) but is computed-only in the schema; Attribute Reference already documents it`},
+		},
+		"computed-only, inline Read-Only allowed": {
+			rs:     twoZ(block(opt("x"), ro("r")), block(opt("x"), ro("r"))),
+			md:     parents + "### `z` Block\n\n* `x` - (Optional) X.\n* `r` - (Optional) R.\n" + attrs,
+			inline: &on,
+			want:   []string{`argument "r" in block "z" is labeled (Optional) but is read-only in the schema; use (Read-Only)`},
+		},
+		// Several headings for one key: the fit rule compares each heading's
+		// labels, so labels doesn't compare their merged bullets.
+		"duplicate headings": {
+			rs:   twoZ(block(req("x")), block(req("x"), opt("y"))),
+			md:   parents + "### `z` Block\n\n* `x` - (Optional) X.\n\n### `z` Block\n\n* `x` - (Required) X.\n* `y` - (Optional) Y.\n" + attrs,
+			also: `documents block "a.z" exactly; the closest, at line 16: "x" should be (Required)`,
+		},
+		"duplicate headings, coverage off": {
+			rs:       twoZ(block(req("x")), block(req("x"))),
+			md:       parents + "### `z` Block\n\n* `x` - (Optional) X.\n\n### `z` Block\n\n* `x` - (Required) X.\n" + attrs,
+			coverage: &off,
+			want:     []string{`argument "x" in block "z" is labeled (Optional) but is required in the schema`},
+		},
+	}
+	for name, tc := range testCases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			d, err := doc.ParseWithTemplates([]byte(tc.md), "aws_thing", doc.HeadingTemplates{"`{Path}` Block", "`{Block}` Block"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			rule := check.SchemaDocsRule{Ordering: &off, Description: &off, Format: &off, Byline: &off, Heading: &off, Coverage: tc.coverage, AllowInlineReadOnly: tc.inline}
+			results := rule.Check(check.CheckContext{Resource: "aws_thing", Schema: tc.rs, Doc: d})
+			var got []string
+			for _, r := range results {
+				if strings.Contains(r.Message, " is labeled ") {
+					got = append(got, r.Message)
+				}
+			}
+			if len(got) != len(tc.want) {
+				t.Fatalf("labels findings = %q, want %d matching %q; all:\n  %s", got, len(tc.want), tc.want, joinMessages(results))
+			}
+			for i, w := range tc.want {
+				if !strings.Contains(got[i], w) {
+					t.Errorf("finding %d = %q, want it to contain %q", i, got[i], w)
+				}
+			}
+			if tc.without != "" && hasMsg(results, tc.without) {
+				t.Errorf("unexpected %q in:\n  %s", tc.without, joinMessages(results))
+			}
+			if tc.also != "" && !hasMsg(results, tc.also) {
+				t.Errorf("missing %q in:\n  %s", tc.also, joinMessages(results))
+			}
+		})
+	}
+}

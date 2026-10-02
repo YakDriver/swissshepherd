@@ -428,7 +428,7 @@ Also:
 
 ### Follow-up: label correctness per served path
 
-Tracked in #80. Not in #77, but decided here rather than discovered afterwards. `labelCorrectness` resolves a section with `resolveSubsectionPath`, which accepts only an exact path, an exact root-level name, or a leaf unique across the schema (`schema_docs.go:1545-1571`), and returns nil when that fails (1086-1088). Every section this design treats as a legitimate shared section therefore gets no label check at all. Measured over backtick-style Argument Reference headings:
+Not in #77, but decided here rather than discovered afterwards; done in #80 ("As built" at the end of this section). `labelCorrectness` resolves a section with `resolveSubsectionPath`, which accepts only an exact path, an exact root-level name, or a leaf unique across the schema (`schema_docs.go:1545-1571`), and returns nil when that fails (1086-1088). Every section this design treats as a legitimate shared section therefore gets no label check at all. Measured over backtick-style Argument Reference headings:
 
 | heading resolves as | sections | bullets | labels checked |
 |---|---:|---:|---|
@@ -443,6 +443,12 @@ The fix is to check each labeled field in S against each path S serves, using th
 - **It needs its own corpus diff.** ~893 bullets have never been label-checked, so the finding count is unmeasured. Landing it inside #77 would bury #77's own diff.
 
 Why the split: disjunct 2 closes the exposure #77 creates, since the design blesses shared sections and its suggestion steers authors toward the short qualified keys `resolveSubsectionPath` can't resolve. This follow-up closes the pre-existing hole, where a shared section's paths all agree on a label and the documented label is simply wrong. #77 doesn't widen that one.
+
+**As built (#80).** `labelCorrectness` takes the section's served paths from `sectionIndex`, the same index coverage uses, and `servedLabel` settles the one correct label across them. It returns nothing when no served path with known labels has the field as a scalar, or when the paths disagree; the second is disjunct 2's finding, so per-path findings never contradict each other. `ConfigUnknown` paths are left out, as in disjunct 2. With coverage on, a duplicated key is left to the fit rule, which already compares labels per heading, as `checkDeprecated` does since 6g. The misplacement resolver is unchanged.
+
+The deferral hazard was real, though not from the resolvers disagreeing. Strict mode defers a computed-only field labeled in Argument Reference to coverage, but coverage reports it only where Attribute Reference doesn't document it (`checkComputedMisplacement` at the root, Read-Only coverage below it). A field documented in both sections, with a label in Argument Reference, got no finding at all, including a strict-mode `(Read-Only)` label, which labels never compared. `labels` now defers only when some served path that has the field lacks it in Attribute Reference, and otherwise reports it, saying to remove the Argument Reference entry. A strict-mode `(Read-Only)` on a computed-only field no longer gets the missing-label warning, whose fix (add `(Required)` or `(Optional)`) was wrong; on a configurable field it still does.
+
+*Measured* (terraform-provider-aws @ `34167e0962c`, base `main` @ `c8b4de6`): full ERROR 18,793 → 18,812, weak 28 → 37, warnings unchanged, nothing removed, deterministic. All 19 added findings are wrong labels in shared sections (2 to 318 served paths), each confirmed against the schema at every served path: e.g. `encryption_option` in `aws_athena_workgroup`'s shared `encryption_configuration` section is labeled (Required) but is Optional at both paths. The ~893 never-checked bullets measured above yield 19 errors; the rest have correct labels.
 
 ## 8. Measured impact
 
@@ -506,7 +512,7 @@ The #77 bug began as a false positive that was made to go away rather than made 
 
 | Unchecked | Why | Reported by | Tracking |
 |---|---|---|---|
-| Labels in shared and short-qualified sections (~317 sections, ~893 bullets) | `resolveSubsectionPath` returns unresolved, so `labelCorrectness` emits nothing | Cross-path label conflicts only, via disjunct 2. A label that is uniformly wrong across the served paths is unreported. | #80 (§7 follow-up) |
+| Labels in shared and short-qualified sections (~317 sections, ~893 bullets) | `resolveSubsectionPath` returns unresolved, so `labelCorrectness` emits nothing | Cross-path label conflicts only, via disjunct 2. A label that is uniformly wrong across the served paths is unreported. | Fixed in #80: `labels` checks every served path |
 | Fields of Attribute Reference sections naming object-typed attributes | §5 exempts them from "unresolved section" because `checkPhantomBlocks` deliberately allows those headings. But allowing isn't checking: with `nested_object_attributes` off, which it is in both provider configs, no path resolves to the section and its fields are compared against nothing. This is the original defect's exact shape — a section's contents accepted unverified — so it is the one row that most needs closing. | nothing | #81 |
 | Labels and placement inside `ConfigUnknown` blocks | `labelCorrectness` and `configurableArgAtPath` return early for them: per-field `Required`/`Optional` is unknowable (§6 never guess). Field existence still applies. | nothing, by design | — |
 | Field, ordering, description, and label checks on bullets under an unparseable heading | The bullets belong to no section (§5) | The unparseable-heading warning (step 4a), which names the heading and suggests one; fixing it restores every check. The `description` check still runs on them, naming the heading instead of a block (step 4a′); the rest wait for the heading. Prose naming a block under such a heading gives its list a section (step 6c). | — |
