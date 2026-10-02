@@ -1977,6 +1977,15 @@ func (r *SchemaDocsRule) checkLabels(ctx CheckContext, idx map[*doc.DocBlock][]s
 				}
 				continue
 			}
+			// Strict mode: (Read-Only) isn't an Argument Reference label. On a
+			// computed-only field the fix is a move, not a label, so the
+			// missing-label warning below would name the wrong fix.
+			if paths, ok := r.labelPaths(ctx, idx, blockName); attr.ReadOnly && ok && r.servedLabel(ctx.Schema, paths, attr.Name) == "(Read-Only)" {
+				if res := r.labelCorrectness(ctx, idx, blockName, attr); res != nil {
+					results = append(results, *res)
+				}
+				continue
+			}
 			// Skip if this attr is also in the attribute section (template bleed:
 			// broad heading templates can mirror an *unlabeled* attribute-section
 			// item into ArgumentBlocks). This guard is scoped to the missing-label
@@ -2039,16 +2048,9 @@ func (r *SchemaDocsRule) checkLabels(ctx CheckContext, idx map[*doc.DocBlock][]s
 // the parser sets attr.Required/attr.Optional from the leading token, so the
 // booleans compared here are already correct regardless of trailing traits.
 func (r *SchemaDocsRule) labelCorrectness(ctx CheckContext, idx map[*doc.DocBlock][]string, blockName string, attr doc.DocAttribute) *Result {
-	if ctx.Schema == nil {
+	paths, ok := r.labelPaths(ctx, idx, blockName)
+	if !ok {
 		return nil
-	}
-	paths := []string{""}
-	if blockName != "" {
-		b := ctx.Doc.ArgumentBlocks[blockName]
-		if duplicated(b) && enabled(r.Coverage) {
-			return nil
-		}
-		paths = idx[b]
 	}
 	want := r.servedLabel(ctx.Schema, paths, attr.Name)
 	if want == "" {
@@ -2075,24 +2077,24 @@ func (r *SchemaDocsRule) labelCorrectness(ctx CheckContext, idx map[*doc.DocBloc
 		return nil // unlabeled — not reached from the argument loop
 	}
 	have := strings.Join(docLabels, ", ")
-
-	if have == want {
-		return nil // exactly one category label, and it matches the schema
-	}
-
-	// A computed-only attribute mislabeled (Required)/(Optional) needs care:
+	// A computed-only attribute in Argument Reference, under any label, needs
+	// care:
 	//   - permissive mode (allow_inline_read_only): inline documentation is
 	//     allowed and (Read-Only) is the correct label — reported below with
 	//     "use (Read-Only)".
-	//   - strict mode: the field does not belong in Argument Reference at all.
-	//     checkComputedMisplacement reports that move, but it runs only from the
-	//     coverage sub-check. Defer to it only when coverage is enabled (avoiding
-	//     a double finding); when coverage is disabled that check never runs, so
-	//     labels must report the strict-mode fix itself or the finding is lost.
+	//   - strict mode: the field does not belong in Argument Reference at all,
+	//     even labeled (Read-Only). Coverage reports that move
+	//     (checkComputedMisplacement at the root, Read-Only coverage below it),
+	//     but only where Attribute Reference doesn't document the field, and
+	//     only when coverage is enabled. Labels defers exactly then, avoiding a
+	//     double finding, and otherwise reports it itself.
 	if want == "(Read-Only)" && !r.allowInlineReadOnly() {
-		// Coverage reports the field only where Attribute Reference doesn't
-		// document it, so labels defers only then.
 		inAttrs := !slices.ContainsFunc(paths, func(p string) bool {
+			if b := ctx.Schema.Blocks[p]; b == nil || b.ConfigUnknown {
+				return false
+			} else if _, ok := attrAt(b, attr.Name); !ok {
+				return false
+			}
 			s := resolveSection(ctx.Schema, ctx.Doc.AttributeBlocks, p)
 			return s == nil || !slices.ContainsFunc(s.Attributes, func(a doc.DocAttribute) bool { return a.Name == attr.Name })
 		})
@@ -2115,6 +2117,10 @@ func (r *SchemaDocsRule) labelCorrectness(ctx CheckContext, idx map[*doc.DocBloc
 		}
 	}
 
+	if have == want {
+		return nil // exactly one category label, and it matches the schema
+	}
+
 	msg := fmt.Sprintf("argument %q is labeled %s but is %s in the schema; use %s", attr.Name, have, state, want)
 	if blockName != "" {
 		msg = fmt.Sprintf("argument %q in block %q is labeled %s but is %s in the schema; use %s", attr.Name, displayPath(blockName), have, state, want)
@@ -2125,6 +2131,23 @@ func (r *SchemaDocsRule) labelCorrectness(ctx CheckContext, idx map[*doc.DocBloc
 		Block:   blockName,
 		Line:    attr.Line,
 	}
+}
+
+// labelPaths returns the schema paths an Argument Reference section's labels
+// are checked against, or false when labels leaves the section to the fit
+// rule (a duplicated key with coverage on) or there's no schema.
+func (r *SchemaDocsRule) labelPaths(ctx CheckContext, idx map[*doc.DocBlock][]string, blockName string) ([]string, bool) {
+	if ctx.Schema == nil {
+		return nil, false
+	}
+	if blockName == "" {
+		return []string{""}, true
+	}
+	b := ctx.Doc.ArgumentBlocks[blockName]
+	if duplicated(b) && enabled(r.Coverage) {
+		return nil, false
+	}
+	return idx[b], true
 }
 
 // servedLabel returns the one schema-correct label for field f across paths,

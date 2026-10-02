@@ -2473,6 +2473,7 @@ func TestLabels_ServedPaths(t *testing.T) {
 		inline   *bool
 		want     []string // substrings of labels findings, in order
 		also     string   // a substring some other finding must contain
+		without  string   // a substring no finding may contain
 	}{
 		"shared section, label wrong at every path": {
 			rs:   twoZ(block(req("x")), block(req("x"))),
@@ -2537,6 +2538,29 @@ func TestLabels_ServedPaths(t *testing.T) {
 			md:   parents + "### `z` Block\n\n* `x` - (Optional) X.\n* `r` - (Optional) R.\n" + attrs + "\n### `z` Block\n\n* `r` - R.\n",
 			want: []string{`argument "r" in block "z" is labeled (Optional) but is computed-only in the schema; Attribute Reference already documents it, so remove it from Argument Reference`},
 		},
+		// Strict mode: (Read-Only) isn't an Argument Reference label, so a
+		// computed-only field labeled (Read-Only) and also documented in
+		// Attribute Reference is a duplicate to remove.
+		"strict Read-Only, also in Attribute Reference": {
+			rs:   twoZ(block(opt("x"), ro("r")), block(opt("x"), ro("r"))),
+			md:   parents + "### `z` Block\n\n* `x` - (Optional) X.\n* `r` - (Read-Only) R.\n" + attrs + "\n### `z` Block\n\n* `r` - R.\n",
+			want: []string{`argument "r" in block "z" is labeled (Read-Only) but is computed-only in the schema; Attribute Reference already documents it`},
+		},
+		// Coverage reports the move; "add (Required) or (Optional)" would be
+		// the wrong fix.
+		"strict Read-Only, only in Argument Reference": {
+			rs:      twoZ(block(opt("x"), ro("r")), block(opt("x"), ro("r"))),
+			md:      parents + "### `z` Block\n\n* `x` - (Optional) X.\n* `r` - (Read-Only) R.\n" + attrs,
+			also:    `Read-Only attribute "r" in block "b.z" should be documented in Attribute Reference section`,
+			without: `"r" in block "z" is missing`,
+		},
+		// A path without the field doesn't stop the check: Attribute
+		// Reference documents it at every path that has it.
+		"computed-only absent at one path, also in Attribute Reference": {
+			rs:   twoZ(block(opt("x"), ro("r")), block(opt("x"))),
+			md:   parents + "### `z` Block\n\n* `x` - (Optional) X.\n* `r` - (Optional) R.\n" + attrs + "\n### `a.z` Block\n\n* `r` - R.\n",
+			want: []string{`argument "r" in block "z" is labeled (Optional) but is computed-only in the schema; Attribute Reference already documents it`},
+		},
 		"computed-only, inline Read-Only allowed": {
 			rs:     twoZ(block(opt("x"), ro("r")), block(opt("x"), ro("r"))),
 			md:     parents + "### `z` Block\n\n* `x` - (Optional) X.\n* `r` - (Optional) R.\n" + attrs,
@@ -2579,6 +2603,9 @@ func TestLabels_ServedPaths(t *testing.T) {
 				if !strings.Contains(got[i], w) {
 					t.Errorf("finding %d = %q, want it to contain %q", i, got[i], w)
 				}
+			}
+			if tc.without != "" && hasMsg(results, tc.without) {
+				t.Errorf("unexpected %q in:\n  %s", tc.without, joinMessages(results))
 			}
 			if tc.also != "" && !hasMsg(results, tc.also) {
 				t.Errorf("missing %q in:\n  %s", tc.also, joinMessages(results))
