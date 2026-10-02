@@ -2,7 +2,7 @@
 <!-- Copyright IBM Corp. 2019, 2026 -->
 <!-- SPDX-License-Identifier: MPL-2.0 -->
 
-> **Status:** proposed design for #77. Not implemented.
+> **Status:** implemented for #77 in PR #87. §7 records each step as built and measured; where the build deviated from the design, the step says so.
 
 ## Acceptance cases
 
@@ -319,7 +319,7 @@ The `labels` precedent doesn't apply in either direction. `labels` suppresses it
 Two consequences to accept deliberately:
 
 - A config with `coverage = false, heading = true` loses ambiguity detection, and with it the only coherent check for cross-path label, deprecation, and child-content conflicts (disjuncts 2–4). Reimplementing the trigger in `checkHeadings` to preserve it would leave two implementations of one comparison, which `AGENTS.md` warns against.
-- Severity stays warning for all four disjuncts. Disjunct 1 accompanies at least one coverage or `labels` finding, which carries the defect's own severity (a deprecated field's missing-field finding is a warning, per `severity(attr)`). Disjuncts 2–4 stand alone; for 2 and 3, warning matches what `labelCorrectness` and `checkDeprecated` emit for the same defects, and 4 follows them.
+- Severity: disjuncts 1 and 4 are warnings; 2 and 3 are errors (step 6b). Disjunct 1 accompanies at least one coverage or `labels` finding, which carries the defect's own severity (a deprecated field's missing-field finding is a warning, per `severity(attr)`). Disjunct 4 accompanies the child-level findings, or explains a parent bullet no single child section can be right for. Disjuncts 2 and 3 stand alone: no single marker is right for every path, and an error matches what `labelCorrectness`, `checkDeprecated`, and the fit rule emit for the same defect.
 
 ## 7. Scope
 
@@ -340,7 +340,7 @@ Out of scope: wrong-target links are for `anchors` (#82). Consolidating *differe
 
 The order is load-bearing, not cosmetic. Deleting `existsInSiblingBlock` before resolution is tightened surfaces #77's categories C and D against correct docs, which is why the issue calls for a redesign instead of a deletion. Each step gets its own corpus diff; six diffs that can each be explained beat one of several thousand lines where no finding can be attributed to a cause.
 
-1. **Resolver consolidation.** The single §4 resolve function, per reference section, replacing all four call sites; `findDocBlockIn` folded in; the `anchors` parameter and link branch deleted. `existsInSiblingBlock` still in place. With `existsInSiblingBlock` still in place, the 714 suppressed findings stay hidden, so category C is not visible in this diff. Expect changes in missing-field findings (credit stops crossing paths), Read-Only coverage (`checkAttributeCoverage`), `checkDeprecated`, and the `heading` ambiguity warning, which now resolves through the new function. *Measured* (provider @ `34167e0962c`, base `6ea7434`): full config +1 error (`aws_autoscaling_group` `mixed_instances_policy.launch_template.override.launch_template_specification`, documented only under another path's full-path heading), plus 4 phantom warnings whose reported path changed (leaf dedup, step 3); weak config 3 → 26 errors, the 23 link-only Read-Only errors in §4 Links. Output identical across runs.
+1. **Resolver consolidation.** The single §4 resolve function, per reference section, replacing all four call sites; `findDocBlockIn` folded in; the `anchors` parameter and link branch deleted. `existsInSiblingBlock` still in place. With `existsInSiblingBlock` still in place, the 714 suppressed findings stay hidden, so category C is not visible in this diff. Expect changes in missing-field findings (credit stops crossing paths), Read-Only coverage (`checkAttributeCoverage`), `checkDeprecated`, and the `heading` ambiguity warning, which now resolves through the new function. *Measured* (provider @ `34167e0962c`, base `6ea7434`): full config +1 error (`aws_autoscaling_group` `mixed_instances_policy.launch_template.override.launch_template_specification`, documented only under another path's full-path heading), plus 4 phantom warnings whose reported path changed (leaf dedup, step 3); weak config 0 → 23 errors, the 23 link-only Read-Only errors in §4 Links. Output identical across runs. (An earlier version of this entry gave 3 → 26, measured in the `terraform-provider-aws` checkout, whose cached schema predates `aws2`'s refreshed one; re-measured in `aws2` like every later step.)
 1b. **Orphan bullets under unparseable headings** (§5, attribution change). Parser only; removes findings. *Measured* (`terraform-provider-aws2` @ `34167e0962c`, base = step 1): full config ERROR 14,000 → 13,902, WARN 5,177 → 5,009; removed 100 errors and 168 warnings, added 2. Every removed finding with a line number (254) sits under a heading no template matches; the other 14 are ordering findings that existed only because orphaned bullets were mixed into the previous section's list. The 2 added are real `description` errors (root `id`/`status` starting with "The") that were hidden because the description check's `seen` map is keyed by section name plus field across both reference sections, so an orphaned bullet credited to the root suppressed the real one. Weak config unchanged (23 errors).
 2. **Delete `existsInSiblingBlock`.** Expect the ~635 field-existence errors. Category C shows up here as the gap between the 714 findings suppressed today and the ~635 that appear: those are the paths step 1 stopped crediting with another path's section. *Measured* (`terraform-provider-aws2` @ `34167e0962c`, base = step 1b): full config +42 WARN, 0 ERROR, 0 removed; weak config +1 WARN (`aws_arcregionswitch_plan` `parallel_config` at `workflow.step.parallel_config.step`, the field §8 predicted). All 43 checked against the schema: each field is absent at the reported path, 0 false positives. They are warnings, not errors, because the existing phantom finding is `SeverityWarning`; §10 says field-existence findings are errors, which is still to be done. The count is 42 rather than ~635 because leaf+field dedup still collapses repeats; step 3 expands them. Category C does not appear: step 1 already resolved those paths to their own sections.
 3. **Path-keyed dedup.** Expect the QuickSight increase (about 312 → 7,500 per resource). *Measured* (`terraform-provider-aws2` @ `34167e0962c`, base = step 2): full config ERROR 13,902 → 42,093, WARN 5,051 → 5,771, 0 removed; weak config unchanged (23 ERROR, 1 WARN). Added 28,191 missing-block errors (QuickSight 7,226 per resource; `aws_wafv2_web_acl_rule` 3,419, `aws_wafv2_rule_group` 1,695, `aws_wafv2_web_acl` 1,187) and 720 phantom warnings. Checked against the schema: every missing block has configurable fields, every phantom field is absent at its path. 76 of the phantoms are at the root and name the wrong defect: bullets introduced by prose with no heading (`aws_iot_topic_rule`: "The `cloudwatch_logs` object takes the following arguments:") are credited to the previous section. The prose isn't a recognized lead-in and there's no heading for §5 to report; see §9.
@@ -354,8 +354,6 @@ The order is load-bearing, not cosmetic. Deleting `existsInSiblingBlock` before 
   Two defects caught on the corpus, each with a test that fails without the fix: a field that is an attribute at one path and a child block at another was compared as a label (`aws_msk_cluster` `tls`, "(Optional) and (Read-Only)"); and a disjunct-4 finding under a recursive name named one parent twice (WAFv2 `statement`, "between rule.statement and rule.statement"), because the parent was recovered by prefix matching rather than by dropping the leaf.
 
   Deviation: the field-existence message carries the section and the paths where the field does exist, but not the section's line; the line is already the finding's own location.
-4. **§5 findings and the parser change** (occurrence lists and the duplicate-heading fit rule). Must be in the same release as step 1, per §5's release condition; "unresolved section" may trail the other two.
-5. **Shared-section finding into `coverage`** with the four disjuncts, and `checkHeadings` reduced to the preferred-style check.
 6. **Home-section check** for unlabeled single-home fields. *Measured* (base = 5): full config ERROR 17,497 → 17,504, WARN 4,490 → 4,507; weak config ERROR 24 → 24, WARN 12 → 19; nothing removed. All 24 added findings checked against the schema and the doc: each field is `Required` or `Optional`, not `Computed`, and listed only under Attribute Reference without a label. 17 are root scalars, mostly data-source arguments listed only as exported attributes (`aws_elasticache_user.user_name`, `aws_ses_email_identity.email`); 7 are nested (`filter` blocks under Attribute Reference in `aws_ami` and `aws_ami_ids`, a combined "Accepter and Requester" heading, a routed `payment_configuration.query_compute.is_responsible`).
 
   Scope: scalar attributes only. Coverage requires child blocks through the block-level finding, not a parent bullet, so a child-block bullet in the wrong section has no missing-field finding to extend. The reverse direction (a computed-only field only under Argument Reference, unlabeled) needs no new finding: Read-Only coverage already reports it as not documented in Attribute Reference (error), and `labels` reports the missing label.
@@ -365,6 +363,9 @@ The order is load-bearing, not cosmetic. Deleting `existsInSiblingBlock` before 
 6c. **Prose lists are sections** (decision, §10; §5 rewritten). Replaces 4a's rule, which left a prose list's bullets in no section when none was the enclosing section's and in place otherwise. *Measured* (base = 6b): full config ERROR 17,681 → 18,789, WARN 4,330 → 4,483; weak config unchanged (28 / 15). The prose warning's wording changes (167 → 239 lines, now also after an unresolved or unparseable heading), and description findings on prose bullets now name the block (394 removed, 409 added). Coverage: 56 phantom errors and 202 missing-block errors are gone because their bullets now reach the right block (including §9's former example, `aws_elastictranscoder_preset` `video_watermarks`), along with 14 Read-Only coverage errors and 3 label errors that had judged bullets against the wrong block (each checked against the schema: `aws_iot_topic_rule` `elasticsearch.id`, `aws_security_group` `filter.name` and `aws_ssm_maintenance_window_task` `parameter.name` are all Required there). Added: 1,309 missing-block errors, 1,281 of them in `aws_wafv2_rule_group`, where "Each `rule` supports…" now documents `rule` and its undocumented subtrees are reported one level down, under step 3b's shallowest rule; 7 missing-field and 6 phantom errors; and the checks a section gets that a prose list didn't: 51 ordering errors (9 removed), 93 missing-label warnings (17 removed), 12 label errors, 3 separator warnings, and 4 duplicate keys (for example two `and` prose lists in `aws_macie2_classification_job`, for different paths). A script confirmed every block, missing-field and phantom finding against the schema. The 7 missing-field errors have a bullet of that name elsewhere, each in the wrong place: `aws_directory_service_directory` lists `connect_settings`' arguments under bold prose (`**connect_settings**`, no backticks), which stays in the root section; `aws_lb_listener_rule` documents `query_string`'s `key` and `value` under a `values` wrapper that doesn't exist; `aws_ssm_maintenance_window_task` lists `document_version` only for `automation_parameters`.
 
   Test that fails without the change: the code-block case in `TestCoverage_OrphanedBullets` fails when a prose lead-in ends at its first list.
+6d. **Child subtrees compare every field** (review of #87). Inside a child subtree, disjunct 4 compared labels and deprecation only for single-home fields, so children differing in an `Optional`+`Computed` field's label or deprecation counted as interchangeable, against acceptance case 3. Every field that exists is now compared; `ConfigUnknown` labels never are, at either level. *Measured* (base = 6c): no change in either config. Test that fails without it: `TestCoverage_SharedChildDeprecation`.
+6e. **A duplicate heading's defect is reported once** (review of #87). A heading whose closest path already had a fit error with the same differences repeated it. *Measured* (base = 6d): full config ERROR 18,789 → 18,786, the repeats in `aws_cognito_risk_configuration` (line 72) and `aws_sagemaker_user_profile` (lines 67, 97); weak unchanged. Test: `TestCoverage_DuplicateHeadingReportsOnce`.
+6f. **Cost test** (§7 Tests). `TestCoverage_SharedSectionCost`: bare-leaf sections serving 4,000 paths with nested children run in about 0.4 s; a pairwise evaluation took 13.6 s at 2,000 paths and fails the 10 s deadline.
 
 `checkDeprecated` moves onto the new resolver in step 1, and the suppression that keeps it from emitting a contradictory pair arrives with step 5, so those two must land in the same release even if they are separate PRs.
 
@@ -444,7 +445,7 @@ Why the split: disjunct 2 closes the exposure #77 creates, since the design bles
 
 ## 8. Measured impact
 
-terraform-provider-aws @ `886c0fab585`, `.ci/swissshepherd-full.hcl`, cached schema, instrumented builds of swissshepherd `main` @ `6ea7434`. The field-existence and missing-block figures below predate the choice of headings-only resolution; re-measure them per reference section at implementation, with the full `AGENTS.md` corpus procedure. The sizing figures in §6's optional follow-up are upper bounds from a simulation of a subset of candidates and are not part of #77.
+Design-time estimates, kept for the record: terraform-provider-aws @ `886c0fab585`, `.ci/swissshepherd-full.hcl`, cached schema, instrumented builds of swissshepherd `main` @ `6ea7434`. The figures as built are in §7's step entries and the table below; where they differ, those win. The sizing figures in §6's optional follow-up are upper bounds from a simulation of a subset of candidates and are not part of #77.
 
 Field-existence errors:
 
@@ -456,46 +457,47 @@ Field-existence errors:
 - Unparseable headings: 112 in 29 docs, most in `aws_msk_cluster` (18), `aws_emrserverless_application` (17), `aws_codebuild_project` (13), `aws_cognito_user_pool` data source (13).
 - Duplicate headings: 18 in 12 docs.
 - Unresolved sections: 30 (step 4c).
-- Shared-section warnings replace the `heading` "is ambiguous" warnings and are not yet measured. Moving the finding into `coverage` adds nothing for terraform-provider-aws: both `.ci` configs set `heading = true` (`swissshepherd-full.hcl:239`, `swissshepherd-weak.hcl:241`) along with `block_heading_styles` and `prefer_block_heading_styles`, so neither gate was suppressing it. The count still moves in both directions because the trigger changes: `blockSignature` (729) compares sorted attribute names only, while the new condition also considers child blocks, applies coverage's filters, and ignores fields whose home is "either".
+- Shared-section findings replace the `heading` "is ambiguous" warnings: 45 findings against 17 warnings (step 5). Moving the finding into `coverage` adds nothing for terraform-provider-aws: both `.ci` configs set `heading = true` (`swissshepherd-full.hcl:239`, `swissshepherd-weak.hcl:241`) along with `block_heading_styles` and `prefer_block_heading_styles`, so neither gate was suppressing it. The count still moves in both directions because the trigger changes: `blockSignature` (729) compares sorted attribute names only, while the new condition also considers child blocks, applies coverage's filters, and ignores fields whose home is "either".
 
 Shared-section label conflicts (disjunct 2):
 
 - 22 block names across 17 resources have a field whose requiredness differs by path, for example `metric_name` and `namespace` under `metric` in `aws_appautoscaling_policy`, and `interval` under `retain_rule` in `aws_dlm_lifecycle_policy`. The configurable-at-one-path, read-only-at-another variant has no current cases.
 - The label-checking gap this sits in is measured in §7's follow-up table: ~317 sections and ~893 bullets in Argument Reference get no label check today.
 
-Shared-section deprecation conflicts (disjunct 3): not measured. Needs the count of block names where a field's `Deprecated` flag differs across the paths a shared section serves, and the count of contradictory `checkDeprecated` pairs the §4 resolver would otherwise produce.
+Shared-section deprecation conflicts (disjunct 3): none on the corpus (step 5).
 
-Shared-section child-content conflicts (disjunct 4): 24 groups in 11 resources agree at their own level but differ below (§6). Upper bound: measured before field homes and filters were applied, and counts schema groups, not doc sections that actually share a heading.
+Shared-section child-content conflicts (disjunct 4): 24 groups in 11 resources agree at their own level but differ below (§6). Upper bound: measured before field homes and filters were applied, and counts schema groups, not doc sections that actually share a heading. As built: 19 findings (step 5).
 
 Home-section check for unlabeled fields: 24 findings, 17 at the root and 7 nested, all confirmed (§7 step 6). The design-time estimate was 2 root-level cases.
 
 Missing-block errors (path-keyed dedup):
 
-- Each QuickSight resource goes from about 312 findings (one per undocumented block name) to about 7,500 (one per undocumented path): `aws_quicksight_analysis` 7,539, `aws_quicksight_dashboard` 7,539, `aws_quicksight_template` 7,538. Estimated from the schema and doc headings, not from a swissshepherd run.
+- Each QuickSight resource goes from about 312 findings (one per undocumented block name) to about 7,500 (one per undocumented path): `aws_quicksight_analysis` 7,539, `aws_quicksight_dashboard` 7,539, `aws_quicksight_template` 7,538. Estimated from the schema and doc headings; as built, 7,226 per resource (step 3), then 14 or fewer (step 3b).
 - This is tolerable because those resources are already excluded from `schema_docs` in the weak config (`resource/aws_quicksight_analysis`, `resource/aws_quicksight_dashboard`, `resource/aws_quicksight_template`, `data_source/aws_quicksight_analysis`), so CI is unaffected. The increase appears only in the full config, where each finding names a path an agent can act on. Their documentation approach is #74.
 
 Weak config (`.ci/swissshepherd-weak.hcl`): the weak config is expected to report more after this change, because it was missing real defects. More correct findings are an improvement; only false positives and silent passes count as worse. Known additions: `aws_arcregionswitch_plan` (1 field, `step`); `aws_bedrockagentcore_memory_strategy` (duplicate-heading warning, `memory_record_schema Block`); and step 1's 23 link-only Read-Only errors in `aws_fsx_ontap_file_system`, `aws_fsx_ontap_storage_virtual_machine`, `aws_wafv2_managed_rule_group`, and `aws_db_instance` (§4 Links). All are to be fixed in the swissshepherd bump PR.
 
 Corrections to #77: `aws_athena_workgroup` and `aws_autoscaling_group` are listed there as docs that are wrong for users. Autoscaling is correct and resolves once composites can't cross into another schema path. Athena gets both, measured in step 2. Its `Encryption Configuration` heading normalizes to the bare leaf `encryption_configuration`, so under headings-only resolution it serves both `encryption_configuration` paths and lists `encryption_option` and `kms_key_arn` where they don't exist: a correct field error. Its `Managed Query Results Encryption Configuration` section resolves to no path, so it also gets the §5 unresolved-section warning once that lands.
 
-### Must be measured before merge
+### Measurements before merge
 
-Everything above that is an estimate, a stale figure, or absent. `AGENTS.md` requires a measured corpus diff for any change that alters findings, so this is the PR checklist.
+`AGENTS.md` requires a measured corpus diff for any change that alters findings. All are on `terraform-provider-aws2` @ `34167e0962c`, both configs, with output identical across runs; §7's step entries give the detail. Counts are on the branch head unless a step is named.
 
-| Measurement | State now |
+| Measurement | Result |
 |---|---|
-| Field-existence errors, per reference section | 714 / 635 predate headings-only resolution; re-measure |
-| Missing-block errors after path-keyed dedup | QuickSight ~7,500 is estimated from schema and headings, not a run |
-| Unresolved sections (§5) | not measured |
-| Shared-section warnings under the new trigger | not measured; replaces the `heading` "is ambiguous" count |
-| Disjunct 3: paths disagreeing on `Deprecated`, and the contradictory `checkDeprecated` pairs it suppresses | not measured |
-| Disjunct 4: shared sections whose paths differ below their own level | 24 schema groups (upper bound); re-measure against actual doc sections with filters and field homes |
-| `checkDeprecated` on the new resolver, independent of disjunct 3 | not measured |
-| Home-section check | measured: 24 (17 root, 7 nested) |
-| Weak-config error count | must be unchanged except `aws_arcregionswitch_plan`; confirm per step |
-| Two runs of the new binary, byte-identical | required by `AGENTS.md`; also per step |
+| Field-existence errors, per reference section | +42 when `existsInSiblingBlock` went (step 2), +720 after path-keyed dedup (step 3). Now 842 under Argument Reference and 180 under Attribute Reference, all errors (step 5) |
+| Missing-block errors after path-keyed dedup | QuickSight 7,226 per resource (step 3), then 14 or fewer once only the shallowest undocumented block is reported (step 3b) |
+| Unresolved sections (§5) | 30 (step 4c), 28 after prose lists became sections (step 6c) |
+| Shared-section findings under the new trigger | 45 (step 5): 21 existence, 5 label, 19 child-content; replace 17 `heading` "is ambiguous" warnings |
+| Disjunct 3: paths disagreeing on `Deprecated` | 0 on the corpus; covered by tests |
+| Disjunct 4: shared sections whose paths differ below their own level | 19 findings (step 5); unchanged when child subtrees compare every field |
+| `checkDeprecated` on the new resolver | no change (step 1) |
+| Home-section check | 24: 17 root, 7 nested (step 6) |
+| Duplicate headings | 8 warnings and 7 fit errors (step 4b); 4 fit errors after one defect is reported once |
+| Weak-config errors | 0 → 23 (step 1, link-only Read-Only), 24 (step 5, arcregionswitch phantom), 28 (step 6b, shared-section label conflicts); 15 warnings. Every one confirmed against the schema |
+| Two runs of the new binary, byte-identical | every step |
 
-Spot-check every added finding against the provider's Go schema and report the false-positive count, per the `AGENTS.md` corpus procedure.
+Every added finding was spot-checked against the provider schema, by script for the field and block findings; false positives found that way were fixed, each with a regression test.
 
 ## 9. What stays unchecked
 
@@ -529,7 +531,7 @@ The test itself is general, not specific to #77: wherever a change excludes or s
 | Aggregate messages? | No. One finding per path and field. |
 | `heading` ambiguity warning | Moves into `coverage` as the shared-section finding. |
 | Shared-section trigger | Stated as an invariant, not a list: a shared section is valid only when every schema-derived property swissshepherd compares is identical across the paths it serves. Today that is existence (disjunct 1, single-home fields only), label (2), `Deprecated` (3), and a child block's contents, recursively (4); 2–4 apply to any field S lists as well as single-home fields. "Identical" means identical at every depth (acceptance case 3). A new per-field schema comparison must add a disjunct. Not a comparison of expected field sets, which is undefined for fields whose home is "either". |
-| Disjuncts 2–4 are sole detectors | Accepted. `resolveSubsectionPath` can't resolve a shared section, so `labelCorrectness` is silent; `checkDeprecated` emits a contradictory pair instead; and a child-content difference (4) is invisible at the child's own level when its sections are qualified. All stay warnings. Each reports one finding per conflicting field or child block, since nothing else enumerates them. |
+| Disjuncts 2–4 are sole detectors | Accepted. `resolveSubsectionPath` can't resolve a shared section, so `labelCorrectness` is silent; `checkDeprecated` emits a contradictory pair instead; and a child-content difference (4) is invisible at the child's own level when its sections are qualified. Disjuncts 2 and 3 are errors, 4 a warning (step 6b). Each reports one finding per conflicting field or child block, since nothing else enumerates them. |
 | Deprecation divergence in #77 or later? | #77. §7 moves `checkDeprecated` onto the §4 resolver, which is what creates the contradictory pair, so the disjunct ships with the cause. |
 | Single-home field documented only outside its home, unlabeled | Reported by coverage. The §2 union answers "documented at all", not "documented in the right place", and `classifyAttrPlacement` reads an unlabeled bullet as a proper output. Labeled bullets stay with `labels`. |
 | Label correctness per served path | Follow-up, not #77. Needs its own corpus diff over ~893 never-checked bullets; the cross-path conflict routes to disjunct 2 rather than producing contradictory per-path findings. Decided now so it isn't discovered after #77 ships. |
