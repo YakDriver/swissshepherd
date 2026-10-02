@@ -443,7 +443,8 @@ type shareEval struct {
 
 // eval returns the conflicts among paths for one reference section. listed
 // holds the fields the section lists; nil at child level, where no section is
-// involved and only single-home fields can force a conflict.
+// involved: there every field that exists is compared for labels and
+// deprecation, since the children's own sections would list it.
 func (e *shareEval) eval(paths []string, inAttrs bool, listed map[string]bool) []shareConflict {
 	fieldSet := make(map[string]bool)
 	for _, p := range paths {
@@ -479,7 +480,7 @@ func (e *shareEval) eval(paths []string, inAttrs bool, listed map[string]bool) [
 			missing := slices.IndexFunc(paths, func(p string) bool { return !slices.Contains(exist, p) })
 			out = append(out, shareConflict{kind: 1, field: f, q: single[0], p: paths[missing]})
 		}
-		if !(listed[f] || len(single) > 0) || len(exist) < 2 {
+		if !(listed == nil || listed[f] || len(single) > 0) || len(exist) < 2 {
 			continue
 		}
 		// A field can be an attribute at some paths and a child block at
@@ -495,12 +496,15 @@ func (e *shareEval) eval(paths []string, inAttrs bool, listed map[string]bool) [
 				}
 			}
 		}
+		// A ConfigUnknown block's labels are unknowable, so they're never
+		// compared (never guess).
+		labelsKnown := !slices.ContainsFunc(asAttr, func(p string) bool { return e.rs.Blocks[p].ConfigUnknown })
 		if len(asAttr) > 1 {
 			rep := asAttr[0]
 			sa, _ := attrAt(e.rs.Blocks[rep], f)
 			for _, p := range asAttr[1:] {
 				pa, _ := attrAt(e.rs.Blocks[p], f)
-				if !inAttrs && labelFor(sa) != labelFor(pa) {
+				if !inAttrs && labelsKnown && labelFor(sa) != labelFor(pa) {
 					out = append(out, shareConflict{kind: 2, field: f, q: rep, p: p, qVal: labelFor(sa), pVal: labelFor(pa)})
 					break
 				}

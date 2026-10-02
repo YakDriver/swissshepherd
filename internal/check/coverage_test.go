@@ -1899,6 +1899,19 @@ func TestCoverage_SharedSectionMessages(t *testing.T) {
 			sections: withParents(section{heading: "z", fields: []string{"a1", "tls"}}, section{heading: "t.u.z.tls", fields: []string{"b1"}}),
 			wantNot:  "can't label it correctly",
 		},
+		// ConfigUnknown labels are unknowable, so they never differ.
+		"config-unknown children": {
+			rs: twoZSchema(
+				&schema.Block{Attributes: optional("a1"), ChildBlocks: []string{"x.y.z.a3"}},
+				&schema.Block{Attributes: optional("a1"), ChildBlocks: []string{"t.u.z.a3"}},
+				map[string]*schema.Block{
+					"x.y.z.a3": {ConfigUnknown: true, Attributes: []schema.Attribute{{Name: "b1", Optional: true, Computed: true}}},
+					"t.u.z.a3": {ConfigUnknown: true, Attributes: []schema.Attribute{{Name: "b1", Required: true}}},
+				},
+			),
+			sections: withParents(section{heading: "z", fields: []string{"a1", "a3"}}, section{heading: "a3", fields: []string{"b1"}}),
+			wantNot:  "differs below this level",
+		},
 		// Recursion through one name (WAFv2's statement.and_statement...):
 		// section a serves a and a.k.a, whose k children differ. The finding
 		// must name the two parents, not one twice.
@@ -2082,6 +2095,38 @@ func TestSchemaDocs_MarkerMismatchIsError(t *testing.T) {
 				t.Errorf("%q: severity %v, want error", results[i].Message, results[i].Severity)
 			}
 		})
+	}
+}
+
+// TestCoverage_SharedChildDeprecation: inside a child subtree every field is
+// compared, not only fields with one home. Children that differ only in an
+// Optional+Computed field's deprecation aren't interchangeable, so the shared
+// parent section is reported (acceptance case 3).
+func TestCoverage_SharedChildDeprecation(t *testing.T) {
+	t.Parallel()
+
+	oc := func(deprecated bool) []schema.Attribute {
+		return []schema.Attribute{{Name: "b1", Optional: true, Computed: true, Deprecated: deprecated}}
+	}
+	rs := twoZSchema(
+		&schema.Block{Attributes: optional("a1"), ChildBlocks: []string{"x.y.z.a3"}},
+		&schema.Block{Attributes: optional("a1"), ChildBlocks: []string{"t.u.z.a3"}},
+		map[string]*schema.Block{"x.y.z.a3": {Attributes: oc(true)}, "t.u.z.a3": {Attributes: oc(false)}},
+	)
+	md := renderAcceptanceDoc([]string{"t", "x"}, withParents(
+		section{heading: "z", fields: []string{"a1", "a3"}},
+		section{heading: "x.y.z.a3", fields: []string{"b1"}},
+		section{heading: "t.u.z.a3", fields: []string{"b1"}},
+	))
+	d, err := doc.Parse([]byte(md), rs.Name)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	off := false
+	rule := &check.SchemaDocsRule{Ordering: &off, Description: &off, Format: &off, Byline: &off, Heading: &off, Deprecated: &off}
+	results := rule.Check(check.CheckContext{Resource: rs.Name, Schema: rs, Doc: d})
+	if want := `"a3" differs below this level between "x.y.z" and "t.u.z"`; !hasMessage(results, want) {
+		t.Errorf("missing %q in:\n  %s", want, joinMessages(results))
 	}
 }
 
