@@ -219,7 +219,7 @@ The per-path field findings point at the cause too. A phantom field in a shared 
 
 When two headings in one reference section normalize to the same key, `coverage` keeps both occurrences and asks whether some assignment of headings to the paths that key serves makes every block exact: listed fields exist, fields whose only home is this section are listed, and labels and deprecation markers are right.
 
-- If no assignment works, each path with no fitting heading, and each heading that fits no path, is an **error** naming the closest match and its differences.
+- If no assignment works, each path with no fitting heading, and each heading that fits no path, is an **error** naming the closest match and its differences. A heading isn't reported again when its closest path already is, with the same differences.
 - If one works, it's still a **warning**: a reader can't tell from the headings which block each documents. The fix is to give each occurrence the heading of its path.
 
 The per-path field findings and the shared-section finding are not emitted for a duplicated key; the fit rule stands in for them.
@@ -235,6 +235,8 @@ The `cloudwatch_logs` object takes the following arguments:
 ```
 
 The list documents `cloudwatch_logs` and gets every check a section gets. Like a heading, the prose stays in effect until the next heading or lead-in, so a code block interrupting its list doesn't end it. A warning asks for a real heading: `list introduced by prose ("…") in Argument Reference documents "cloudwatch_logs" without a block heading; use a block heading, e.g. "`cloudwatch_logs` Block"`.
+
+This is a parsing decision, not a coverage one: it applies whether or not `coverage` is enabled, so `ordering`, `description`, `labels`, and `format` judge a prose list's bullets against the block it names. The same holds for bullets under an unparseable heading, which belong to no section for every sub-check.
 
 Exceptions, where reading prose as a heading would credit the wrong block:
 
