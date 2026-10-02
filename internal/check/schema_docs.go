@@ -628,8 +628,16 @@ func (r *SchemaDocsRule) sharedSectionResults(ctx CheckContext, shared []sharedS
 				what = fmt.Sprintf("%q differs below this level between %q and %q, so the section's %q bullet can't lead to the right %q for both", c.field, displayPath(c.q), displayPath(c.p), c.field, c.field)
 				cond = fmt.Sprintf("paths whose %q blocks match at every depth", c.field)
 			}
+			// A label or deprecation conflict means the section's marker is
+			// wrong for some path: an error, as under the fit rule and in
+			// labels and deprecation. Existence and child-content conflicts
+			// are already errors at each path; this finding only explains them.
+			sev := SeverityWarning
+			if c.kind == 2 || c.kind == 3 {
+				sev = SeverityError
+			}
 			results = append(results, Result{
-				Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityWarning, Line: sh.block.HeadingLine, Block: c.q,
+				Rule: r.Name(), Resource: ctx.Resource, Severity: sev, Line: sh.block.HeadingLine, Block: c.q,
 				Message: head + what + fmt.Sprintf(". Qualifying means up to %d sections: give %q a heading that resolves only to %s, e.g. %q",
 					n, displayPath(c.q), cond, doc.RenderHeading(r.pathTemplate(), c.q)),
 			})
@@ -2009,7 +2017,7 @@ func (r *SchemaDocsRule) labelCorrectness(ctx CheckContext, blockName string, at
 			msg = fmt.Sprintf("argument %q in block %q is labeled %s but is computed-only in the schema; move it to Attribute Reference and remove the label", attr.Name, displayPath(blockName), have)
 		}
 		return &Result{
-			Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityWarning,
+			Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityError,
 			Message: msg,
 			Block:   blockName,
 			Line:    attr.Line,
@@ -2021,7 +2029,7 @@ func (r *SchemaDocsRule) labelCorrectness(ctx CheckContext, blockName string, at
 		msg = fmt.Sprintf("argument %q in block %q is labeled %s but is %s in the schema; use %s", attr.Name, displayPath(blockName), have, state, want)
 	}
 	return &Result{
-		Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityWarning,
+		Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityError,
 		Message: msg,
 		Block:   blockName,
 		Line:    attr.Line,
@@ -2862,7 +2870,7 @@ func (r *SchemaDocsRule) checkDeprecated(ctx CheckContext, shared []sharedSectio
 				}
 				if !da.Deprecated {
 					results = append(results, Result{
-						Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityWarning,
+						Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityError,
 						Message: fmt.Sprintf("attribute %q in block %q is deprecated in schema but not marked as deprecated in docs", attr.Name, displayPath(blockPath)),
 						Block:   blockPath,
 						Line:    da.Line,
@@ -2881,7 +2889,7 @@ func (r *SchemaDocsRule) checkDeprecated(ctx CheckContext, shared []sharedSectio
 				}
 				if !sa.Deprecated {
 					results = append(results, Result{
-						Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityWarning,
+						Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityError,
 						Message: fmt.Sprintf("attribute %q in block %q is marked deprecated in docs but not in schema; either mark as deprecated in schema or remove the deprecation notice", da.Name, displayPath(blockPath)),
 						Block:   blockPath,
 						Line:    da.Line,

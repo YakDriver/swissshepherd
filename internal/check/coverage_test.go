@@ -1959,6 +1959,64 @@ func TestCoverage_OutsideHome(t *testing.T) {
 	}
 }
 
+// TestSchemaDocs_MarkerMismatchIsError pins that a wrong label or deprecation
+// marker is an error wherever it's found: in a single section (labels,
+// deprecation), in a section shared by paths that disagree (shared-section
+// disjuncts 2 and 3), and under duplicate headings (the fit rule).
+func TestSchemaDocs_MarkerMismatchIsError(t *testing.T) {
+	t.Parallel()
+
+	testCases := map[string]struct {
+		rs   *schema.ResourceSchema
+		md   string
+		want string // substring of the finding that must be an error
+	}{
+		"wrong label": {
+			rs:   &schema.ResourceSchema{Name: "aws_test", Blocks: map[string]*schema.Block{"": {Attributes: []schema.Attribute{{Name: "name", Required: true}}}}},
+			md:   "## Argument Reference\n\n* `name` - (Optional) Name.\n",
+			want: `argument "name" is labeled (Optional) but is required in the schema`,
+		},
+		"deprecated in schema, not in docs": {
+			rs:   &schema.ResourceSchema{Name: "aws_test", Blocks: map[string]*schema.Block{"": {Attributes: []schema.Attribute{{Name: "name", Optional: true, Deprecated: true}}}}},
+			md:   "## Argument Reference\n\n* `name` - (Optional) Name.\n",
+			want: "is deprecated in schema but not marked as deprecated in docs",
+		},
+		"deprecated in docs, not in schema": {
+			rs:   &schema.ResourceSchema{Name: "aws_test", Blocks: map[string]*schema.Block{"": {Attributes: []schema.Attribute{{Name: "name", Optional: true}}}}},
+			md:   "## Argument Reference\n\n* `name` - (Optional, **Deprecated**) Name.\n",
+			want: "is marked deprecated in docs but not in schema",
+		},
+		"shared section, label differs": {
+			rs: twoZSchema(
+				&schema.Block{Attributes: []schema.Attribute{{Name: "a1", Required: true}}},
+				&schema.Block{Attributes: optional("a1")},
+				nil,
+			),
+			md:   renderAcceptanceDoc([]string{"t", "x"}, withParents(section{heading: "z", fields: []string{"a1"}})),
+			want: `"a1" is (Optional) at "t.u.z" and (Required) at "x.y.z"`,
+		},
+	}
+	for name, tc := range testCases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			d, err := doc.Parse([]byte(tc.md), tc.rs.Name)
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			off := false
+			rule := &check.SchemaDocsRule{Ordering: &off, Description: &off, Format: &off, Byline: &off, Heading: &off}
+			results := rule.Check(check.CheckContext{Resource: tc.rs.Name, Schema: tc.rs, Doc: d})
+			i := slices.IndexFunc(results, func(r check.Result) bool { return strings.Contains(r.Message, tc.want) })
+			if i < 0 {
+				t.Fatalf("no finding containing %q in:\n  %s", tc.want, joinMessages(results))
+			}
+			if results[i].Severity != check.SeverityError {
+				t.Errorf("%q: severity %v, want error", results[i].Message, results[i].Severity)
+			}
+		})
+	}
+}
+
 // TestCoverage_UndocumentedSubtreeReportsShallowest: only the shallowest
 // undocumented block in a subtree is reported, with the count of undocumented
 // paths beneath it. Descendants can't be reached from the docs, so the real
