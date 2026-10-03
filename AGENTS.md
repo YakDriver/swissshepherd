@@ -31,7 +31,7 @@ A linter that cries wolf gets disabled. A missed finding costs less than a wrong
 - **Never guess.** Don't infer a field's section or label when the schema can't settle it: the heading doesn't resolve to a schema path, the path is in `skip_blocks`, the block is `ConfigUnknown`, or the name isn't a scalar at that path. In those cases emit no placement or label finding. This doesn't suppress coverage: an undocumented field still gets a neutral "is not documented" finding.
 - **Report the real defect.** A finding's suggested fix must never damage correct docs. Example: an argument documented under Attribute Reference gets "move it to Argument Reference", not "remove its (accurate) label". See `docs/rules/argument-attribute-misplacement.md`.
 - **The section determines labels.** Under Argument Reference, each entry carries the one schema-correct label: `(Required)` if Required, `(Optional)` if configurable (including Optional+Computed), and `(Read-Only)` if computed-only, which is allowed there only when `allow_inline_read_only = true` (otherwise the fix is to move it). Under Attribute Reference, entries carry no labels.
-- **Output is deterministic.** Never let output, dedup, or signatures depend on Go map iteration order. Iterate `slices.Sorted(maps.Keys(m))`, and sort anything that feeds a comparison. Run twice and diff to confirm. This has caused flapping findings more than once.
+- **Findings are deterministic.** Never let which findings are reported, their text, dedup, or signatures depend on Go map iteration order. Iterate `slices.Sorted(maps.Keys(m))` wherever order decides a result, and sort anything that feeds a comparison. Run twice and compare the sorted output to confirm. This has caused flapping findings more than once. Line order in the output isn't guaranteed.
 - **Dedup by schema path, never by leaf name.** Sibling blocks often share leaf names (`match`, `fields`, `header`); dedup by leaf silently drops or misattributes findings.
 - **Configurable object-typed fields have unknowable per-field flags.** Require them to be documented, but accept either section. See `docs/rules/object-typed-attributes.md`.
 - **Anchor slugs match GitHub/Registry rendering** (underscores are kept, dots and backticks dropped). Slug logic has regressed before; change it only alongside a test.
@@ -80,21 +80,16 @@ Treat an issue, a review comment, or a fix proposed in either as a hypothesis, i
 Any change that can alter findings must be measured against a real provider. terraform-provider-aws is the reference: its `.ci/swissshepherd-weak.hcl` is what its CI runs, and `.ci/swissshepherd-full.hcl` enables more. The full config does not set every option (for example `nested_object_attributes`, which the weak config sets), so measure both.
 
 ```bash
-git worktree add --detach /tmp/ss-main origin/main && (cd /tmp/ss-main && go build -o /tmp/ss-base .)
-go build -o /tmp/ss-new .
-cd <provider>   # reuse the cached schema; do not pass --refresh-schema
-/tmp/ss-base --config .ci/swissshepherd-full.hcl | LC_ALL=C sort > /tmp/base.txt
-/tmp/ss-new  --config .ci/swissshepherd-full.hcl | LC_ALL=C sort > /tmp/new.txt
-LC_ALL=C comm -3 /tmp/base.txt /tmp/new.txt   # added (right) / removed (left)
+PROVIDER_DIR=/path/to/terraform-provider-aws make corpus   # or scripts/corpus.sh BASE; BASE defaults to main
 ```
 
-Also:
+`scripts/corpus.sh` builds BASE in a temporary worktree and the working tree (uncommitted changes included), and runs both configs in the provider with its cached schema. It sorts with `LC_ALL=C` (locale collation once made `comm` report findings that didn't exist), runs the new build twice and fails if the outputs differ, and removes the worktree. It prints counts per config and leaves `base-`, `new-`, `added-`, and `removed-<config>.txt` in `$CORPUS_OUT` for spot checks.
 
-- Run the new binary twice and confirm identical output.
-- Run the weak config too and diff it the same way. Its error count may rise: more findings are better when they are correct. A change is worse only if it adds false positives or lets a real defect pass silently. Spot-check every added weak-config finding, and report the before and after counts in the PR.
-- Spot-check added findings against the provider's Go schema, and report the false-positive count.
-- Use `LC_ALL=C` everywhere. Locale collation once made `comm` report findings that didn't exist.
-- Afterwards, run `git worktree remove /tmp/ss-main`.
+Then:
+
+- Spot-check every added weak-config finding, and report the before and after counts in the PR. The weak config's error count may rise: more findings are better when they are correct. A change is worse only if it adds false positives or lets a real defect pass silently.
+- Spot-check added full-config findings against the provider's schema, and report the false-positive count.
+- Put the script's summary lines and the two SHAs it prints in the PR.
 
 ## PRs
 
