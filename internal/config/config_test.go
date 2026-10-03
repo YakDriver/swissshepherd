@@ -508,6 +508,22 @@ check "schema_docs" {
 	if got := cfg.GetCheck("schema_docs").SkipBlocks; !slices.Equal(got, want) {
 		t.Errorf("SkipBlocks = %q, want %q", got, want)
 	}
+	// A file listing nothing still replaces the default, as an empty
+	// inline list would.
+	writeFile(t, root+"/empty.txt", "# nothing skipped\n\n")
+	writeFile(t, root+"/empty.hcl", `
+check "schema_docs" {
+  enabled          = true
+  skip_blocks_file = "empty.txt"
+}
+`)
+	cfg, err = config.Load("empty.hcl")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if got := cfg.GetCheck("schema_docs").SkipBlocks; got == nil || len(got) != 0 {
+		t.Errorf("SkipBlocks from an empty file = %#v, want a non-nil empty slice", got)
+	}
 	if _, err := config.Load("missing.hcl"); err == nil || !strings.Contains(err.Error(), "nope.txt") {
 		t.Errorf("Load() with a missing skip_blocks_file: error = %v, want one naming nope.txt", err)
 	}

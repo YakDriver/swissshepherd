@@ -394,7 +394,12 @@ func (c *Config) resolveFiles() error {
 			if err != nil {
 				return err
 			}
+			// Non-nil even when the file lists nothing: a nil SkipBlocks
+			// means "use the default".
 			ch.SkipBlocks = append(ch.SkipBlocks, lines...)
+			if ch.SkipBlocks == nil {
+				ch.SkipBlocks = []string{}
+			}
 		}
 		if ch.AllowSubcategoriesFile != "" {
 			lines, err := readLines(ch.AllowSubcategoriesFile)
