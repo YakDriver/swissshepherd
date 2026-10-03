@@ -1,4 +1,4 @@
-.PHONY: build test clean install fmt lint vet tidy deps test-coverage ci help modern modern-check
+.PHONY: build test clean install fmt lint vet tidy deps test-coverage ci help modern modern-check corpus
 
 default: build
 
@@ -42,6 +42,9 @@ modern-check: ## Check for modern Go code
 modern: ## Fix modern Go code issues
 	@echo "make: Fixing checks for modern Go code..."
 	@go run golang.org/x/tools/gopls/internal/analysis/modernize/cmd/modernize@latest -fix -test ./...
+
+corpus: ## Compare findings with BASE (default main) on a provider: make corpus PROVIDER_DIR=... [BASE=...]
+	@scripts/corpus.sh $(or $(BASE),main)
 
 clean: ## Clean build artifacts
 	@rm -f swissshepherd coverage.out coverage.html

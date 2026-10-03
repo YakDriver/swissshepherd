@@ -80,21 +80,16 @@ Treat an issue, a review comment, or a fix proposed in either as a hypothesis, i
 Any change that can alter findings must be measured against a real provider. terraform-provider-aws is the reference: its `.ci/swissshepherd-weak.hcl` is what its CI runs, and `.ci/swissshepherd-full.hcl` enables more. The full config does not set every option (for example `nested_object_attributes`, which the weak config sets), so measure both.
 
 ```bash
-git worktree add --detach /tmp/ss-main origin/main && (cd /tmp/ss-main && go build -o /tmp/ss-base .)
-go build -o /tmp/ss-new .
-cd <provider>   # reuse the cached schema; do not pass --refresh-schema
-/tmp/ss-base --config .ci/swissshepherd-full.hcl | LC_ALL=C sort > /tmp/base.txt
-/tmp/ss-new  --config .ci/swissshepherd-full.hcl | LC_ALL=C sort > /tmp/new.txt
-LC_ALL=C comm -3 /tmp/base.txt /tmp/new.txt   # added (right) / removed (left)
+PROVIDER_DIR=/path/to/terraform-provider-aws make corpus   # or scripts/corpus.sh BASE; BASE defaults to main
 ```
 
-Also:
+`scripts/corpus.sh` builds BASE in a temporary worktree and the working tree (uncommitted changes included), and runs both configs in the provider with its cached schema. It sorts with `LC_ALL=C` (locale collation once made `comm` report findings that didn't exist), runs the new build twice and fails if the outputs differ, and removes the worktree. It prints counts per config and leaves `base-`, `new-`, `added-`, and `removed-<config>.txt` in `$CORPUS_OUT` for spot checks.
 
-- Run the new binary twice and confirm identical output.
-- Run the weak config too and diff it the same way. Its error count may rise: more findings are better when they are correct. A change is worse only if it adds false positives or lets a real defect pass silently. Spot-check every added weak-config finding, and report the before and after counts in the PR.
-- Spot-check added findings against the provider's Go schema, and report the false-positive count.
-- Use `LC_ALL=C` everywhere. Locale collation once made `comm` report findings that didn't exist.
-- Afterwards, run `git worktree remove /tmp/ss-main`.
+Then:
+
+- Spot-check every added weak-config finding, and report the before and after counts in the PR. The weak config's error count may rise: more findings are better when they are correct. A change is worse only if it adds false positives or lets a real defect pass silently.
+- Spot-check added full-config findings against the provider's schema, and report the false-positive count.
+- Put the script's summary lines and the two SHAs it prints in the PR.
 
 ## PRs
 
