@@ -180,6 +180,8 @@ swissshepherd --config .ci/swissshepherd.hcl
 
 Options ending in `_file` (`ignore_targets_file`, `allow_subcategories_file`, `ignore_missing_file`, `skip_blocks_file`, etc.) read one entry per line, merged with the inline list of the same name. Empty lines and lines starting with `#` are ignored.
 
+### Check blocks
+
 Each check has at most one `check "<name>"` block; a second block with the same name is a load error. For per-target `schema_docs` settings, use `override` blocks inside the one block (see [rules/schema_docs.md](rules/schema_docs.md#per-target-overrides)).
 
 ## Rules reference
