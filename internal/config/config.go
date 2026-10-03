@@ -116,6 +116,7 @@ type CheckConfig struct {
 	ImplicitAttributes  []string `hcl:"implicit_attributes,optional"`
 	AllowPhantoms       []string `hcl:"allow_phantoms,optional"`
 	SkipBlocks          []string `hcl:"skip_blocks,optional"`
+	SkipBlocksFile      string   `hcl:"skip_blocks_file,optional"`
 	AllowInlineReadOnly *bool    `hcl:"allow_inline_read_only,optional"`
 
 	// DescriptionStyle rule options.
@@ -387,6 +388,18 @@ func (c *Config) resolveFiles() error {
 				return err
 			}
 			ch.IgnoreTargets = append(ch.IgnoreTargets, lines...)
+		}
+		if ch.SkipBlocksFile != "" {
+			lines, err := readLines(ch.SkipBlocksFile)
+			if err != nil {
+				return err
+			}
+			// Non-nil even when the file lists nothing: a nil SkipBlocks
+			// means "use the default".
+			ch.SkipBlocks = append(ch.SkipBlocks, lines...)
+			if ch.SkipBlocks == nil {
+				ch.SkipBlocks = []string{}
+			}
 		}
 		if ch.AllowSubcategoriesFile != "" {
 			lines, err := readLines(ch.AllowSubcategoriesFile)

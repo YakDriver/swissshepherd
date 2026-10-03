@@ -478,6 +478,57 @@ check "ordering" {
 	}
 }
 
+// TestLoad_SkipBlocksFile confirms skip_blocks_file merges into SkipBlocks
+// after the inline list, and that a missing file is an error.
+//
+// Not parallel: t.Chdir mutates process-global state.
+func TestLoad_SkipBlocksFile(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root+"/skip.txt", "# WAFv2 statement nesting\nrule.statement.and_statement\n\nrule.statement.or_statement\n")
+	writeFile(t, root+"/ok.hcl", `
+check "schema_docs" {
+  enabled          = true
+  skip_blocks      = ["timeouts"]
+  skip_blocks_file = "skip.txt"
+}
+`)
+	writeFile(t, root+"/missing.hcl", `
+check "schema_docs" {
+  enabled          = true
+  skip_blocks_file = "nope.txt"
+}
+`)
+	t.Chdir(root)
+
+	cfg, err := config.Load("ok.hcl")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	want := []string{"timeouts", "rule.statement.and_statement", "rule.statement.or_statement"}
+	if got := cfg.GetCheck("schema_docs").SkipBlocks; !slices.Equal(got, want) {
+		t.Errorf("SkipBlocks = %q, want %q", got, want)
+	}
+	// A file listing nothing still replaces the default, as an empty
+	// inline list would.
+	writeFile(t, root+"/empty.txt", "# nothing skipped\n\n")
+	writeFile(t, root+"/empty.hcl", `
+check "schema_docs" {
+  enabled          = true
+  skip_blocks_file = "empty.txt"
+}
+`)
+	cfg, err = config.Load("empty.hcl")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if got := cfg.GetCheck("schema_docs").SkipBlocks; got == nil || len(got) != 0 {
+		t.Errorf("SkipBlocks from an empty file = %#v, want a non-nil empty slice", got)
+	}
+	if _, err := config.Load("missing.hcl"); err == nil || !strings.Contains(err.Error(), "nope.txt") {
+		t.Errorf("Load() with a missing skip_blocks_file: error = %v, want one naming nope.txt", err)
+	}
+}
+
 func TestCheckConfig_AppliesTo_QualifiedTargets(t *testing.T) {
 	t.Parallel()
 	cc := config.CheckConfig{Targets: []string{"data_source/aws_thing"}}

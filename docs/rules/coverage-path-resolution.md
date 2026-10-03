@@ -196,7 +196,7 @@ The suggestion is advisory text. It isn't part of the correctness story: the fie
 
 The suggestion is not withheld when N is large (WAFv2 `statement`, below). The example is correct, so it is expensive to follow, not wrong. Withholding it would remove the only concrete thing in the message while leaving the finding in place. The message prints one example heading, not N of them, so suppressing it saves no output. N lets a reader defer to #74 on evidence rather than on the tool's judgment of what is practical.
 
-No config lever is needed or offered for it. `skip_blocks` wouldn't serve: it compares full paths exactly (`slices.Contains(r.skipBlocks(), blockPath)`; the default `"timeouts"` is a root-level name), with no prefix form and no `_file` variant (#79), so covering WAFv2 `statement` would take 156 entries across three resources. The lever that exists is the resource-level `schema_docs` exclusion, and all three WAFv2 resources already use it in the weak config (§8), so these findings surface only in the full config.
+No config lever is needed or offered for it. `skip_blocks` wouldn't serve: it compares full paths exactly (`slices.Contains(r.skipBlocks(), blockPath)`; the default `"timeouts"` is a root-level name), with no prefix form, so covering WAFv2 `statement` would take 156 entries across three resources. `skip_blocks_file` (#79) moves such a list out of the config but doesn't shorten it. The lever that exists is the resource-level `schema_docs` exclusion, and all three WAFv2 resources already use it in the weak config (§8), so these findings surface only in the full config.
 
 ### Follow-up: shorter suggestions (optional)
 

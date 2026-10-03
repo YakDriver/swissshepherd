@@ -178,7 +178,7 @@ swissshepherd --config .ci/swissshepherd.hcl
 
 ### List files
 
-Options ending in `_file` (`ignore_targets_file`, `allow_subcategories_file`, `ignore_missing_file`, etc.) read one entry per line. Empty lines and lines starting with `#` are ignored.
+Options ending in `_file` (`ignore_targets_file`, `allow_subcategories_file`, `ignore_missing_file`, `skip_blocks_file`, etc.) read one entry per line, merged with the inline list of the same name. Empty lines and lines starting with `#` are ignored.
 
 ## Rules reference
 
