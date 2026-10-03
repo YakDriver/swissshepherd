@@ -41,7 +41,9 @@ check "schema_docs" {
   ignore_deprecated      = true                     # skip deprecated schema attrs
   implicit_attributes    = ["id", "tags_all"]       # never flagged as undocumented
   allow_phantoms         = ["tags", "tags_all"]     # never flagged as phantom
-  skip_blocks            = ["timeouts"]             # blocks skipped entirely
+  skip_blocks            = ["timeouts"]             # blocks skipped entirely, by exact schema path
+  skip_blocks_file       = "website/skip-blocks.txt" # same, one path per line; merged with skip_blocks.
+                                                    # Setting either replaces the default ["timeouts"].
   allow_inline_read_only = false                    # see "Schema model" below
 
   # Description options
