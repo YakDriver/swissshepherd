@@ -9,7 +9,9 @@
 #
 # BASE defaults to main. Uncommitted changes are part of the comparison.
 # Each config is run once with the base build and twice with the working-tree
-# build, to check determinism. The provider's cached schema is reused; the
+# build, to check that the two runs report the same set of findings. Line
+# order isn't compared: it varies between runs, and the findings are what
+# must not. The provider's cached schema is reused; the
 # script never passes --refresh-schema.
 #
 # Environment:
@@ -32,7 +34,7 @@ configs=${CONFIGS:-.ci/swissshepherd-full.hcl .ci/swissshepherd-weak.hcl}
 tmp=${TMPDIR:-/tmp}
 out=${CORPUS_OUT:-${tmp%/}/swissshepherd-corpus}
 
-repo=$(git rev-parse --show-toplevel)
+repo=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 base_sha=$(git -C "$repo" rev-parse --short "$base^{commit}")
 head_sha=$(git -C "$repo" rev-parse --short HEAD)
 if [[ -n $(git -C "$repo" status --porcelain) ]]; then
@@ -51,6 +53,7 @@ git -C "$repo" worktree add --quiet --detach "$work/base" "$base_sha"
 (cd "$repo" && go build -o "$work/ss-new" .)
 
 mkdir -p "$out"
+out=$(cd "$out" && pwd) # the runs below happen in PROVIDER_DIR
 cd "$PROVIDER_DIR"
 echo "base $base_sha, new $head_sha, provider $(git rev-parse --short HEAD 2>/dev/null || echo '?'), output $out"
 
