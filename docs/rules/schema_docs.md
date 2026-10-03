@@ -76,6 +76,7 @@ check "schema_docs" {
 
 ```hcl
 check "schema_docs" {
+  enabled = true
   coverage = true
   labels   = true
 
