@@ -152,6 +152,10 @@ type CheckConfig struct {
 	Byline      *bool `hcl:"byline,optional"`
 	Deprecated  *bool `hcl:"deprecated,optional"`
 
+	// Overrides replace sub-check toggles for specific targets (schema_docs
+	// only).
+	Overrides []Override `hcl:"override,block"`
+
 	// NestedObjectAttributes, when true, models object-typed attributes
 	// (list(object({...})), set(object({...})), object({...})) as nested
 	// blocks so their fields are covered and style-checked like nested-block
@@ -291,6 +295,9 @@ func Load(path string) (*Config, error) {
 	if err := cfg.resolveFiles(); err != nil {
 		return nil, err
 	}
+	if err := cfg.validateOverrides(); err != nil {
+		return nil, fmt.Errorf("config %s: %w", path, err)
+	}
 
 	return &cfg, nil
 }
@@ -311,6 +318,73 @@ func loadDefaultTypes() ([]Type, error) {
 		}
 	}
 	return wrapper.Types, nil
+}
+
+// Override replaces schema_docs sub-check toggles for the targets it lists.
+// A toggle left unset keeps the check's value. Targets are bare names, which
+// match any type, or type-qualified ("resource/aws_x"), as in ignore_targets.
+type Override struct {
+	Targets     []string `hcl:"targets,optional"`
+	TargetsFile string   `hcl:"targets_file,optional"`
+
+	Coverage    *bool `hcl:"coverage,optional"`
+	Ordering    *bool `hcl:"ordering,optional"`
+	Description *bool `hcl:"description,optional"`
+	Heading     *bool `hcl:"heading,optional"`
+	Format      *bool `hcl:"format,optional"`
+	Labels      *bool `hcl:"labels,optional"`
+	Byline      *bool `hcl:"byline,optional"`
+	Deprecated  *bool `hcl:"deprecated,optional"`
+}
+
+// Matches reports whether the override lists the target.
+func (o Override) Matches(name, typeName string) bool {
+	return slices.Contains(o.Targets, name) || slices.Contains(o.Targets, typeName+"/"+name)
+}
+
+func (o Override) setsToggle() bool {
+	return slices.ContainsFunc([]*bool{o.Coverage, o.Ordering, o.Description, o.Heading, o.Format, o.Labels, o.Byline, o.Deprecated}, func(b *bool) bool { return b != nil })
+}
+
+// validateOverrides rejects override blocks that would be ignored or
+// ambiguous: outside schema_docs, listing no target, setting no toggle, or
+// listing a target another override also matches. Overlap is an error, not
+// last-one-wins, so block order never matters.
+func (c *Config) validateOverrides() error {
+	for _, ch := range c.Checks {
+		if len(ch.Overrides) == 0 {
+			continue
+		}
+		if ch.Name != "schema_docs" {
+			return fmt.Errorf("check %q: override blocks are only supported in check \"schema_docs\"", ch.Name)
+		}
+		type entry struct {
+			typ, name string
+			block     int
+		}
+		var seen []entry
+		for i, o := range ch.Overrides {
+			if len(o.Targets) == 0 {
+				return fmt.Errorf("check %q: override %d lists no targets", ch.Name, i+1)
+			}
+			if !o.setsToggle() {
+				return fmt.Errorf("check %q: override %d sets no sub-check", ch.Name, i+1)
+			}
+			for _, t := range o.Targets {
+				typ, name, ok := strings.Cut(t, "/")
+				if !ok {
+					typ, name = "", t
+				}
+				for _, e := range seen {
+					if e.block != i && e.name == name && (e.typ == "" || typ == "" || e.typ == typ) {
+						return fmt.Errorf("check %q: target %q is matched by overrides %d and %d", ch.Name, t, e.block+1, i+1)
+					}
+				}
+				seen = append(seen, entry{typ, name, i})
+			}
+		}
+	}
+	return nil
 }
 
 // GetCheck returns the CheckConfig for a named check, or a disabled default.
@@ -388,6 +462,17 @@ func (c *Config) resolveFiles() error {
 				return err
 			}
 			ch.IgnoreTargets = append(ch.IgnoreTargets, lines...)
+		}
+		for j := range ch.Overrides {
+			o := &ch.Overrides[j]
+			if o.TargetsFile == "" {
+				continue
+			}
+			lines, err := readLines(o.TargetsFile)
+			if err != nil {
+				return err
+			}
+			o.Targets = append(o.Targets, lines...)
 		}
 		if ch.SkipBlocksFile != "" {
 			lines, err := readLines(ch.SkipBlocksFile)

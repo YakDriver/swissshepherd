@@ -452,6 +452,8 @@ check "schema_docs" {
 
 Plain entries (no `/`) match any type. Qualified entries (`type/name` or `type/prefix`) only match when the type matches.
 
+`ignore_targets` turns a whole check off for a target. In `schema_docs`, an `override` block instead switches individual sub-checks for the targets it lists, e.g. `coverage = false` for a few resources whose schemas it can't handle, keeping `labels`, `ordering`, and the rest. See [rules/schema_docs.md](rules/schema_docs.md#per-target-overrides).
+
 **Evaluation order:**
 
 1. `ignore_targets` / `ignore_prefixes` — if matched, target is excluded unconditionally

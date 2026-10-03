@@ -38,7 +38,7 @@ A linter that cries wolf gets disabled. A missed finding costs less than a wrong
 
 ## Defaults (may bend with a stated reason)
 
-- Extend an existing `schema_docs` sub-check rather than adding a toggle. Sub-checks share one `ignore_targets` scope, so a new toggle only adds a global on/off. Concerns that are schema-independent and appear anywhere in a doc (for example, dead anchors) belong in a standalone rule with its own scoping and `severity`.
+- Extend an existing `schema_docs` sub-check rather than adding a toggle. A toggle splits one check's question in two, and providers then configure both, per target too (`override` blocks). Concerns that are schema-independent and appear anywhere in a doc (for example, dead anchors) belong in a standalone rule with its own scoping and `severity`.
 - New checks that add many findings ship opt-in, or as `severity = "warning"`, so providers can roll them out gradually.
 - Gate expensive per-line scans with a cheap combined pre-filter (see `internal/check/gloss.go`).
 - Config options use imperative names (`require_*`, `ignore_*`, `allow_*`, `skip_*`, `enforce_*`), and a list option that can grow long or is edited often has a `_file` variant. Today those are `ignore_targets`, `ignore_contents_check`, `allow_subcategories`, `ignore_missing`, `ignore_extra`, `ignore_resources`, and `skip_blocks`. Short, stable lists such as `types`, `targets`, or `block_heading_styles` don't need one; add a variant when one starts to grow. Breaking config changes are allowed before 1.0 but must be shown before and after in the PR.
