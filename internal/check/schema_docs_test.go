@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/YakDriver/swissshepherd/internal/check"
+	"github.com/YakDriver/swissshepherd/internal/config"
 	"github.com/YakDriver/swissshepherd/internal/doc"
 	"github.com/YakDriver/swissshepherd/internal/schema"
 )
@@ -686,6 +687,88 @@ func TestDescription_OrphanedBullets(t *testing.T) {
 			results := (&check.SchemaDocsRule{IgnoreDeprecated: true}).Check(check.CheckContext{Resource: "aws_thing", Schema: rs, Doc: d})
 			if !hasMessage(results, tc.want) {
 				t.Errorf("missing %q in:\n  %s", tc.want, joinMessages(results))
+			}
+		})
+	}
+}
+
+// TestSchemaDocsRule_Overrides: an override replaces sub-check toggles for
+// the targets it lists, before any sub-check runs (#75). A computed-only
+// argument labeled (Optional) is left by labels to coverage; with coverage
+// switched off by an override, labels must report it instead.
+func TestSchemaDocsRule_Overrides(t *testing.T) {
+	t.Parallel()
+
+	const md = "## Argument Reference\n\n* `name` - (Required) Name.\n* `arn` - (Optional) ARN.\n\n## Attribute Reference\n\n* `id` - ID.\n"
+	rs := &schema.ResourceSchema{Name: "aws_thing", Blocks: map[string]*schema.Block{
+		"": {Attributes: []schema.Attribute{{Name: "name", Required: true}, {Name: "arn", Computed: true}, {Name: "id", Computed: true}}},
+	}}
+	const coverageMsg = `Read-Only attribute "arn" should be documented in Attribute Reference section`
+	const labelsMsg = `argument "arn" is labeled (Optional) but is computed-only in the schema; move it to Attribute Reference and remove the label`
+	off, on := false, true
+
+	testCases := map[string]struct {
+		target, typ string
+		overrides   []config.Override
+		want        []string
+		wantNot     []string
+	}{
+		"no override": {
+			target: "aws_thing", typ: "resource",
+			want:    []string{coverageMsg},
+			wantNot: []string{labelsMsg},
+		},
+		"coverage off for this target": {
+			target: "aws_thing", typ: "resource",
+			overrides: []config.Override{{Targets: []string{"aws_thing"}, Coverage: &off}},
+			want:      []string{labelsMsg},
+			wantNot:   []string{coverageMsg},
+		},
+		"qualified target of another type": {
+			target: "aws_thing", typ: "resource",
+			overrides: []config.Override{{Targets: []string{"data_source/aws_thing"}, Coverage: &off}},
+			want:      []string{coverageMsg},
+			wantNot:   []string{labelsMsg},
+		},
+		"qualified target of this type": {
+			target: "aws_thing", typ: "resource",
+			overrides: []config.Override{{Targets: []string{"resource/aws_thing"}, Coverage: &off}},
+			want:      []string{labelsMsg},
+			wantNot:   []string{coverageMsg},
+		},
+		"another target": {
+			target: "aws_other", typ: "resource",
+			overrides: []config.Override{{Targets: []string{"aws_thing"}, Coverage: &off}},
+			want:      []string{coverageMsg},
+		},
+		// An unset toggle keeps the check's value; a set one can re-enable.
+		"unset toggle keeps the check's value": {
+			target: "aws_thing", typ: "resource",
+			overrides: []config.Override{{Targets: []string{"aws_thing"}, Ordering: &on}},
+			want:      []string{coverageMsg},
+		},
+	}
+	for name, tc := range testCases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			d, err := doc.Parse([]byte(md), tc.target)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rule := &check.SchemaDocsRule{Description: &off, Format: &off, Byline: &off, Heading: &off, Overrides: tc.overrides}
+			results := rule.Check(check.CheckContext{Resource: tc.target, Type: &config.Type{Name: tc.typ}, Schema: rs, Doc: d})
+			for _, w := range tc.want {
+				if !hasMessage(results, w) {
+					t.Errorf("missing %q in:\n  %s", w, joinMessages(results))
+				}
+			}
+			for _, w := range tc.wantNot {
+				if hasMessage(results, w) {
+					t.Errorf("unexpected %q in:\n  %s", w, joinMessages(results))
+				}
+			}
+			if rule.Coverage != nil {
+				t.Error("Check modified the rule's own toggles")
 			}
 		})
 	}

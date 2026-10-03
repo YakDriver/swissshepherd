@@ -579,3 +579,96 @@ func TestCheckConfig_AppliesTo_QualifiedIgnorePrefixes(t *testing.T) {
 		t.Error("qualified ignore_prefix should not exclude different type")
 	}
 }
+
+// TestLoad_Overrides covers override blocks: targets_file merges into
+// targets, and an override that would be ignored or ambiguous is an error.
+//
+// Not parallel: t.Chdir mutates process-global state.
+func TestLoad_Overrides(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, root+"/quicksight.txt", "# reuse graphs\nresource/aws_quicksight_template\n")
+	t.Chdir(root)
+
+	testCases := map[string]struct {
+		hcl     string
+		wantErr string
+	}{
+		"targets and targets_file": {
+			hcl: `check "schema_docs" {
+  override {
+    targets      = ["resource/aws_quicksight_analysis"]
+    targets_file = "quicksight.txt"
+    coverage     = false
+  }
+}`,
+		},
+		"outside schema_docs": {
+			hcl:     `check "ordering" {` + "\n  override {\n    targets = [\"aws_x\"]\n    coverage = false\n  }\n}",
+			wantErr: `check "ordering": override blocks are only supported in check "schema_docs"`,
+		},
+		"no targets": {
+			hcl:     `check "schema_docs" {` + "\n  override {\n    coverage = false\n  }\n}",
+			wantErr: `override 1 lists no targets`,
+		},
+		"no toggle": {
+			hcl:     `check "schema_docs" {` + "\n  override {\n    targets = [\"aws_x\"]\n  }\n}",
+			wantErr: `override 1 sets no sub-check`,
+		},
+		"bare and qualified overlap": {
+			hcl: `check "schema_docs" {
+  override {
+    targets  = ["aws_x"]
+    coverage = false
+  }
+  override {
+    targets = ["resource/aws_x"]
+    labels  = false
+  }
+}`,
+			wantErr: `target "resource/aws_x" is matched by overrides 1 and 2`,
+		},
+		"same name, different types": {
+			hcl: `check "schema_docs" {
+  override {
+    targets  = ["data_source/aws_x"]
+    coverage = false
+  }
+  override {
+    targets = ["resource/aws_x"]
+    labels  = false
+  }
+}`,
+		},
+		"missing targets_file": {
+			hcl:     `check "schema_docs" {` + "\n  override {\n    targets_file = \"nope.txt\"\n    coverage = false\n  }\n}",
+			wantErr: "nope.txt",
+		},
+	}
+	for name, tc := range testCases {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(root, strings.ReplaceAll(name, " ", "_")+".hcl")
+			writeFile(t, path, tc.hcl)
+			cfg, err := config.Load(path)
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("Load() error = %v, want one containing %q", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if name != "targets and targets_file" {
+				return
+			}
+			o := cfg.GetCheck("schema_docs").Overrides
+			want := []string{"resource/aws_quicksight_analysis", "resource/aws_quicksight_template"}
+			if len(o) != 1 || !slices.Equal(o[0].Targets, want) || o[0].Coverage == nil || *o[0].Coverage {
+				t.Errorf("Overrides = %+v, want one with targets %q and coverage = false", o, want)
+			}
+			if !o[0].Matches("aws_quicksight_template", "resource") || o[0].Matches("aws_quicksight_template", "data_source") {
+				t.Error("Matches: a qualified target must match only its type")
+			}
+		})
+	}
+}

@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/YakDriver/swissshepherd/internal/config"
 	"github.com/YakDriver/swissshepherd/internal/doc"
 	"github.com/YakDriver/swissshepherd/internal/schema"
 )
@@ -67,6 +68,9 @@ type SchemaDocsRule struct {
 	Byline      *bool
 	Deprecated  *bool
 
+	// Overrides replace the sub-check toggles for the targets they list.
+	Overrides []config.Override
+
 	// Description options
 	BadPrefixes []string
 
@@ -120,6 +124,7 @@ func (r *SchemaDocsRule) allowInlineReadOnly() bool {
 func enabled(b *bool) bool { return b == nil || *b }
 
 func (r *SchemaDocsRule) Check(ctx CheckContext) []Result {
+	r = r.forTarget(ctx)
 	var results []Result
 	if ctx.Doc != nil {
 		ctx.Doc = withProseSections(ctx.Schema, ctx.Doc)
@@ -159,6 +164,49 @@ func (r *SchemaDocsRule) Check(ctx CheckContext) []Result {
 	}
 
 	return results
+}
+
+// forTarget returns r with the toggles of the override matching the target,
+// if any. The toggles change before any sub-check runs, not by filtering its
+// findings afterwards: sub-checks defer to one another based on which are
+// enabled (labels to coverage, for example), so a sub-check switched off for
+// a target must look off to the others too.
+func (r *SchemaDocsRule) forTarget(ctx CheckContext) *SchemaDocsRule {
+	typeName := ""
+	if ctx.Type != nil {
+		typeName = ctx.Type.Name
+	}
+	i := slices.IndexFunc(r.Overrides, func(o config.Override) bool { return o.Matches(ctx.Resource, typeName) })
+	if i < 0 {
+		return r
+	}
+	o := r.Overrides[i]
+	c := *r
+	if o.Coverage != nil {
+		c.Coverage = o.Coverage
+	}
+	if o.Ordering != nil {
+		c.Ordering = o.Ordering
+	}
+	if o.Description != nil {
+		c.Description = o.Description
+	}
+	if o.Heading != nil {
+		c.Heading = o.Heading
+	}
+	if o.Format != nil {
+		c.Format = o.Format
+	}
+	if o.Labels != nil {
+		c.Labels = o.Labels
+	}
+	if o.Byline != nil {
+		c.Byline = o.Byline
+	}
+	if o.Deprecated != nil {
+		c.Deprecated = o.Deprecated
+	}
+	return &c
 }
 
 // --- Coverage ---

@@ -61,8 +61,39 @@ check "schema_docs" {
 
   # Object-typed attribute coverage (opt-in; default false)
   nested_object_attributes    = true   # check fields of list(object)/set(object)/object attributes
+
+  # Per-target sub-check toggles (see "Per-target overrides")
+  override {
+    targets  = ["resource/aws_quicksight_analysis"]
+    coverage = false
+  }
 }
 ```
+
+## Per-target overrides
+
+`ignore_targets` turns off every sub-check for a target. An `override` block turns off, or on, only the sub-checks it names, for only the targets it lists:
+
+```hcl
+check "schema_docs" {
+  enabled = true
+  coverage = true
+  labels   = true
+
+  override {
+    targets      = ["resource/aws_quicksight_analysis", "resource/aws_quicksight_dashboard"]
+    targets_file = "website/schema-docs-no-coverage.txt"
+    coverage     = false
+  }
+}
+```
+
+- An override may set the eight sub-check toggles (`byline`, `coverage`, `deprecated`, `description`, `format`, `heading`, `labels`, `ordering`). A toggle it leaves unset keeps the check's value. Other options, such as `skip_blocks` or `nested_object_attributes`, apply to every target.
+- `targets` takes bare names, which match any type, or type-qualified names (`resource/aws_x`), as in `ignore_targets`. `targets_file` takes one per line.
+- `ignore_targets` still wins: an override can't re-enable a target it excludes.
+- A target matched by two overrides, an override with no targets or no toggles, and an override outside `check "schema_docs"` are configuration errors.
+
+A sub-check switched off by an override is off for that target in every respect, as if it were off for the whole check. Sub-checks that defer to it report the finding themselves. For example, `labels` reports a computed-only field labeled `(Optional)` in strict mode, which it otherwise leaves to `coverage`.
 
 ## Object-typed attributes (`nested_object_attributes`)
 
@@ -129,7 +160,7 @@ The `labels` sub-check validates that a documented argument's label is both **pr
 
 The invariant is single-valued: exactly one label is correct for each attribute — `(Required)` when the schema attribute is `Required`, `(Optional)` when it is configurable but not required (pure `Optional` or `Optional`+`Computed`), and `(Read-Only)` when it is computed-only. The other two category labels are wrong; for example an `Optional`+`Computed` field must read `(Optional)`, so both `(Required)` and `(Read-Only)` on it are reported.
 
-Correctness lives inside the `labels` sub-check rather than behind a separate toggle. `schema_docs` shares one `ignore_targets`/`prefixes` scope across all sub-checks, so a second toggle would only add a global on/off, never per-target granularity. Validating the label's value was always the intent of `labels`; the earlier presence-only behavior was a gap in that check, not a deliberately narrower feature.
+Correctness lives inside the `labels` sub-check rather than behind a separate toggle: it's one question, and a second toggle would only split it. Validating the label's value was always the intent of `labels`; the earlier presence-only behavior was a gap in that check, not a deliberately narrower feature.
 
 A section is checked against every block it documents, decided the way `coverage` decides it (see "Coverage: which section documents a block" below). A shared section, such as one `` `encryption_configuration` `` heading documenting two blocks, or a partly qualified one, such as `` `a.z` `` for block `w.a.z`, is checked like an exact one, and its finding names the section as written.
 
