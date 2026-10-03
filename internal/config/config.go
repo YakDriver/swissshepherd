@@ -112,15 +112,12 @@ type CheckConfig struct {
 	AllowPrefixes []string `hcl:"allow_prefixes,optional"`
 
 	// Completeness rule options.
-	IgnoreDeprecated   *bool    `hcl:"ignore_deprecated,optional"`
-	ImplicitAttributes []string `hcl:"implicit_attributes,optional"`
-	AllowPhantoms      []string `hcl:"allow_phantoms,optional"`
-	SkipBlocks         []string `hcl:"skip_blocks,optional"`
-	// SkipBlocksFile is the file form of SkipBlocks, merged with it. Paths
-	// match exactly, so skipping a recursive structure takes one entry per
-	// path, often too many to keep inline.
-	SkipBlocksFile      string `hcl:"skip_blocks_file,optional"`
-	AllowInlineReadOnly *bool  `hcl:"allow_inline_read_only,optional"`
+	IgnoreDeprecated    *bool    `hcl:"ignore_deprecated,optional"`
+	ImplicitAttributes  []string `hcl:"implicit_attributes,optional"`
+	AllowPhantoms       []string `hcl:"allow_phantoms,optional"`
+	SkipBlocks          []string `hcl:"skip_blocks,optional"`
+	SkipBlocksFile      string   `hcl:"skip_blocks_file,optional"`
+	AllowInlineReadOnly *bool    `hcl:"allow_inline_read_only,optional"`
 
 	// DescriptionStyle rule options.
 	BadPrefixes []string `hcl:"bad_prefixes,optional"`
