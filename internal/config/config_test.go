@@ -672,3 +672,44 @@ func TestLoad_Overrides(t *testing.T) {
 		})
 	}
 }
+
+// TestLoad_DuplicateCheck: two check blocks with one name are a load error
+// naming both lines (#96). For schema_docs the message points at override
+// blocks, which is usually what the second block was reaching for.
+func TestLoad_DuplicateCheck(t *testing.T) {
+	t.Parallel()
+
+	testCases := map[string]struct {
+		hcl     string
+		wantErr string
+	}{
+		"schema_docs twice": {
+			hcl:     "check \"schema_docs\" {\n  coverage = true\n}\n\ncheck \"ordering\" {\n  enabled = true\n}\n\ncheck \"schema_docs\" {\n  labels = false\n}\n",
+			wantErr: `check "schema_docs" is defined twice (lines 1 and 9); use one block with override blocks for per-target sub-check settings`,
+		},
+		"another check twice": {
+			hcl:     "check \"ordering\" {\n  enabled = true\n}\ncheck \"ordering\" {\n  enabled = false\n}\n",
+			wantErr: `check "ordering" is defined twice (lines 1 and 4); merge them into one block`,
+		},
+		"distinct names": {
+			hcl: "check \"schema_docs\" {\n  coverage = true\n}\ncheck \"ordering\" {\n  enabled = true\n}\n",
+		},
+	}
+	for name, tc := range testCases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			path := filepath.Join(t.TempDir(), "swissshepherd.hcl")
+			writeFile(t, path, tc.hcl)
+			_, err := config.Load(path)
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("Load() error = %v", err)
+				}
+				return
+			}
+			if err == nil || err.Error() != "config "+path+": "+tc.wantErr {
+				t.Fatalf("Load() error = %v, want %q", err, "config "+path+": "+tc.wantErr)
+			}
+		})
+	}
+}

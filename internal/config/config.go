@@ -11,7 +11,9 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/hashicorp/hcl/v2"
 	"github.com/hashicorp/hcl/v2/hclsimple"
+	"github.com/hashicorp/hcl/v2/hclsyntax"
 )
 
 const DefaultConfigFile = ".swissshepherd.hcl"
@@ -280,6 +282,10 @@ func Load(path string) (*Config, error) {
 		return cfg, nil
 	}
 
+	if err := checkDuplicateChecks(path); err != nil {
+		return nil, fmt.Errorf("config %s: %w", path, err)
+	}
+
 	var cfg Config
 	if err := hclsimple.DecodeFile(path, nil, &cfg); err != nil {
 		return nil, fmt.Errorf("parsing config %s: %w", path, err)
@@ -383,6 +389,39 @@ func (c *Config) validateOverrides() error {
 				seen = append(seen, entry{typ, name, i})
 			}
 		}
+	}
+	return nil
+}
+
+// checkDuplicateChecks rejects a config with two check blocks of the same
+// name. Lookups use the first match, so a second block would be silently
+// ignored (#96). Someone writing a second schema_docs block usually wants
+// per-target settings, so that message points at override blocks.
+func checkDuplicateChecks(path string) error {
+	src, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("reading config: %w", err)
+	}
+	f, diags := hclsyntax.ParseConfig(src, path, hcl.InitialPos)
+	if diags.HasErrors() {
+		return nil // decoding reports syntax errors with full context
+	}
+	first := make(map[string]int)
+	for _, b := range f.Body.(*hclsyntax.Body).Blocks {
+		if b.Type != "check" || len(b.Labels) != 1 {
+			continue
+		}
+		name, line := b.Labels[0], b.DefRange().Start.Line
+		prev, ok := first[name]
+		if !ok {
+			first[name] = line
+			continue
+		}
+		hint := "merge them into one block"
+		if name == "schema_docs" {
+			hint = "use one block with override blocks for per-target sub-check settings"
+		}
+		return fmt.Errorf("check %q is defined twice (lines %d and %d); %s", name, prev, line, hint)
 	}
 	return nil
 }
