@@ -174,7 +174,7 @@ inline code spans, markdown link targets, autolinks, and bare URLs
 scan. Masking replaces with equal-length spaces so byte offsets stay
 aligned.
 
-Three additional cases need masking beyond `GlossRule`'s pipeline, because
+Two additional cases need masking beyond `GlossRule`'s pipeline, because
 in each the underlying defect is an unbackticked literal, and a casing
 finding there would misname the defect:
 
@@ -189,26 +189,16 @@ sentence-final `…inside your rest api.` reportable while rejecting
 `index.html`. A match enclosed in double quotes is skipped for the same
 reason (`only "url" can be used`).
 
-**A heading in `{Block}` or `{Path}` style is skipped.** Those styles
-require the heading text to be literally snake_case
-(`matchTemplate`/`isSnakeCaseSegment` in `internal/doc/doc.go` reject
-anything else), so a bare block-name heading like `## tls Argument
-Reference` depends on staying lowercase to resolve against the schema
-path; capitalizing it to `TLS` would break that resolution and turn a
-style finding into a coverage error. Detecting this needs no heading-style
-awareness beyond the heading's own text — a word that is the entire
-heading content (ignoring a trailing fixed suffix like `Argument
-Reference`) and already lowercase is left alone.
-
-Headings in `{Title}` style are not similarly at risk and are scanned
-normally. `{Title}` resolution (`titleToSnake`) lowercases the whole
-heading before comparing, so `## Ip Filter Argument Reference` and
-`## IP Filter Argument Reference` resolve to the identical `ip_filter`
-key — capitalizing `Ip` to `IP` there is a pure style improvement with no
-effect on resolution. The same holds for anchor slugs
-(`headingAnchorSlug` also lowercases first), so link text pointing at an
-in-page anchor is ordinary prose too and is scanned like any other link
-text with no masking carve-out needed for it.
+Headings get no carve-out. A bare `## tls Argument Reference` heading
+(the unbackticked `{Block}` style, one of the accepted
+`block_heading_styles`) is prose as far as this rule is concerned: `tls`
+is scanned and reported like any other word. If `tls` must stay lowercase
+there to resolve against the schema path, the message's own "or add
+backticks" branch is the fix, matching `schema_docs`'s separate preferred
+-style finding (which already points unbackticked `{Block}` headings
+toward the backticked form). The two findings name different defects —
+one casing, one heading format — and can both fire on the same heading
+without conflicting, since the backticks fix satisfies both.
 
 ## Never guess
 
@@ -223,9 +213,6 @@ The real ambiguities, all of which produce no finding:
 - **Unterminated inline code spans.** A line with an odd number of
   backticks is skipped, since the inline-code mask can't tell where the
   span was meant to end.
-- **`{Block}`/`{Path}`-style headings.** The schema decides those names,
-  and this rule has no schema — it only knows the heading must stay
-  lowercase to resolve, not what it should resolve to.
 - **Enum values written in prose without backticks.** `valid values are
   cpu and memory` is structurally indistinguishable from prose. There is no
   signal to act on; this is a known residual false positive, addressed by
@@ -272,7 +259,6 @@ context-dependent) or adding backticks at the one correct lowercase site
 | Unchecked | Why | Reported by |
 |---|---|---|
 | Casing inside code spans, fences, link targets, URLs, and colon literals | Not prose; the text is a value | nothing, by design |
-| Casing in `{Block}`/`{Path}`-style headings | Capitalizing breaks the heading's resolution against the schema path | nothing |
 | Vendor-specific initialisms (`ARN`, `VPC`, …) | Not in the default list | nothing until a provider sets `enforce_casing` |
 | `TCP`, `UDP` | Lowercase forms are config values a user types (`protocol = "tcp"`) | nothing until a provider opts in |
 | A word in `ignore_words` | Provider opted out, globally or for one target | nothing |
@@ -287,20 +273,20 @@ table-driven with `t.Parallel()`.
 - One case per masked region: code span, fence, link target, autolink, bare
   URL, colon literal, frontmatter — each asserting no finding.
 - One case per never-guess condition asserting no finding: unterminated
-  backtick span, a `{Block}`-style heading, each glue character, quoted
-  literal — plus one asserting a sentence-final match *is* reported, and
-  one asserting a `{Title}`-style heading (`## Ip Filter Argument
-  Reference`) and its matching in-page anchor link text *are* both
-  reported.
+  backtick span, each glue character, quoted literal — plus one asserting
+  a sentence-final match *is* reported.
+- A bare, unbackticked `{Block}`-style heading (`## tls Argument
+  Reference`) *is* reported for `tls`, suggesting backticks as the
+  alternative fix, alongside `schema_docs`'s separate preferred-style
+  finding on the same heading.
 - Correctly cased text produces nothing: `ID`, `JSON`, `HTTPS` in prose.
 - `Id` and `id` both report, confirming canonical rather than literal
   matching; `enforce_casing` overriding a default word's casing.
 - Determinism: a doc with several words on one line, run many times
   in-process, identical output.
 - Fixtures frozen from real docs: an `id` reference, an `Id`/`id` pair, an
-  ARN literal, a glued token (`execute-api`), a `{Block}`-style heading
-  (`## tls Argument Reference`) left unreported, and a `{Title}`-style
-  heading reported.
+  ARN literal, a glued token (`execute-api`), an unbackticked `{Block}`
+  -style heading.
 - Config validation: duplicate canonical forms differing only in case, and
   an `enforce_casing` entry equal to its own lowercase form.
 - `ignore_words`: a bare entry silences a word everywhere; a `type/name`
