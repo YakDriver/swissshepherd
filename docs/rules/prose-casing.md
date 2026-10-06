@@ -189,22 +189,26 @@ sentence-final `…inside your rest api.` reportable while rejecting
 `index.html`. A match enclosed in double quotes is skipped for the same
 reason (`only "url" can be used`).
 
-**Heading lines, and link text pointing at an in-page anchor, are skipped
-entirely.** A block heading carries the schema's own block name, and the
-provider's accepted heading styles include unbackticked forms —
-`{Title}` renders `ip_filter` as `Ip Filter`. Capitalizing it breaks the
-heading's resolution against the schema path, turning a style finding into
-a coverage error:
+**A heading in `{Block}` or `{Path}` style is skipped.** Those styles
+require the heading text to be literally snake_case
+(`matchTemplate`/`isSnakeCaseSegment` in `internal/doc/doc.go` reject
+anything else), so a bare block-name heading like `## tls Argument
+Reference` depends on staying lowercase to resolve against the schema
+path; capitalizing it to `TLS` would break that resolution and turn a
+style finding into a coverage error. Detecting this needs no heading-style
+awareness beyond the heading's own text — a word that is the entire
+heading content (ignoring a trailing fixed suffix like `Argument
+Reference`) and already lowercase is left alone.
 
-```
-#### client_authentication tls Argument Reference      ← tls is the schema block name
-### Ip Filter Argument Reference                       ← {Title} of ip_filter
-```
-
-Link text targeting an in-page anchor (`[Ip Filter](#ip-filter-argument-reference)`)
-mirrors a heading this rule cannot report, so it is skipped for the same
-reason. Link text with an external target is ordinary prose and is still
-scanned.
+Headings in `{Title}` style are not similarly at risk and are scanned
+normally. `{Title}` resolution (`titleToSnake`) lowercases the whole
+heading before comparing, so `## Ip Filter Argument Reference` and
+`## IP Filter Argument Reference` resolve to the identical `ip_filter`
+key — capitalizing `Ip` to `IP` there is a pure style improvement with no
+effect on resolution. The same holds for anchor slugs
+(`headingAnchorSlug` also lowercases first), so link text pointing at an
+in-page anchor is ordinary prose too and is scanned like any other link
+text with no masking carve-out needed for it.
 
 ## Never guess
 
@@ -219,8 +223,9 @@ The real ambiguities, all of which produce no finding:
 - **Unterminated inline code spans.** A line with an odd number of
   backticks is skipped, since the inline-code mask can't tell where the
   span was meant to end.
-- **Headings and anchor link text.** The schema decides those names, and
-  this rule has no schema.
+- **`{Block}`/`{Path}`-style headings.** The schema decides those names,
+  and this rule has no schema — it only knows the heading must stay
+  lowercase to resolve, not what it should resolve to.
 - **Enum values written in prose without backticks.** `valid values are
   cpu and memory` is structurally indistinguishable from prose. There is no
   signal to act on; this is a known residual false positive, addressed by
@@ -267,8 +272,7 @@ context-dependent) or adding backticks at the one correct lowercase site
 | Unchecked | Why | Reported by |
 |---|---|---|
 | Casing inside code spans, fences, link targets, URLs, and colon literals | Not prose; the text is a value | nothing, by design |
-| Casing in headings | The schema owns the block name; unbackticked heading styles are accepted and capitalizing breaks resolution | nothing |
-| Casing in link text targeting an in-page anchor | Mirrors a heading that can't be reported | nothing, by design |
+| Casing in `{Block}`/`{Path}`-style headings | Capitalizing breaks the heading's resolution against the schema path | nothing |
 | Vendor-specific initialisms (`ARN`, `VPC`, …) | Not in the default list | nothing until a provider sets `enforce_casing` |
 | `TCP`, `UDP` | Lowercase forms are config values a user types (`protocol = "tcp"`) | nothing until a provider opts in |
 | A word in `ignore_words` | Provider opted out, globally or for one target | nothing |
@@ -283,16 +287,20 @@ table-driven with `t.Parallel()`.
 - One case per masked region: code span, fence, link target, autolink, bare
   URL, colon literal, frontmatter — each asserting no finding.
 - One case per never-guess condition asserting no finding: unterminated
-  backtick span, heading line, anchor link text, each glue character,
-  quoted literal — plus one asserting a sentence-final match *is* reported.
+  backtick span, a `{Block}`-style heading, each glue character, quoted
+  literal — plus one asserting a sentence-final match *is* reported, and
+  one asserting a `{Title}`-style heading (`## Ip Filter Argument
+  Reference`) and its matching in-page anchor link text *are* both
+  reported.
 - Correctly cased text produces nothing: `ID`, `JSON`, `HTTPS` in prose.
 - `Id` and `id` both report, confirming canonical rather than literal
   matching; `enforce_casing` overriding a default word's casing.
 - Determinism: a doc with several words on one line, run many times
   in-process, identical output.
 - Fixtures frozen from real docs: an `id` reference, an `Id`/`id` pair, an
-  ARN literal, a glued token (`execute-api`), an `Ip Filter`-style heading
-  with matching anchor text.
+  ARN literal, a glued token (`execute-api`), a `{Block}`-style heading
+  (`## tls Argument Reference`) left unreported, and a `{Title}`-style
+  heading reported.
 - Config validation: duplicate canonical forms differing only in case, and
   an `enforce_casing` entry equal to its own lowercase form.
 - `ignore_words`: a bare entry silences a word everywhere; a `type/name`
