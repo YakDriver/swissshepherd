@@ -120,16 +120,22 @@ func (r *ProseCasing) CheckFile(ctx FileCheckContext) []Result {
 	if r.skipFrontmatter {
 		fmEnd = frontmatterEnd(lines)
 	}
-	inFence := false
+	var fenceChar byte
+	fenceLen := 0
 	for i, raw := range lines {
 		if i <= fmEnd {
 			continue
 		}
-		if isFenceDelimiter(raw) {
-			inFence = !inFence
+		if char, length, closer := fenceDelimiter(raw); length > 0 {
+			switch {
+			case fenceChar == 0:
+				fenceChar, fenceLen = char, length
+			case closer && char == fenceChar && length >= fenceLen:
+				fenceChar, fenceLen = 0, 0
+			}
 			continue
 		}
-		if inFence {
+		if fenceChar != 0 {
 			continue
 		}
 		// An unterminated inline code span can't be told apart from real

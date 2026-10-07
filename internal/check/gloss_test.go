@@ -95,6 +95,36 @@ func TestGlossRule_SkipsCodeAndURLs(t *testing.T) {
 	}
 }
 
+func TestGlossRule_MismatchedFenceCharacterDoesNotCloseFence(t *testing.T) {
+	t.Parallel()
+
+	// A ~~~ line inside a ```-fenced block isn't a close: it's ordinary
+	// fence content. Only a ``` line (same character, run at least as
+	// long as the opener's) can close this fence. The banned phrase on
+	// the middle line remains inside the real fence throughout and must
+	// not be scanned.
+	glosses := map[string]string{"Amazon Resource Name": "ARN"}
+	content := "```\nsome code\n~~~\nAmazon Resource Name\n```"
+	if got := runGloss(glosses, content); len(got) != 0 {
+		t.Errorf("expected 0 findings (content stayed inside the ``` fence), got %d: %+v", len(got), got)
+	}
+}
+
+func TestGlossRule_InfoStringLineCannotCloseFence(t *testing.T) {
+	t.Parallel()
+
+	// A line with trailing content after the fence run (an info string,
+	// here repeated on a second line before the real closer) is only
+	// ever valid as an opener. It must not close the fence, or the
+	// banned phrase on the line after it would wrongly be scanned as
+	// prose instead of fence content.
+	glosses := map[string]string{"Amazon Resource Name": "ARN"}
+	content := "````go\nsome code\n````go\nAmazon Resource Name\n````"
+	if got := runGloss(glosses, content); len(got) != 0 {
+		t.Errorf("expected 0 findings (content stayed inside the fence), got %d: %+v", len(got), got)
+	}
+}
+
 func TestGlossRule_OptionalPrefixInsideParens(t *testing.T) {
 	t.Parallel()
 

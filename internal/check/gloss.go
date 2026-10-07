@@ -95,16 +95,22 @@ func (r *GlossRule) CheckFile(ctx FileCheckContext) []Result {
 	if r.skipFrontmatter {
 		fmEnd = frontmatterEnd(lines)
 	}
-	inFence := false
+	var fenceChar byte
+	fenceLen := 0
 	for i, raw := range lines {
 		if i <= fmEnd {
 			continue
 		}
-		if isFenceDelimiter(raw) {
-			inFence = !inFence
+		if char, length, closer := fenceDelimiter(raw); length > 0 {
+			switch {
+			case fenceChar == 0:
+				fenceChar, fenceLen = char, length
+			case closer && char == fenceChar && length >= fenceLen:
+				fenceChar, fenceLen = 0, 0
+			}
 			continue
 		}
-		if inFence {
+		if fenceChar != 0 {
 			continue
 		}
 
@@ -143,11 +149,37 @@ func recommend(matched, abb string) string {
 	return abb
 }
 
-// isFenceDelimiter reports whether a line opens or closes a fenced code block
-// (``` or ~~~, possibly indented, optionally with an info string).
-func isFenceDelimiter(line string) bool {
+// fenceDelimiter reports the fence character and run length when a line
+// opens or closes a fenced code block (``` or ~~~, possibly indented,
+// optionally with an info string), or (0, 0, false) if the line is not a
+// fence. The returned length is of the run of fence characters only, so
+// a caller can tell a 3-backtick line from a 4-backtick line and apply
+// CommonMark's closing rule: a fence only closes on a line using the
+// same character, a run at least as long as the opener's, and nothing
+// but whitespace after the run. A line with trailing content (an info
+// string, such as "```go") is only ever valid as an opener. Without
+// checking that, a second "```go" line before the real closer would
+// wrongly end the fence early, the same class of bug as a mismatched
+// ~~~ nested inside a ``` block.
+func fenceDelimiter(line string) (char byte, length int, closer bool) {
 	t := strings.TrimSpace(line)
-	return strings.HasPrefix(t, "```") || strings.HasPrefix(t, "~~~")
+	if len(t) == 0 {
+		return 0, 0, false
+	}
+	switch t[0] {
+	case '`', '~':
+		char = t[0]
+	default:
+		return 0, 0, false
+	}
+	for length < len(t) && t[length] == char {
+		length++
+	}
+	if length < 3 {
+		return 0, 0, false
+	}
+	closer = strings.TrimSpace(t[length:]) == ""
+	return char, length, closer
 }
 
 // frontmatterEnd returns the index of the closing "---" of a leading YAML

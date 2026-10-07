@@ -189,6 +189,35 @@ func TestProseCasing_SkipsCodeFencesAndURLs(t *testing.T) {
 	}
 }
 
+func TestProseCasing_MismatchedFenceCharacterDoesNotCloseFence(t *testing.T) {
+	t.Parallel()
+
+	// A ~~~ line inside a ```-fenced block isn't a close: it's ordinary
+	// fence content. Only a ``` line (same character, run at least as
+	// long as the opener's) can close this fence. "api usage here"
+	// remains inside the real fence throughout and must not be scanned.
+	content := "```\nsome code\n~~~\napi usage here\n```"
+	got := runProseCasing(t, nil, nil, content)
+	if len(got) != 0 {
+		t.Errorf("expected 0 findings (content stayed inside the ``` fence), got %d: %+v", len(got), got)
+	}
+}
+
+func TestProseCasing_InfoStringLineCannotCloseFence(t *testing.T) {
+	t.Parallel()
+
+	// A line with trailing content after the fence run (an info string,
+	// here repeated on a second line before the real closer) is only
+	// ever valid as an opener. It must not close the fence, or "api
+	// usage here" would wrongly be scanned as prose instead of fence
+	// content.
+	content := "````go\nsome code\n````go\napi usage here\n````"
+	got := runProseCasing(t, nil, nil, content)
+	if len(got) != 0 {
+		t.Errorf("expected 0 findings (content stayed inside the fence), got %d: %+v", len(got), got)
+	}
+}
+
 func TestProseCasing_SkipFrontmatter(t *testing.T) {
 	t.Parallel()
 

@@ -194,7 +194,7 @@ AWS-specific.
 ## Masking
 
 Reuses `GlossRule`'s pipeline as-is: skip frontmatter when configured, skip
-fenced code blocks (`isFenceDelimiter`, `frontmatterEnd`), and blank out
+fenced code blocks (`fenceDelimiter`, `frontmatterEnd`), and blank out
 inline code spans, markdown link targets, autolinks, and bare URLs
 (`maskUnscannable`), gating each line on a cheap combined regex before the
 scan. Masking replaces with equal-length spaces so byte offsets stay
