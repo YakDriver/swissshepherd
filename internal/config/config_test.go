@@ -729,6 +729,15 @@ func TestLoad_ProseCasingValidation(t *testing.T) {
 			hcl:     "check \"prose_casing\" {\n  enabled = true\n  enforce_casing = [\"ARN\", \"Arn\"]\n}\n",
 			wantErr: `check "prose_casing": enforce_casing entries "ARN" and "Arn" differ only in case`,
 		},
+		"two entries differ only in case once trimmed": {
+			// Untrimmed, " Arn " != "arn" lowercased, so a comparison that
+			// skipped trimming would miss this collision and let it reach
+			// NewProseCasingRule, which trims before merging and would
+			// silently let the second entry overwrite the first instead of
+			// erroring.
+			hcl:     "check \"prose_casing\" {\n  enabled = true\n  enforce_casing = [\"ARN\", \" Arn \"]\n}\n",
+			wantErr: `check "prose_casing": enforce_casing entries "ARN" and "Arn" differ only in case`,
+		},
 		"valid entries": {
 			hcl: "check \"prose_casing\" {\n  enabled = true\n  enforce_casing = [\"ARN\", \"DynamoDB\"]\n}\n",
 		},

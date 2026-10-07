@@ -421,6 +421,14 @@ func (c *Config) validateProseCasing() error {
 		}
 		seen := make(map[string]string) // lowercase form -> original entry
 		for _, w := range ch.EnforceCasing {
+			// Trimmed the same way NewProseCasingRule trims at construction
+			// time, so a config this validates as accepted can't still
+			// collide once trimmed — e.g. ["ARN", " Arn "] must be caught
+			// here, not silently collapsed to one entry at runtime.
+			w = strings.TrimSpace(w)
+			if w == "" {
+				continue
+			}
 			if w == strings.ToLower(w) {
 				return fmt.Errorf("check %q: enforce_casing entry %q is already lowercase; it would suggest itself", ch.Name, w)
 			}
