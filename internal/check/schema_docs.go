@@ -1847,7 +1847,8 @@ func (r *SchemaDocsRule) checkFormat(ctx CheckContext) []Result {
 	var results []Result
 	var inSection bool
 	var inAttributes bool
-	var inCodeBlock bool
+	var fenceChar byte
+	fenceLen := 0
 	var inList bool
 	var prevWasAttr bool
 	// attrStack tracks attribute names at each indentation level for nesting validation.
@@ -1869,24 +1870,29 @@ func (r *SchemaDocsRule) checkFormat(ctx CheckContext) []Result {
 		}
 		if inSection && strings.HasPrefix(line, "## ") {
 			inSection = false
-			inCodeBlock = false
+			fenceChar, fenceLen = 0, 0
 			inList = false
 		}
 		if !inSection {
 			continue
 		}
 
-		if strings.HasPrefix(line, "```") {
-			if noCode && !inCodeBlock {
+		if char, length := fenceDelimiter(line); length > 0 {
+			if noCode && fenceChar == 0 {
 				results = append(results, Result{
 					Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityError,
 					Message: fmt.Sprintf("code block in argument/attribute section (line %d)", lineNum),
 				})
 			}
-			inCodeBlock = !inCodeBlock
+			switch {
+			case fenceChar == 0:
+				fenceChar, fenceLen = char, length
+			case char == fenceChar && length >= fenceLen:
+				fenceChar, fenceLen = 0, 0
+			}
 			continue
 		}
-		if inCodeBlock {
+		if fenceChar != 0 {
 			continue
 		}
 

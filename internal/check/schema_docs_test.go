@@ -302,6 +302,61 @@ func TestSchemaDocsRule_DisableNoCodeBlocks(t *testing.T) {
 	}
 }
 
+func TestSchemaDocsRule_NoCodeBlocksRecognizesTildeFence(t *testing.T) {
+	t.Parallel()
+
+	// A ~~~ fence is a code block too; NoCodeBlocks must flag it the same
+	// as a ``` fence, not scan its content as attribute-list prose.
+	src := "# Resource: test\n\n## Argument Reference\n\n~~~\ncode block here\n~~~\n\n* `name` - (Required) Name.\n"
+
+	d, err := doc.Parse([]byte(src), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rule := &check.SchemaDocsRule{}
+	results := rule.Check(check.CheckContext{Resource: "test", Doc: d})
+
+	found := false
+	for _, r := range results {
+		if r.Rule == "schema_docs" && strings.Contains(r.Message, "code block") {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected a code-block finding for the ~~~ fence")
+	}
+}
+
+func TestSchemaDocsRule_MismatchedFenceCharacterDoesNotCloseFence(t *testing.T) {
+	t.Parallel()
+
+	// A ~~~ fence is invisible to a check that only recognizes ```, so an
+	// attribute-list-shaped line inside it (plausible as example output)
+	// gets scanned as a real attribute, and the fence's own closing ~~~
+	// then looks like it interrupts that fabricated list. With ~~~
+	// recognized, the whole block is skipped and the only finding is the
+	// expected "code block in argument/attribute section" error.
+	src := "# Resource: test\n\n## Argument Reference\n\n~~~\n* `fake` - not a real attribute, just example output\n~~~\n\n* `name` - (Required) Name.\n"
+
+	d, err := doc.Parse([]byte(src), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rule := &check.SchemaDocsRule{}
+	results := rule.Check(check.CheckContext{Resource: "test", Doc: d})
+
+	for _, r := range results {
+		if strings.Contains(r.Message, "interrupted") {
+			t.Errorf("content inside the ~~~ fence must not produce an interrupted-list finding: %s", r.Message)
+		}
+	}
+	if len(results) != 1 || !strings.Contains(results[0].Message, "code block") {
+		t.Errorf("expected exactly 1 finding (the ~~~ code-block error), got: %+v", results)
+	}
+}
+
 func TestOrdering_FixtureInOrder(t *testing.T) {
 	t.Parallel()
 
