@@ -328,7 +328,7 @@ func TestSchemaDocsRule_NoCodeBlocksRecognizesTildeFence(t *testing.T) {
 	}
 }
 
-func TestSchemaDocsRule_MismatchedFenceCharacterDoesNotCloseFence(t *testing.T) {
+func TestSchemaDocsRule_TildeFencedAttrShapedContentNotScannedAsAttribute(t *testing.T) {
 	t.Parallel()
 
 	// A ~~~ fence is invisible to a check that only recognizes ```, so an
@@ -354,6 +354,34 @@ func TestSchemaDocsRule_MismatchedFenceCharacterDoesNotCloseFence(t *testing.T) 
 	}
 	if len(results) != 1 || !strings.Contains(results[0].Message, "code block") {
 		t.Errorf("expected exactly 1 finding (the ~~~ code-block error), got: %+v", results)
+	}
+}
+
+func TestSchemaDocsRule_InfoStringLineCannotCloseFence(t *testing.T) {
+	t.Parallel()
+
+	// A line with trailing content after the fence run (an info string,
+	// here repeated on a second line before the real closer) is only
+	// ever valid as an opener. It must not close the fence, or the
+	// attribute-shaped line after it would wrongly be scanned as a real
+	// attribute instead of fence content.
+	src := "# Resource: test\n\n## Argument Reference\n\n````go\ncode\n````go\n* `fake` - not a real attribute\n````\n\n* `name` - (Required) Name.\n"
+
+	d, err := doc.Parse([]byte(src), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rule := &check.SchemaDocsRule{}
+	results := rule.Check(check.CheckContext{Resource: "test", Doc: d})
+
+	for _, r := range results {
+		if strings.Contains(r.Message, "fake") || strings.Contains(r.Message, "interrupted") {
+			t.Errorf("content inside the fence must not be scanned as a real attribute: %s", r.Message)
+		}
+	}
+	if len(results) != 1 || !strings.Contains(results[0].Message, "code block") {
+		t.Errorf("expected exactly 1 finding (the fence's code-block error), got: %+v", results)
 	}
 }
 

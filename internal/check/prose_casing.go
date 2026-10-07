@@ -126,11 +126,11 @@ func (r *ProseCasing) CheckFile(ctx FileCheckContext) []Result {
 		if i <= fmEnd {
 			continue
 		}
-		if char, length := fenceDelimiter(raw); length > 0 {
+		if char, length, closer := fenceDelimiter(raw); length > 0 {
 			switch {
 			case fenceChar == 0:
 				fenceChar, fenceLen = char, length
-			case char == fenceChar && length >= fenceLen:
+			case closer && char == fenceChar && length >= fenceLen:
 				fenceChar, fenceLen = 0, 0
 			}
 			continue

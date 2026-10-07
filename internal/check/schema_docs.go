@@ -1877,7 +1877,7 @@ func (r *SchemaDocsRule) checkFormat(ctx CheckContext) []Result {
 			continue
 		}
 
-		if char, length := fenceDelimiter(line); length > 0 {
+		if char, length, closer := fenceDelimiter(line); length > 0 {
 			if noCode && fenceChar == 0 {
 				results = append(results, Result{
 					Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityError,
@@ -1887,7 +1887,7 @@ func (r *SchemaDocsRule) checkFormat(ctx CheckContext) []Result {
 			switch {
 			case fenceChar == 0:
 				fenceChar, fenceLen = char, length
-			case char == fenceChar && length >= fenceLen:
+			case closer && char == fenceChar && length >= fenceLen:
 				fenceChar, fenceLen = 0, 0
 			}
 			continue

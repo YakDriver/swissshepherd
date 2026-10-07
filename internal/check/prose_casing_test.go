@@ -203,6 +203,21 @@ func TestProseCasing_MismatchedFenceCharacterDoesNotCloseFence(t *testing.T) {
 	}
 }
 
+func TestProseCasing_InfoStringLineCannotCloseFence(t *testing.T) {
+	t.Parallel()
+
+	// A line with trailing content after the fence run (an info string,
+	// here repeated on a second line before the real closer) is only
+	// ever valid as an opener. It must not close the fence, or "api
+	// usage here" would wrongly be scanned as prose instead of fence
+	// content.
+	content := "````go\nsome code\n````go\napi usage here\n````"
+	got := runProseCasing(t, nil, nil, content)
+	if len(got) != 0 {
+		t.Errorf("expected 0 findings (content stayed inside the fence), got %d: %+v", len(got), got)
+	}
+}
+
 func TestProseCasing_SkipFrontmatter(t *testing.T) {
 	t.Parallel()
 

@@ -110,6 +110,21 @@ func TestGlossRule_MismatchedFenceCharacterDoesNotCloseFence(t *testing.T) {
 	}
 }
 
+func TestGlossRule_InfoStringLineCannotCloseFence(t *testing.T) {
+	t.Parallel()
+
+	// A line with trailing content after the fence run (an info string,
+	// here repeated on a second line before the real closer) is only
+	// ever valid as an opener. It must not close the fence, or the
+	// banned phrase on the line after it would wrongly be scanned as
+	// prose instead of fence content.
+	glosses := map[string]string{"Amazon Resource Name": "ARN"}
+	content := "````go\nsome code\n````go\nAmazon Resource Name\n````"
+	if got := runGloss(glosses, content); len(got) != 0 {
+		t.Errorf("expected 0 findings (content stayed inside the fence), got %d: %+v", len(got), got)
+	}
+}
+
 func TestGlossRule_OptionalPrefixInsideParens(t *testing.T) {
 	t.Parallel()
 
