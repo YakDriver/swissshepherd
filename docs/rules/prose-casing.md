@@ -131,18 +131,23 @@ check "prose_casing" {
   `enforce_casing` into the default list and before compiling the matcher.
   This is how a provider that enables the check but disagrees with one
   default entry removes it, without forking the whole list. A bare entry
-  (`"ami"`) removes the word everywhere; a `type/name`-qualified entry
-  (`"aws_emr_cluster/ssh"`) removes it for one target, resolved the way
-  `Override.Matches` resolves its targets. Independent of `IgnoreTargets`,
+  (`"ami"`) removes the word everywhere; a `target/word` entry
+  (`"aws_emr_cluster/ssh"`) removes it for one target only — the target
+  first, as a bare resource name or `type/name`, split at the last `/` so
+  the trailing word is always unambiguous. Independent of `IgnoreTargets`,
   which scopes the whole check by file rather than one word. Short and
   stable, so no `_file` variant.
 - Reuses `CheckConfig`'s existing `Severity`, `SkipFrontmatter`,
   `IgnoreTargets`/`IgnoreTargetsFile`, `Prefixes`/`IgnorePrefixes`. No new
   scoping mechanism.
-- `Load` rejects a config whose merged list contains two canonical forms
-  differing only in case, and any `enforce_casing` entry equal to its own
-  lowercase form (a rule that suggests its own input is a config error, not
-  a finding).
+- `Load` rejects an `enforce_casing` list with two entries differing only
+  in case, or an entry equal to its own lowercase form (a rule that
+  suggests its own input is a config error, not a finding). It cannot
+  check `enforce_casing` against the check's built-in default list without
+  an import cycle (`internal/check` already imports `internal/config`), so
+  that half of the check — a provider override colliding with a default
+  entry's case — runs in `check.NewProseCasingRule` at construction time
+  instead.
 
 ## Default list
 
