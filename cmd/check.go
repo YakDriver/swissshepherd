@@ -272,6 +272,20 @@ func runCheck(cmd *cobra.Command, args []string) error {
 			fileRules = append(fileRules, check.NewGlossRule(cc.BannedGlosses, cc.SkipFrontmatter, sev))
 		}
 	}
+	// prose_casing ships a non-empty default word list, unlike
+	// banned_glosses, so IsCheckEnabled's "enabled unless mentioned"
+	// default would make every provider start seeing findings on upgrade.
+	// It requires an explicit "enabled = true" in a check block instead
+	// (docs/rules/prose-casing.md "Rollout").
+	if cfg.GetCheck("prose_casing").Enabled {
+		cc := cfg.GetCheck("prose_casing")
+		sev := check.ParseSeverity(cc.Severity, check.SeverityWarning)
+		rule, err := check.NewProseCasingRule(cc.EnforceCasing, cc.IgnoreWords, headingTemplates(cfg), cc.SkipFrontmatter, sev)
+		if err != nil {
+			return fmt.Errorf("config: %w", err)
+		}
+		fileRules = append(fileRules, rule)
+	}
 
 	runner := &check.Runner{
 		Schema:                    ps,

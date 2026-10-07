@@ -197,6 +197,7 @@ Each check has at most one `check "<name>"` block; a second block with the same 
 | `file_match` | global | File↔schema alignment: missing docs, orphan files, mixed layouts |
 | `frontmatter` | per-file | YAML frontmatter field validation |
 | `import_section` | per-target | Import section style and structure |
+| `prose_casing` | per-file | Flags doc prose words whose casing should match a configured initialism/term but doesn't (opt-in) |
 | `region_argument` | per-target | Region argument presence for region-aware types |
 | `schema_docs` | per-target | Schema coverage, ordering, description style, heading style, format, labels, deprecation, and bylines |
 | `section_presence` | per-target | Section presence, order, and recognition of unknown level-2 headings |
@@ -307,6 +308,31 @@ For each configured pair it flags both forms and recommends the abbreviation:
 The bare abbreviation (`ARN`) on its own is always accepted and never flagged. An optional leading `Amazon `/`AWS ` on the phrase, and an optional `Amazon `/`AWS ` inside the parenthetical (`Amazon Simple Storage Service (Amazon S3)`), are recognized. A trailing plural is tolerated (`Amazon Resource Names` → `ARNs`).
 
 The scan covers the whole document — descriptions, prose, callouts, and frontmatter — but skips fenced code blocks, inline code spans, and URLs so configuration and identifiers are left alone. Set `skip_frontmatter = true` to exclude the leading YAML frontmatter block (handy because `subcategory` values come from a fixed taxonomy and shouldn't be rewritten). Findings default to warnings; set `severity = "error"` to fail the run. Each occurrence is reported with its line number. Like every check, it honors the standard scoping options (`types`, `prefixes`, `targets`, `ignore_targets`, `ignore_prefixes`).
+
+---
+
+### `prose_casing`
+
+Flags a word in doc prose whose casing should be a configured canonical form but isn't — `arn` should be `ARN`, `dynamodb` should be `DynamoDB`. Unlike `banned_glosses`, which bans a spelled-out phrase in favor of its abbreviation, this check corrects the casing of a word that's already the right word. It ships a small, vendor-neutral default list (`ID`, `API`, `URL`, `JSON`, `CPU`, and similar common initialisms); AWS- or provider-specific vocabulary (`ARN`, `VPC`, `DynamoDB`) is added via `enforce_casing`. This check is **opt-in**: unlike `banned_glosses`, it ships with a non-empty default list, so it requires an explicit `enabled = true` rather than defaulting on.
+
+```hcl
+check "prose_casing" {
+  enabled = true
+
+  enforce_casing = ["ARN", "VPC", "KMS", "IAM", "DynamoDB"]
+
+  ignore_words = ["ami", "aws_emr_cluster/ssh"]
+
+  skip_frontmatter = true    # optional; default false
+  severity         = "error" # optional; "error" or "warning" (default "warning")
+}
+```
+
+`enforce_casing` lists canonical forms to add to (or, for a word the default list already has, override the casing of) the built-in list. `ignore_words` removes a word from the merged list before matching — a bare entry (`"ami"`) removes it everywhere; a `target/word` entry (`"aws_emr_cluster/ssh"`) removes it for one target only, the target given as a bare resource name or `type/name`.
+
+Matching is case-insensitive and reports a finding whenever the matched text differs from the canonical form, so both `Id` and `id` are flagged as the same defect (want `ID`), and the canonical form is reproduced exactly as configured — including AWS's mid-word capitals (`DynamoDB`, `OAuth`, `iSCSI`). A finding offers two possible fixes, since the check can't tell which applies: capitalize the word, or wrap it in backticks if it's a correct lowercase reference to code, a value, or a command (`` `ssh` ``). The scan skips fenced code blocks, inline code spans, URLs, colon-delimited literals (`arn:aws:ec2:…`), and tokens glued to a hyphen, underscore, slash, or `@` (`execute-api`, `~/.ssh/authorized_keys`). Headings are scanned like any other text, but a word that is part of a bare, unbackticked block-name heading only gets the backticks suggestion, since capitalizing it would break the heading's resolution against the schema.
+
+There is no inline, comment-based suppression for a single occurrence; `ignore_words` and the standard `ignore_targets` are the only escapes. See `docs/rules/prose-casing.md` for the full design rationale.
 
 ---
 

@@ -151,6 +151,31 @@ func (t HeadingTemplates) Match(heading string) string {
 	return ""
 }
 
+// HeadingText parses a single Markdown heading line and returns the same
+// text Goldmark hands HeadingTemplates.Match during a full document parse:
+// inline markup (emphasis, code spans, link text) resolved to plain text,
+// with the leading "#" markers and surrounding whitespace already removed.
+// A caller that strips "#" itself and calls Match on the raw remainder
+// diverges from the parser the moment the heading contains inline markup —
+// "### *tls* Block" parses to block name "tls", but naive "#"-stripping
+// leaves the asterisks in and fails to match at all.
+func HeadingText(line string) string {
+	reader := text.NewReader([]byte(line))
+	tree := goldmark.New().Parser().Parse(reader)
+	var result string
+	_ = ast.Walk(tree, func(node ast.Node, entering bool) (ast.WalkStatus, error) {
+		if !entering {
+			return ast.WalkContinue, nil
+		}
+		if h, ok := node.(*ast.Heading); ok {
+			result = string(h.Text([]byte(line)))
+			return ast.WalkStop, nil
+		}
+		return ast.WalkContinue, nil
+	})
+	return result
+}
+
 // MatchAll returns all block names from a heading. Combined headings like
 // "`publish_auth_mode` and `subscribe_auth_mode`" return both names.
 //

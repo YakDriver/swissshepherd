@@ -713,3 +713,50 @@ func TestLoad_DuplicateCheck(t *testing.T) {
 		})
 	}
 }
+
+func TestLoad_ProseCasingValidation(t *testing.T) {
+	t.Parallel()
+
+	testCases := map[string]struct {
+		hcl     string
+		wantErr string
+	}{
+		"already lowercase entry": {
+			hcl:     "check \"prose_casing\" {\n  enabled = true\n  enforce_casing = [\"arn\"]\n}\n",
+			wantErr: `check "prose_casing": enforce_casing entry "arn" is already lowercase; it would suggest itself`,
+		},
+		"two entries differ only in case": {
+			hcl:     "check \"prose_casing\" {\n  enabled = true\n  enforce_casing = [\"ARN\", \"Arn\"]\n}\n",
+			wantErr: `check "prose_casing": enforce_casing entries "ARN" and "Arn" differ only in case`,
+		},
+		"two entries differ only in case once trimmed": {
+			// Untrimmed, " Arn " != "arn" lowercased, so a comparison that
+			// skipped trimming would miss this collision and let it reach
+			// NewProseCasingRule, which trims before merging and would
+			// silently let the second entry overwrite the first instead of
+			// erroring.
+			hcl:     "check \"prose_casing\" {\n  enabled = true\n  enforce_casing = [\"ARN\", \" Arn \"]\n}\n",
+			wantErr: `check "prose_casing": enforce_casing entries "ARN" and "Arn" differ only in case`,
+		},
+		"valid entries": {
+			hcl: "check \"prose_casing\" {\n  enabled = true\n  enforce_casing = [\"ARN\", \"DynamoDB\"]\n}\n",
+		},
+	}
+	for name, tc := range testCases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			path := filepath.Join(t.TempDir(), "swissshepherd.hcl")
+			writeFile(t, path, tc.hcl)
+			_, err := config.Load(path)
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("Load() error = %v", err)
+				}
+				return
+			}
+			if err == nil || err.Error() != "config "+path+": "+tc.wantErr {
+				t.Fatalf("Load() error = %v, want %q", err, "config "+path+": "+tc.wantErr)
+			}
+		})
+	}
+}

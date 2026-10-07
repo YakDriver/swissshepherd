@@ -138,6 +138,17 @@ type CheckConfig struct {
 	SkipFrontmatter bool              `hcl:"skip_frontmatter,optional"`
 	Severity        string            `hcl:"severity,optional"`
 
+	// ProseCasing rule options. EnforceCasing adds to (or, for a word whose
+	// lowercase form the built-in default list already has, overrides the
+	// casing of) the default list of words this check enforces the exact
+	// casing of in doc prose, e.g. ["ARN", "VPC", "DynamoDB"]. IgnoreWords
+	// removes a word from the merged (default ∪ EnforceCasing) list before
+	// matching — the way to opt out of a default entry without forking the
+	// whole list. A bare entry applies everywhere; a "target/word" entry
+	// (docs/rules/prose-casing.md) applies to one target only.
+	EnforceCasing []string `hcl:"enforce_casing,optional"`
+	IgnoreWords   []string `hcl:"ignore_words,optional"`
+
 	// FormatStyle rule options. nil means enabled (default true).
 	NoCodeBlocks              *bool `hcl:"no_code_blocks,optional"`
 	SingleLineAttrs           *bool `hcl:"single_line_attrs,optional"`
@@ -304,6 +315,9 @@ func Load(path string) (*Config, error) {
 	if err := cfg.validateOverrides(); err != nil {
 		return nil, fmt.Errorf("config %s: %w", path, err)
 	}
+	if err := cfg.validateProseCasing(); err != nil {
+		return nil, fmt.Errorf("config %s: %w", path, err)
+	}
 
 	return &cfg, nil
 }
@@ -388,6 +402,41 @@ func (c *Config) validateOverrides() error {
 				}
 				seen = append(seen, entry{typ, name, i})
 			}
+		}
+	}
+	return nil
+}
+
+// validateProseCasing rejects an enforce_casing list this package can check
+// in isolation: two entries whose lowercase forms collide, and an entry
+// equal to its own lowercase form (which would suggest the text it's
+// already written as). It cannot check enforce_casing against the check's
+// built-in default list — that list lives in internal/check, which already
+// imports this package, so the reverse import would cycle. The full merged
+// -list validation runs in check.NewProseCasingRule instead.
+func (c *Config) validateProseCasing() error {
+	for _, ch := range c.Checks {
+		if ch.Name != "prose_casing" {
+			continue
+		}
+		seen := make(map[string]string) // lowercase form -> original entry
+		for _, w := range ch.EnforceCasing {
+			// Trimmed the same way NewProseCasingRule trims at construction
+			// time, so a config this validates as accepted can't still
+			// collide once trimmed — e.g. ["ARN", " Arn "] must be caught
+			// here, not silently collapsed to one entry at runtime.
+			w = strings.TrimSpace(w)
+			if w == "" {
+				continue
+			}
+			if w == strings.ToLower(w) {
+				return fmt.Errorf("check %q: enforce_casing entry %q is already lowercase; it would suggest itself", ch.Name, w)
+			}
+			lower := strings.ToLower(w)
+			if prev, ok := seen[lower]; ok {
+				return fmt.Errorf("check %q: enforce_casing entries %q and %q differ only in case", ch.Name, prev, w)
+			}
+			seen[lower] = w
 		}
 	}
 	return nil
