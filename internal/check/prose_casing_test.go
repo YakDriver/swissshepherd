@@ -304,6 +304,28 @@ func TestProseCasing_BlockStyleHeadingGetsBackticksOnlyMessage(t *testing.T) {
 	}
 }
 
+func TestProseCasing_EmphasizedBlockStyleHeadingGetsBackticksOnlyMessage(t *testing.T) {
+	t.Parallel()
+
+	// The heading's inline markup (the emphasis around "tls") must be
+	// resolved to plain text the same way the real parser resolves it
+	// before testing whether capitalizing would break resolution.
+	// Stripping only the leading "#"s and leaving "*tls*" in place would
+	// make the heading look unresolvable (before == ""), wrongly offering
+	// the unsafe capitalize fix.
+	content := "### *tls* Block\n\nSome text."
+	got := runProseCasing(t, nil, nil, content)
+	if len(got) != 1 {
+		t.Fatalf("got %d findings, want 1: %+v", len(got), got)
+	}
+	if strings.Contains(got[0].Message, `"TLS"`) {
+		t.Errorf("backticks-only message should not suggest capitalizing: %q", got[0].Message)
+	}
+	if !strings.Contains(got[0].Message, "backticks") {
+		t.Errorf("message should mention backticks: %q", got[0].Message)
+	}
+}
+
 func TestProseCasing_TitleStyleHeadingGetsCapitalizationFix(t *testing.T) {
 	t.Parallel()
 

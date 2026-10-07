@@ -200,7 +200,7 @@ func cutLastSlash(s string) (target, word string, ok bool) {
 // {Block}/{Path}-style heading would make it stop resolving.
 func (r *ProseCasing) message(raw, got, want string, isHeading bool) string {
 	if isHeading && r.headingTemplates != nil {
-		text := headingText(raw)
+		text := doc.HeadingText(raw)
 		before := r.headingTemplates.Match(text)
 		after := r.headingTemplates.Match(strings.Replace(text, got, want, 1))
 		if before != "" && after != before {
@@ -208,14 +208,6 @@ func (r *ProseCasing) message(raw, got, want string, isHeading bool) string {
 		}
 	}
 	return fmt.Sprintf("avoid %q; use %q instead, or add backticks around it if this is a correct, lowercase technical reference", got, want)
-}
-
-// headingText strips a Markdown heading's leading "#" markers and
-// surrounding whitespace, mirroring the text the parser hands to
-// HeadingTemplates.Match (goldmark's heading text, with the "#"s already
-// removed).
-func headingText(raw string) string {
-	return strings.TrimSpace(strings.TrimLeft(strings.TrimSpace(raw), "#"))
 }
 
 var (
