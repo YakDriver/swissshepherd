@@ -56,7 +56,15 @@ an all-caps-only rule.
 The message offers both fixes, not just capitalization, because the check
 cannot tell which is right: `arn` in `the arn format is` should become
 `ARN`, but `arn` in `` the `arn` attribute `` (missing backticks) should
-stay lowercase and gain backticks instead.
+stay lowercase and gain backticks instead. `ssh` is the clearest case —
+`` `ssh` `` and `SSH` are both correct, bare `ssh` is not, and which one
+applies depends on whether the sentence names the command or the protocol.
+
+A finding with two candidate fixes names a defect without naming its
+remedy, which is a deliberate concession: the alternative is guessing, and
+guessing here produces the destructive fix roughly half the time. The
+consequence is that this rule is not a mechanical autofix target — each
+finding needs a reader's judgment about which branch applies.
 
 Findings are ordered by byte position within each line. The word list is
 iterated in sorted order when the regex is compiled, so the alternation —
@@ -67,11 +75,12 @@ longest-first so `https` wins over `http`.
 
 Plural and possessive forms are checked, not skipped: `CPUs` and "a CPU's
 performance" are the same defect as the singular. Each needs its own
-canonical entry rather than a suffix rule, because suffix inference would
-mishandle words whose plural isn't formed by adding `s` (`DNS`) and because
-an apostrophe is not a word character, so `\bcpu\b` already matches the
-`cpu` inside `cpu's` — the possessive needs its own alternation branch
-(`cpu's`, matched literally) so the `'s` survives into the suggestion:
+canonical entry rather than a suffix rule. Inference would have to choose
+the canonical plural for the provider — `IDs`, `ID's`, and `IDS` are all
+written in practice — and an apostrophe is not a word character, so
+`\bcpu\b` already matches the `cpu` inside `cpu's`. The possessive
+therefore needs its own alternation branch so the `'s` survives into the
+suggestion:
 
 ```
 "cpu"   -> "CPU"
@@ -79,9 +88,13 @@ an apostrophe is not a word character, so `\bcpu\b` already matches the
 "cpu's" -> "CPU's"
 ```
 
-Not every word needs all three forms — `JSON` has no plural in practice.
-The default list carries only the forms that occur in practice;
-`enforce_casing` lets a provider add others (`IDs`, `VPC's`).
+Longest-first alternation makes `cpu's` win at that position. A
+typographic apostrophe (`cpu’s`) falls through to the plain `cpu` branch,
+which still yields the right result, since replacing `cpu` with `CPU`
+leaves `CPU’s`.
+
+Not every word needs all three forms. The default list carries only the
+forms that occur in practice; `enforce_casing` lets a provider add others.
 
 ## Config shape
 
@@ -156,6 +169,14 @@ A word is excluded from the default list when:
    provider whose docs don't use them as values.
 3. **It's vendor-specific.** Belongs in a provider's `enforce_casing`.
 
+`SSH` stays in despite appearing in literal forms, because those forms are
+all glued (`ssh-rsa`, `~/.ssh/authorized_keys`) and already masked. What
+remains is the genuine case: bare lowercase `ssh` is wrong either way, and
+the correct text is `` `ssh` `` when it names the command or `SSH` when it
+names the protocol. The two-fix message covers exactly that, which is why
+`SSH` does not need criterion 2's treatment and `tcp`/`udp` — which appear
+bare and unglued inside value lists — do.
+
 Two-letter entries (`ID`, `IP`, `UI`) carry more false-positive risk than
 longer ones and should be measured individually before being added.
 
@@ -174,9 +195,10 @@ inline code spans, markdown link targets, autolinks, and bare URLs
 scan. Masking replaces with equal-length spaces so byte offsets stay
 aligned.
 
-Two additional cases need masking beyond `GlossRule`'s pipeline, because
-in each the underlying defect is an unbackticked literal, and a casing
-finding there would misname the defect:
+Two cases need masking beyond `GlossRule`'s pipeline. In both, adjacent
+punctuation is a reliable structural signal that the token is a literal
+rather than prose, so the match can be dropped outright instead of
+reported with a choice of fixes:
 
 **Colon-delimited literals.** `arn:aws:ec2:…`, `s3://bucket/prefix`,
 `java.sql.Timestamp::valueOf`. Mask any `word:` token and what follows it.
@@ -189,16 +211,50 @@ sentence-final `…inside your rest api.` reportable while rejecting
 `index.html`. A match enclosed in double quotes is skipped for the same
 reason (`only "url" can be used`).
 
-Headings get no carve-out. A bare `## tls Argument Reference` heading
-(the unbackticked `{Block}` style, one of the accepted
-`block_heading_styles`) is prose as far as this rule is concerned: `tls`
-is scanned and reported like any other word. If `tls` must stay lowercase
-there to resolve against the schema path, the message's own "or add
-backticks" branch is the fix, matching `schema_docs`'s separate preferred
--style finding (which already points unbackticked `{Block}` headings
-toward the backticked form). The two findings name different defects —
-one casing, one heading format — and can both fire on the same heading
-without conflicting, since the backticks fix satisfies both.
+### Headings
+
+Headings get no carve-out: a bare `## tls Argument Reference` heading (the
+unbackticked `{Block}` style, one of the accepted `block_heading_styles`) is
+prose as far as this rule is concerned, and `tls` is reported like any other
+word. Skipping headings wholesale would lose real findings, because for
+`{Title}` styles capitalizing is both correct and safe — `titleToSnake`
+lowercases each word before joining (`doc.go`), so `### Ip Filter Argument
+Reference` still resolves to `ip_filter` after the fix.
+
+What a heading does change is which fix is safe to suggest. `{Block}` and
+`{Path}` validate through `isSnakeCaseSegment`, which accepts only
+`[a-z0-9_]`, so capitalizing one makes the heading stop resolving, the block
+become undocumented, and a cosmetic warning become a coverage error:
+
+```
+### json                        ->  ### JSON        isSnakeCaseSegment("JSON") = false
+#### client_authentication tls  ->  #### … TLS      same
+```
+
+Rather than infer the style, test the suggestion against the heading matcher
+and withhold the fix that would break it:
+
+```go
+if isHeadingLine {
+	before := templates.Match(headingText)
+	after := templates.Match(strings.Replace(headingText, got, want, 1))
+	if before != "" && after != before {
+		// capitalizing would break resolution: suggest backticks only
+	}
+}
+```
+
+`HeadingTemplates.Match` is exported and pure, so this costs the rule a
+`block_heading_styles` value at construction and nothing else. It needs no
+case analysis and no schema: a `{Block}` or `{Path}` heading resolves before
+and not after, so only backticks are offered; a `{Title}` heading resolves
+to the same name either way, so capitalization is; and a prose heading
+resolves to nothing before, so capitalization is offered there too.
+
+The backticks branch agrees with `schema_docs`'s separate preferred-style
+finding, which already points unbackticked `{Block}` headings toward the
+backticked form. The two findings name different defects — one casing, one
+heading format — and the backticks fix satisfies both.
 
 ## Never guess
 
@@ -218,6 +274,51 @@ The real ambiguities, all of which produce no finding:
   signal to act on; this is a known residual false positive, addressed by
   the message's backticks suggestion rather than suppressed.
 
+## Sizing
+
+Approximated by mirroring `gloss.go`'s pipeline plus the masks above over
+terraform-provider-aws `website/docs` at provider commit `34167e0962c`.
+Real counts come from `make corpus` once an implementation exists; these
+are what the decisions above rest on, recorded so a surprising corpus
+number has something to contradict. They also supersede the raw unmasked
+scan quoted in #100 ("thousands of bare lowercase hits"), which counted
+matches inside code spans and URLs.
+
+**301 findings over 15 of the 24 default words.**
+
+| word | findings | variants |
+|---|---:|---|
+| `ID` | 241 | `id` 189, `Id` 52 |
+| `IP` | 14 | `Ip` 11, `ip` 3 |
+| `JSON` | 8 | `json` 8 |
+| `HTTP` | 7 | `Http` 4, `http` 3 |
+| `CPU` | 7 | `cpu` 7 |
+| `HTTPS` | 5 | `https` 5 |
+| `URI` | 4 | `uri` 3, `Uri` 1 |
+| `CLI` | 3 | `cli` 3 |
+| `API`, `URL`, `XML`, `TLS`, `SQL` | 2 each | |
+| `SSH`, `HTML` | 1 each | |
+
+`SSL`, `DNS`, `GPU`, `UUID`, `GUID`, `SDK`, `UI`, `CSS`, and `JWT` produce
+nothing on this corpus: no cost, and they guard against regression.
+
+- `ID` is 80% of the output. That is what makes the staged rollout below
+  work, and why `ignore_words` needs to exist.
+- The glue and quote masks suppress 33 matches, all literals
+  (`execute-api`, `ssh-rsa`, `text/html`, `index.html`, `core-site.xml`,
+  `java.sql.Timestamp`, `10.0.1.6@tcp`, `only "url" can be used`).
+- `TCP` and `UDP`, excluded by criterion 2, produce 2 findings between
+  them, both in one line of value text (`If not icmp, icmpv6, tcp, udp, or
+  all`) and both false positives. Zero true positives is the evidence for
+  excluding them.
+- 9 findings are on heading lines. Of those, 4 would break resolution if
+  capitalized (`### json` ×2, `#### json`, `#### client_authentication
+  tls`) and get the backticks-only message; 2 are `{Title}` headings where
+  capitalizing is correct and safe (`### Ip Filter Argument Reference`,
+  `### Source Ip Config`); 3 are prose headings that resolve to no block.
+- Spot-checked, the non-`ID` findings are true positives except the single
+  unbackticked-enum case noted under "Never guess".
+
 ## Rollout
 
 `enabled` defaults to `false`. A non-empty built-in list that defaulted on
@@ -228,8 +329,9 @@ clean." Turning it on is one config line.
 First release ships `severity = "warning"`; a provider that wants CI
 enforcement raises it with the existing `severity` key.
 
-A provider adopting the check can stage it: enable with the noisiest word
-in `ignore_words`, fix the rest, then drop the ignore.
+A provider adopting the check can stage it: enable with
+`ignore_words = ["id"]`, which defers 241 of the 301 findings, fix the
+remaining 60, then drop the ignore.
 
 ## No in-document suppression
 
@@ -276,17 +378,22 @@ table-driven with `t.Parallel()`.
   backtick span, each glue character, quoted literal — plus one asserting
   a sentence-final match *is* reported.
 - A bare, unbackticked `{Block}`-style heading (`## tls Argument
-  Reference`) *is* reported for `tls`, suggesting backticks as the
-  alternative fix, alongside `schema_docs`'s separate preferred-style
-  finding on the same heading.
+  Reference`) *is* reported for `tls`, with the backticks-only message,
+  because capitalizing would stop the heading resolving. A `{Title}`-style
+  heading (`### Ip Filter Argument Reference`) is reported with the
+  capitalization fix, since it resolves to `ip_filter` either way. A prose
+  heading (`### Usage with subnet id`) likewise.
 - Correctly cased text produces nothing: `ID`, `JSON`, `HTTPS` in prose.
 - `Id` and `id` both report, confirming canonical rather than literal
-  matching; `enforce_casing` overriding a default word's casing.
+  matching; `enforce_casing` overriding a default word's casing; a
+  mixed-case canonical (`DynamoDB`, `OAuth`) reproduced letter for letter.
+- Plurals and possessives: `cpus` → `CPUs`, `cpu's` → `CPU's`, and a
+  typographic `cpu’s` → `CPU’s` through the plain branch.
 - Determinism: a doc with several words on one line, run many times
   in-process, identical output.
 - Fixtures frozen from real docs: an `id` reference, an `Id`/`id` pair, an
   ARN literal, a glued token (`execute-api`), an unbackticked `{Block}`
-  -style heading.
+  -style heading, a `{Title}`-style heading.
 - Config validation: duplicate canonical forms differing only in case, and
   an `enforce_casing` entry equal to its own lowercase form.
 - `ignore_words`: a bare entry silences a word everywhere; a `type/name`
@@ -302,9 +409,8 @@ table-driven with `t.Parallel()`.
 
 ## Open questions
 
-1. Full `make corpus` counts, including plural/possessive forms and `SSH`,
-   are needed before the default list is finalized.
-2. Whether `CPU`'s one known unbackticked-enum false positive recurs enough
-   in other providers' docs to move it to opt-in.
-
-This design can be refined further during implementation.
+1. Full `make corpus` counts, to confirm the sizing above and settle the
+   plural and possessive entries the default list should carry.
+2. Whether `CPU`'s one unbackticked-enum false positive (`valid values are
+   cpu and memory`) recurs often enough in other providers' docs to move it
+   to opt-in. 6 of its 7 findings here are true positives.
