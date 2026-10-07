@@ -1,8 +1,8 @@
-# `prose_casing` rule (design)
+# `prose_casing` rule
 <!-- Copyright IBM Corp. 2019, 2026 -->
 <!-- SPDX-License-Identifier: MPL-2.0 -->
 
-Status: design, not implemented. Tracks #100.
+Status: implemented. Tracks #100.
 
 Flags a word in doc prose that should be cased as an initialism or
 AWS-style mixed-case term — `id`/`Id` → `ID`, `json` → `JSON`,
