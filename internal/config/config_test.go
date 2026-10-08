@@ -738,8 +738,20 @@ func TestLoad_ProseCasingValidation(t *testing.T) {
 			hcl:     "check \"prose_casing\" {\n  enabled = true\n  enforce_casing = [\"ARN\", \" Arn \"]\n}\n",
 			wantErr: `check "prose_casing": enforce_casing entries "ARN" and "Arn" differ only in case`,
 		},
+		"two entries differ only in spacing": {
+			hcl:     "check \"prose_casing\" {\n  enabled = true\n  enforce_casing = [\"AutoScaling\", \"Auto Scaling\"]\n}\n",
+			wantErr: `check "prose_casing": enforce_casing entries "AutoScaling" and "Auto Scaling" differ only in case and spacing, so they match the same text; keep one`,
+		},
+		"repeated inner spaces collapse before comparing": {
+			hcl:     "check \"prose_casing\" {\n  enabled = true\n  enforce_casing = [\"API Gateway\", \"API  gateway\"]\n}\n",
+			wantErr: `check "prose_casing": enforce_casing entries "API Gateway" and "API gateway" differ only in case`,
+		},
+		"already lowercase multi-word entry": {
+			hcl:     "check \"prose_casing\" {\n  enabled = true\n  enforce_casing = [\"auto scaling\"]\n}\n",
+			wantErr: `check "prose_casing": enforce_casing entry "auto scaling" is already lowercase; it would suggest itself`,
+		},
 		"valid entries": {
-			hcl: "check \"prose_casing\" {\n  enabled = true\n  enforce_casing = [\"ARN\", \"DynamoDB\"]\n}\n",
+			hcl: "check \"prose_casing\" {\n  enabled = true\n  enforce_casing = [\"ARN\", \"DynamoDB\", \"API Gateway\", \"Auto Scaling group\"]\n}\n",
 		},
 	}
 	for name, tc := range testCases {

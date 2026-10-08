@@ -197,7 +197,7 @@ Each check has at most one `check "<name>"` block; a second block with the same 
 | `file_match` | global | File↔schema alignment: missing docs, orphan files, mixed layouts |
 | `frontmatter` | per-file | YAML frontmatter field validation |
 | `import_section` | per-target | Import section style and structure |
-| `prose_casing` | per-file | Flags doc prose words whose casing should match a configured initialism/term but doesn't (opt-in) |
+| `prose_casing` | per-file | Flags doc prose words and names whose casing or spacing should match a configured term but doesn't (opt-in) |
 | `region_argument` | per-target | Region argument presence for region-aware types |
 | `schema_docs` | per-target | Schema coverage, ordering, description style, heading style, format, labels, deprecation, and bylines |
 | `section_presence` | per-target | Section presence, order, and recognition of unknown level-2 headings |
@@ -313,13 +313,13 @@ The scan covers the whole document — descriptions, prose, callouts, and frontm
 
 ### `prose_casing`
 
-Flags a word in doc prose whose casing should be a configured canonical form but isn't — `arn` should be `ARN`, `dynamodb` should be `DynamoDB`. Unlike `banned_glosses`, which bans a spelled-out phrase in favor of its abbreviation, this check corrects the casing of a word that's already the right word. It ships a small, vendor-neutral default list (`ID`, `API`, `URL`, `JSON`, `CPU`, and similar common initialisms); AWS- or provider-specific vocabulary (`ARN`, `VPC`, `DynamoDB`) is added via `enforce_casing`. This check is **opt-in**: unlike `banned_glosses`, it ships with a non-empty default list, so it requires an explicit `enabled = true` rather than defaulting on.
+Flags a word or multi-word name in doc prose whose casing or spacing should be a configured canonical form but isn't — `arn` should be `ARN`, `dynamodb` should be `DynamoDB`, `apigateway` should be `API Gateway`. Unlike `banned_glosses`, which bans a spelled-out phrase in favor of its abbreviation, this check corrects the casing and spacing of a name that's already the right name. It ships a small, vendor-neutral default list (`ID`, `API`, `URL`, `JSON`, `CPU`, and similar common initialisms); AWS- or provider-specific vocabulary (`ARN`, `VPC`, `DynamoDB`) is added via `enforce_casing`. This check is **opt-in**: unlike `banned_glosses`, it ships with a non-empty default list, so it requires an explicit `enabled = true` rather than defaulting on.
 
 ```hcl
 check "prose_casing" {
   enabled = true
 
-  enforce_casing = ["ARN", "VPC", "KMS", "IAM", "DynamoDB"]
+  enforce_casing = ["ARN", "VPC", "KMS", "IAM", "DynamoDB", "API Gateway", "Auto Scaling group"]
 
   ignore_words = ["ami", "aws_emr_cluster/ssh"]
 
@@ -328,7 +328,9 @@ check "prose_casing" {
 }
 ```
 
-`enforce_casing` lists canonical forms to add to (or, for a word the default list already has, override the casing of) the built-in list. `ignore_words` removes a word from the merged list before matching — a bare entry (`"ami"`) removes it everywhere; a `target/word` entry (`"aws_emr_cluster/ssh"`) removes it for one target only, the target given as a bare resource name or `type/name`.
+`enforce_casing` lists canonical forms to add to (or, for a word the default list already has, override the casing of) the built-in list. An entry can be several words: `"API Gateway"` matches `api gateway`, `apigateway`, and `ApiGateway`, because text may run a canonical form's words together. It never matches text that splits a word the canonical form doesn't, so `"DataSync"` doesn't match `data sync`. Where a name is also an ordinary word, configure the phrase that identifies it (`"Auto Scaling group"`, `"EC2 Auto Scaling"`) rather than the bare word. Plurals and possessives (`"Auto Scaling groups"`, `"ID's"`) are separate entries. Words may contain only letters, digits, and underscores.
+
+`ignore_words` removes an entry from the merged list before matching, compared without regard to case or spacing — a bare entry (`"ami"`) removes it everywhere; a `target/word` entry (`"aws_emr_cluster/ssh"`) removes it for one target only, the target given as a bare resource name or `type/name`.
 
 Matching is case-insensitive and reports a finding whenever the matched text differs from the canonical form, so both `Id` and `id` are flagged as the same defect (want `ID`), and the canonical form is reproduced exactly as configured — including AWS's mid-word capitals (`DynamoDB`, `OAuth`, `iSCSI`). A finding offers two possible fixes, since the check can't tell which applies: capitalize the word, or wrap it in backticks if it's a correct lowercase reference to code, a value, or a command (`` `ssh` ``). The scan skips fenced code blocks, inline code spans, URLs, colon-delimited literals (`arn:aws:ec2:…`), and tokens glued to a hyphen, underscore, slash, or `@` (`execute-api`, `~/.ssh/authorized_keys`). Headings are scanned like any other text, but a word that is part of a bare, unbackticked block-name heading only gets the backticks suggestion, since capitalizing it would break the heading's resolution against the schema.
 

@@ -2,11 +2,13 @@
 <!-- Copyright IBM Corp. 2019, 2026 -->
 <!-- SPDX-License-Identifier: MPL-2.0 -->
 
-Status: implemented. Tracks #100.
+Status: implemented. Tracks #100; multi-word names #105; matcher
+performance #104.
 
-Flags a word in doc prose that should be cased as an initialism or
-AWS-style mixed-case term — `id`/`Id` → `ID`, `json` → `JSON`,
-`dynamodb` → `DynamoDB`, `oauth` → `OAuth` — but isn't. Schema-independent:
+Flags a word or name in doc prose that should be cased as an initialism,
+an AWS-style mixed-case term, or a multi-word product name — `id`/`Id` →
+`ID`, `json` → `JSON`, `dynamodb` → `DynamoDB`, `apigateway` → `API
+Gateway` — but isn't. Schema-independent:
 it can appear anywhere in a doc, the same scheduling category as `anchors`
 and `banned_glosses`.
 
@@ -29,29 +31,44 @@ the word is wrong. Here the word is right and only its case is wrong.
 
 ## Matching
 
-Each configured word has a canonical form. Matching is case-insensitive;
-a match is reported when its text differs from the canonical form:
+Each configured entry has a canonical form: the entry trimmed, with inner
+whitespace collapsed to single spaces, its letters' casing kept exactly as
+configured and never derived by upcasing the match: `DynamoDB`, `OAuth`,
+`iSCSI`, `API Gateway`. An entry is one or more words separated by spaces;
+each word is a run of `[0-9A-Za-z_]`, the characters Go's `\b` treats as
+word characters.
 
-```go
-// one regex for the whole rule, not one per entry
-re := regexp.MustCompile(`(?i)\b(?:` + strings.Join(lowered, "|") + `)\b`)
-for _, loc := range re.FindAllStringIndex(masked, -1) {
-	got := raw[loc[0]:loc[1]]
-	want := canon[strings.ToLower(got)]
-	if got == want || glued(raw, loc[0], loc[1]) {
-		continue
-	}
-	// report: avoid %q; use %q instead, or add backticks if this is a
-	// correct, lowercase technical reference (code, value, or command)
-}
-```
+From the canonical form the rule derives a **match key**, the canonical
+lowercased with spaces removed (`API Gateway` → `apigateway`), and its
+**breaks**, the key offsets where the canonical has a space (`[3]`).
 
-The canonical form is held exactly as configured, never derived by
-upcasing the match. The lookup is keyed by `strings.ToLower(got)` so the
-stored value can carry AWS's actual casing, including mid-word capitals:
-`DynamoDB`, `OAuth`, `iSCSI`, `GameLift`, `OpsWorks`, `SageMaker`. The rule
-reproduces whatever casing was configured, letter for letter — it is not
-an all-caps-only rule.
+A run of adjacent words in the text matches an entry when:
+
+1. the words are separated only by spaces or tabs in the raw line,
+2. their lowercase forms, joined, equal the key, and
+3. every break in the text is also a break in the canonical form.
+
+So text may run a canonical's words together but never split one:
+
+| text | `API Gateway` | `DataSync` |
+|---|---|---|
+| `api gateway`, `API gateway`, `api  gateway` | match | — |
+| `apigateway`, `ApiGateway` | match | — |
+| `datasync`, `Datasync` | — | match |
+| `data sync` | — | no match |
+
+The third condition is what keeps ordinary words ordinary: `DataSync`
+must not match "Provides a SSM resource data sync", nor `AppConfig` an
+OpenSearch `### App Config` heading. Both lines are in the
+terraform-provider-aws corpus.
+
+A match is reported when its text differs from the canonical form, except
+when the only difference is extra spaces or a tab between words, which
+render identically. At each word the longest match wins and consumes its
+words, so `api gateway` is one finding rather than an extra `api` → `API`,
+and a correct `API Gateway` hides the default `API` entry inside it.
+Matches are leftmost and non-overlapping, ordered by byte position within
+each line.
 
 The message offers both fixes, not just capitalization, because the check
 cannot tell which is right: `arn` in `the arn format is` should become
@@ -66,10 +83,26 @@ guessing here produces the destructive fix roughly half the time. The
 consequence is that this rule is not a mechanical autofix target — each
 finding needs a reader's judgment about which branch applies.
 
-Findings are ordered by byte position within each line. The word list is
-iterated in sorted order when the regex is compiled, so the alternation —
-and the message text — never depends on map iteration order. Alternation is
-longest-first so `https` wins over `http`.
+### Phrase entries supply context
+
+swissshepherd can't know whether "autoscaling" names the AWS feature or the
+generic concept; the provider can, and says so with the entries it
+configures. In the AWS corpus the brand appears in phrases ("Auto Scaling
+group" 55 times, "EC2 Auto Scaling" 33, "Application Auto Scaling" 20),
+while bare "autoscaling" is often generic ("If autoscaling creates drift",
+App Runner's "auto scaling configuration"). Likewise "workspaces" is
+WorkSpaces in one service's docs and an ordinary noun in Grafana's and
+Prometheus's. So a provider configures the phrase, not the bare word:
+
+```hcl
+enforce_casing = [
+  "Auto Scaling group", "Auto Scaling groups",
+  "EC2 Auto Scaling", "Application Auto Scaling",
+]
+```
+
+Bare `autoscaling` then produces nothing. That misses some brand uses,
+which `AGENTS.md` ranks below a false positive.
 
 ### Plurals and possessives
 
@@ -77,24 +110,47 @@ Plural and possessive forms are checked, not skipped: `CPUs` and "a CPU's
 performance" are the same defect as the singular. Each needs its own
 canonical entry rather than a suffix rule. Inference would have to choose
 the canonical plural for the provider — `IDs`, `ID's`, and `IDS` are all
-written in practice — and an apostrophe is not a word character, so
-`\bcpu\b` already matches the `cpu` inside `cpu's`. The possessive
-therefore needs its own alternation branch so the `'s` survives into the
-suggestion:
+written in practice:
 
 ```
-"cpu"   -> "CPU"
-"cpus"  -> "CPUs"
-"cpu's" -> "CPU's"
+"CPU"   "CPUs"   "CPU's"
+"Auto Scaling group"   "Auto Scaling groups"
 ```
 
-Longest-first alternation makes `cpu's` win at that position. A
-typographic apostrophe (`cpu’s`) falls through to the plain `cpu` branch,
-which still yields the right result, since replacing `cpu` with `CPU`
-leaves `CPU’s`.
+The last word of an entry may end in `'s`. An apostrophe is not a word
+character, so the matcher checks for `'s` (either case) directly after a
+match, followed by a non-word character, and prefers the possessive entry
+when one exists. A typographic apostrophe (`cpu’s`) isn't `'`, so the
+plain `cpu` entry matches, which still yields the right result: replacing
+`cpu` with `CPU` leaves `CPU’s`.
 
 Not every word needs all three forms. The default list carries only the
 forms that occur in practice; `enforce_casing` lets a provider add others.
+
+### Matcher
+
+One pass per line, no regex:
+
+1. Find the runs of `[0-9A-Za-z_]` with a byte scan, the same word bounds
+   `\b` gives.
+2. Lowercase each word (ASCII, so byte offsets are unchanged) into a
+   reused buffer and look it up in a set of **prefixes**: for every entry,
+   its key up to each break, and the whole key. A word not in the set, the
+   common case, costs one map lookup and is skipped.
+3. Otherwise extend one adjacent word at a time, up to the longest entry's
+   word count, while the joined text is still a prefix, recording the
+   longest extension that is a whole key with allowed breaks.
+
+Each line is scanned unmasked first as a gate; only lines with a match are
+masked and scanned again to report. Masking is the expensive step and runs
+on few lines.
+
+Not a regex: a case-insensitive alternation over every entry costs RE2 time
+in proportion to the alternation, and with a realistic provider list it
+cost about 3x every other check combined (#104). On terraform-provider-aws
+`website/docs` (286,009 lines) with ~150 entries, the weak config runs in
+1.8s with the rule off, 8.1s with an alternation regex, and 2.2s with this
+matcher, with byte-identical findings.
 
 ## Config shape
 
@@ -104,17 +160,16 @@ check "prose_casing" {
   enabled  = true
   severity = "warning"
 
-  # Canonical forms, added to the built-in default list. Matching is
-  # case-insensitive, so an entry here whose lowercase form the default
-  # list already has replaces the default's casing for that word.
-  enforce_casing = ["ARN", "VPC", "KMS", "IAM", "DynamoDB"]
+  # Canonical forms, added to the built-in default list. An entry with the
+  # same match key as a default entry replaces it.
+  enforce_casing = ["ARN", "VPC", "DynamoDB", "API Gateway", "Auto Scaling group"]
 
   # Removed from the merged list (default ∪ enforce_casing) before
   # compiling — the way to opt out of a word the default list enforces
   # that this provider's docs use lowercase on purpose. A bare entry
   # removes the word everywhere; a "type/name" entry removes it for one
   # target only.
-  ignore_words = ["ami", "aws_emr_cluster/ssh"]
+  ignore_words = ["ami", "aws_emr_cluster/ssh", "aws_x/Auto Scaling group"]
 
   # The scoping every check already has.
   ignore_targets = ["aws_quicksight_group"]
@@ -123,11 +178,13 @@ check "prose_casing" {
 ```
 
 - `EnforceCasing []string` (`hcl:"enforce_casing,optional"`) — canonical
-  forms the provider adds or overrides. A list, not a `wrong→right` map,
-  because the wrong forms are derived from the canonical one, not
-  enumerated.
-- `IgnoreWords []string` (`hcl:"ignore_words,optional"`) — word-granularity
-  exclusion, matched case-insensitively, applied after merging
+  forms the provider adds or overrides, single words or multi-word names.
+  A list, not a `wrong→right` map, because the wrong forms are derived
+  from the canonical one, not enumerated. Each entry is trimmed and its
+  inner whitespace collapsed to single spaces.
+- `IgnoreWords []string` (`hcl:"ignore_words,optional"`) — entry-granularity
+  exclusion, matched by match key (so `"auto scaling"` also removes
+  `Auto Scaling` and its `autoscaling` form), applied after merging
   `enforce_casing` into the default list and before compiling the matcher.
   This is how a provider that enables the check but disagrees with one
   default entry removes it, without forking the whole list. A bare entry
@@ -140,9 +197,13 @@ check "prose_casing" {
 - Reuses `CheckConfig`'s existing `Severity`, `SkipFrontmatter`,
   `IgnoreTargets`/`IgnoreTargetsFile`, `Prefixes`/`IgnorePrefixes`. No new
   scoping mechanism.
-- `Load` rejects an `enforce_casing` list with two entries differing only
-  in case, or an entry equal to its own lowercase form (a rule that
-  suggests its own input is a config error, not a finding). It cannot
+- `Load` rejects an `enforce_casing` list with two entries sharing a match
+  key (`ARN` and `Arn`, or `AutoScaling` and `Auto Scaling`), or an entry
+  equal to its own lowercase form (a rule that suggests its own input is a
+  config error, not a finding). `NewProseCasingRule` rejects an entry with
+  a character outside `[0-9A-Za-z_]` and spaces, other than a final `'s`:
+  `X-Ray` or `Amazon S3.` could never match, because masking blanks text
+  glued to `-`, `.`, `/`, and `@`. It cannot
   check `enforce_casing` against the check's built-in default list without
   an import cycle (`internal/check` already imports `internal/config`), so
   that half of the check — a provider override colliding with a default
@@ -196,9 +257,14 @@ AWS-specific.
 Reuses `GlossRule`'s pipeline as-is: skip frontmatter when configured, skip
 fenced code blocks (`fenceDelimiter`, `frontmatterEnd`), and blank out
 inline code spans, markdown link targets, autolinks, and bare URLs
-(`maskUnscannable`), gating each line on a cheap combined regex before the
-scan. Masking replaces with equal-length spaces so byte offsets stay
+(`maskUnscannable`), gating each line on the matcher run over the unmasked
+line. Masking replaces with equal-length spaces so byte offsets stay
 aligned.
+
+Because masked text becomes spaces, word adjacency is judged on the raw
+line: two words are adjacent only if the raw bytes between them are spaces
+or tabs. `` the api `x` gateway `` and `the *api* gateway` are not `api
+gateway`.
 
 Two cases need masking beyond `GlossRule`'s pipeline. In both, adjacent
 punctuation is a reliable structural signal that the token is a literal
@@ -371,6 +437,9 @@ context-dependent) or adding backticks at the one correct lowercase site
 | A word in `ignore_words` | Provider opted out, globally or for one target | nothing |
 | An unbackticked literal the masks don't catch (`valid values are cpu and memory`) | No structural signal separates it from prose | reported *as* a casing warning; the fix (backticks) is also the real defect |
 | Initialisms spelled out in full ("Amazon Resource Name") | Different defect | `banned_glosses`, when configured |
+| A bare word a provider configured only as a phrase (`autoscaling` with `Auto Scaling group`) | Often the generic concept; only the provider's entries say otherwise | nothing |
+| A name split across a line break (`API` / `Gateway`) | The rule is line-based | nothing |
+| A name split by markup or a hyphen (`*api* gateway`, `auto-scaling`) | Not adjacent words; hyphenated text is masked as a possible literal | nothing for the name (`api` alone may still be reported) |
 
 ## Tests
 
@@ -402,7 +471,16 @@ table-driven with `t.Parallel()`.
 - Config validation: duplicate canonical forms differing only in case, and
   an `enforce_casing` entry equal to its own lowercase form.
 - `ignore_words`: a bare entry silences a word everywhere; a `type/name`
-  entry silences it for one target and leaves it reported elsewhere.
+  entry silences it for one target and leaves it reported elsewhere;
+  matching is by key, spaced or not.
+- Multi-word entries: every spacing and casing variant of `API Gateway`
+  and `Auto Scaling`; text never splits a canonical word (`data sync`,
+  `### App Config`); the longest match consumes a shorter entry; a masked
+  span or emphasis between words breaks adjacency; whitespace-only
+  differences aren't reported; a phrase entry leaves the bare word alone;
+  a multi-word possessive; a `{Block}` heading gets backticks only.
+- Entry syntax: unmatchable entries (`X-Ray`, `C++`) are rejected.
+- `BenchmarkProseCasing`: ~150 entries over candidate-dense text.
 
 ## Also update
 

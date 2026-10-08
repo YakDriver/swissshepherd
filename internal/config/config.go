@@ -408,35 +408,43 @@ func (c *Config) validateOverrides() error {
 }
 
 // validateProseCasing rejects an enforce_casing list this package can check
-// in isolation: two entries whose lowercase forms collide, and an entry
-// equal to its own lowercase form (which would suggest the text it's
-// already written as). It cannot check enforce_casing against the check's
-// built-in default list — that list lives in internal/check, which already
-// imports this package, so the reverse import would cycle. The full merged
-// -list validation runs in check.NewProseCasingRule instead.
+// in isolation: two entries that would match the same text (they differ
+// only in case or spacing, such as "AutoScaling" and "Auto Scaling"), and
+// an entry equal to its own lowercase form (which would suggest the text
+// it's already written as). It cannot check enforce_casing against the
+// check's built-in default list — that list lives in internal/check, which
+// already imports this package, so the reverse import would cycle. The full
+// merged-list validation, and the check that each word is matchable, runs
+// in check.NewProseCasingRule instead.
 func (c *Config) validateProseCasing() error {
 	for _, ch := range c.Checks {
 		if ch.Name != "prose_casing" {
 			continue
 		}
-		seen := make(map[string]string) // lowercase form -> original entry
+		seen := make(map[string]string) // match key -> normalized entry
 		for _, w := range ch.EnforceCasing {
-			// Trimmed the same way NewProseCasingRule trims at construction
-			// time, so a config this validates as accepted can't still
-			// collide once trimmed — e.g. ["ARN", " Arn "] must be caught
-			// here, not silently collapsed to one entry at runtime.
-			w = strings.TrimSpace(w)
+			// Normalized the same way NewProseCasingRule normalizes at
+			// construction time (trimmed, inner whitespace collapsed), so a
+			// config this validates as accepted can't still collide once
+			// normalized — e.g. ["ARN", " Arn "] must be caught here, not
+			// silently collapsed to one entry at runtime.
+			w = strings.Join(strings.Fields(w), " ")
 			if w == "" {
 				continue
 			}
-			if w == strings.ToLower(w) {
+			lower := strings.ToLower(w)
+			if w == lower {
 				return fmt.Errorf("check %q: enforce_casing entry %q is already lowercase; it would suggest itself", ch.Name, w)
 			}
-			lower := strings.ToLower(w)
-			if prev, ok := seen[lower]; ok {
+			key := strings.ReplaceAll(lower, " ", "")
+			prev, ok := seen[key]
+			switch {
+			case ok && strings.EqualFold(prev, w):
 				return fmt.Errorf("check %q: enforce_casing entries %q and %q differ only in case", ch.Name, prev, w)
+			case ok:
+				return fmt.Errorf("check %q: enforce_casing entries %q and %q differ only in case and spacing, so they match the same text; keep one", ch.Name, prev, w)
 			}
-			seen[lower] = w
+			seen[key] = w
 		}
 	}
 	return nil
