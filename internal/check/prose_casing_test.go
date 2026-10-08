@@ -835,3 +835,47 @@ func TestProseCasing_MessageOffersBackticksOnlyForSingleToken(t *testing.T) {
 		})
 	}
 }
+
+// Section state comes from the same Markdown parse the doc parser uses, so
+// a Setext section heading opens or closes a block section and an indented
+// code line that looks like a heading does neither.
+func TestProseCasing_SectionTrackingFollowsMarkdownHeadings(t *testing.T) {
+	t.Parallel()
+
+	testCases := map[string]struct {
+		enforce []string
+		content string
+		want    string
+	}{
+		"setext argument section": {nil, "Argument Reference\n------------------\n\n### tls Block", "instead of capitalizing"},
+		"setext example after arguments": {
+			[]string{"App Mesh"},
+			"## Argument Reference\n\nExample Usage\n-------------\n\n### With AppMesh Proxy",
+			`use "App Mesh"`,
+		},
+		"setext h1 resets": {
+			[]string{"App Mesh"},
+			"## Argument Reference\n\nTitle\n=====\n\n### With AppMesh Proxy",
+			`use "App Mesh"`,
+		},
+		"indented code is not a heading": {
+			[]string{"App Mesh"},
+			"## Example Usage\n\n    ## Argument Reference\n\n### With AppMesh Proxy",
+			`use "App Mesh"`,
+		},
+		"frontmatter closer is not a setext heading": {
+			[]string{"App Mesh"},
+			"---\nsubcategory: \"ECS\"\ndescription: |-\n  Argument stuff\n---\n\n### With AppMesh Proxy",
+			`use "App Mesh"`,
+		},
+	}
+	for name, tc := range testCases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			got := runProseCasing(t, tc.enforce, nil, tc.content)
+			if len(got) != 1 || !strings.Contains(got[0].Message, tc.want) {
+				t.Fatalf("want one finding containing %q, got %+v", tc.want, got)
+			}
+		})
+	}
+}

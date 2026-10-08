@@ -324,9 +324,12 @@ Scaling Policy Configuration` (`auto_scaling_policy_configuration`).
 Only headings the doc parser resolves can break. It resolves a heading
 against the schema only at level 3 or deeper inside a level-2 section whose
 heading begins with `Argument` or `Attribute` (`doc.ParseWithOptions`), so
-the rule tracks the same thing: a level-2 heading sets or clears the
-section, a level-1 heading clears it, and heading-shaped lines inside
-fences are ignored. Everywhere else — Example Usage, Import, the
+the rule asks the same question of the same parse: `doc.HeadingLines` runs
+Goldmark over the file (frontmatter blanked first, as the parser does), so
+ATX and Setext headings, indentation, block quotes, and fences all agree
+with it. A level-2 heading sets or clears the section and a level-1
+heading clears it. The parse runs once per file, and only for a file with
+at least one match. Everywhere else — Example Usage, Import, the
 introduction — a heading is prose and gets the ordinary message, so
 `### With AppMesh Proxy` under Example Usage gets `use "App Mesh"` (#107).
 
@@ -487,7 +490,9 @@ table-driven with `t.Parallel()`.
   any section, after `## Import`, as a level-2 heading, and after a level-1
   reset gets the canonical name; the same heading inside each of Argument,
   Attribute, and Attributes Reference gets backticks only; a fenced
-  `## Argument Reference` line doesn't open a section.
+  `## Argument Reference` line doesn't open a section; Setext section
+  headings open and close sections; an indented-code `## …` line and a
+  frontmatter closer don't.
 - Message shape: a multi-word or tab-separated match gets the
   capitalization fix only; a single token, whatever its case, gets both.
 - A bare, unbackticked `{Block}`-style heading (`## tls Argument
