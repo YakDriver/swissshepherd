@@ -498,3 +498,261 @@ func TestProseCasing_Determinism(t *testing.T) {
 		}
 	}
 }
+
+func TestProseCasing_MultiWordEntryMatchesAnySpacing(t *testing.T) {
+	t.Parallel()
+
+	enforce := []string{"API Gateway", "Auto Scaling"}
+	testCases := map[string]struct {
+		content string
+		want    string // empty means no finding
+	}{
+		"lowercase spaced":       {"Uses the api gateway service.", `avoid "api gateway"; use "API Gateway"`},
+		"partly cased":           {"Uses the API gateway service.", `avoid "API gateway"; use "API Gateway"`},
+		"run together lowercase": {"Uses the apigateway service.", `avoid "apigateway"; use "API Gateway"`},
+		"run together camel":     {"Uses the ApiGateway service.", `avoid "ApiGateway"; use "API Gateway"`},
+		"two spaces":             {"Uses the api  gateway service.", `avoid "api  gateway"; use "API Gateway"`},
+		"tab":                    {"Uses the api\tgateway service.", `avoid "api\tgateway"; use "API Gateway"`},
+		"autoscaling":            {"Uses the autoscaling service.", `avoid "autoscaling"; use "Auto Scaling"`},
+		"AutoScaling":            {"Uses the AutoScaling service.", `avoid "AutoScaling"; use "Auto Scaling"`},
+		"auto scaling":           {"Uses the auto scaling service.", `avoid "auto scaling"; use "Auto Scaling"`},
+		"sentence final":         {"Configure it in api gateway.", `avoid "api gateway"; use "API Gateway"`},
+		"correct":                {"Uses the API Gateway service.", ""},
+		"correct, extra space":   {"Uses the API  Gateway service.", ""},
+		"correct, tab":           {"Uses the API\tGateway service.", ""},
+	}
+	for name, tc := range testCases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			got := runProseCasing(t, enforce, nil, tc.content)
+			if tc.want == "" {
+				if len(got) != 0 {
+					t.Fatalf("got %d findings, want 0: %+v", len(got), got)
+				}
+				return
+			}
+			if len(got) != 1 {
+				t.Fatalf("got %d findings, want 1: %+v", len(got), got)
+			}
+			if !strings.Contains(got[0].Message, tc.want) {
+				t.Errorf("message %q does not contain %q", got[0].Message, tc.want)
+			}
+		})
+	}
+}
+
+// Text may run a canonical form's words together, but a space the
+// canonical form doesn't have means different words: "data sync" in
+// "a SSM resource data sync" is not the DataSync service.
+func TestProseCasing_TextMayMergeButNotSplitCanonicalWords(t *testing.T) {
+	t.Parallel()
+
+	testCases := map[string]struct {
+		content string
+		want    int
+	}{
+		"split one-word name":      {"Provides a SSM resource data sync.", 0},
+		"split heading":            {"### App Config", 0},
+		"one-word name, wrong":     {"Uses datasync to copy.", 1},
+		"three words, two merged":  {"Uses ec2autoscaling here.", 1},
+		"three words, one merged":  {"Uses ec2 autoscaling here.", 1},
+		"three words, last break":  {"Uses ec2auto scaling here.", 1},
+		"three words, wrong break": {"Uses ec2autos caling here.", 0},
+	}
+	enforce := []string{"DataSync", "AppConfig", "EC2 Auto Scaling"}
+	for name, tc := range testCases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			got := runProseCasing(t, enforce, nil, tc.content)
+			if len(got) != tc.want {
+				t.Fatalf("got %d findings, want %d: %+v", len(got), tc.want, got)
+			}
+		})
+	}
+}
+
+func TestProseCasing_LongestMatchConsumesShorterEntry(t *testing.T) {
+	t.Parallel()
+
+	// "api" alone is a default entry; inside "api gateway" it must not
+	// produce a second finding.
+	got := runProseCasing(t, []string{"API Gateway"}, nil, "The api gateway and the api.")
+	if len(got) != 2 {
+		t.Fatalf("got %d findings, want 2: %+v", len(got), got)
+	}
+	if !strings.Contains(got[0].Message, `avoid "api gateway"`) || !strings.Contains(got[1].Message, `avoid "api"`) {
+		t.Errorf("messages = %q, %q; want api gateway then api", got[0].Message, got[1].Message)
+	}
+
+	// A correctly written longer name hides a shorter entry inside it.
+	if got := runProseCasing(t, []string{"Auto Scaling group", "Group"}, nil, "An Auto Scaling group."); len(got) != 0 {
+		t.Errorf("got %d findings, want 0: %+v", len(got), got)
+	}
+}
+
+// Masking blanks a code span or link target with spaces; the words on
+// either side of it must not be read as adjacent.
+func TestProseCasing_MaskedRegionBreaksAdjacency(t *testing.T) {
+	t.Parallel()
+
+	testCases := map[string]string{
+		"code span": "The api `x` gateway.",
+		"link":      "The api [docs](https://example.com) gateway.",
+		"emphasis":  "The *api* gateway.",
+	}
+	for name, content := range testCases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			got := runProseCasing(t, []string{"API Gateway"}, nil, content)
+			if len(got) != 1 || !strings.Contains(got[0].Message, `avoid "api"; use "API"`) {
+				t.Fatalf("want only the single-word api finding, got %+v", got)
+			}
+		})
+	}
+}
+
+// Phrase entries carry the context a bare name lacks: "Auto Scaling group"
+// is the AWS feature; bare "autoscaling" is often the generic concept.
+func TestProseCasing_PhraseEntryLeavesBareWordAlone(t *testing.T) {
+	t.Parallel()
+
+	enforce := []string{"Auto Scaling group", "Auto Scaling groups"}
+	testCases := map[string]struct {
+		content string
+		want    string
+	}{
+		"phrase":        {"Used for autoscaling groups.", `use "Auto Scaling groups"`},
+		"singular":      {"Managed via autoscaling group.", `use "Auto Scaling group"`},
+		"cased group":   {"An Auto Scaling Group.", `use "Auto Scaling group"`},
+		"generic":       {"If autoscaling creates drift.", ""},
+		"glued literal": {"The aws_autoscaling_group resource.", ""},
+	}
+	for name, tc := range testCases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			got := runProseCasing(t, enforce, nil, tc.content)
+			if tc.want == "" {
+				if len(got) != 0 {
+					t.Fatalf("got %d findings, want 0: %+v", len(got), got)
+				}
+				return
+			}
+			if len(got) != 1 || !strings.Contains(got[0].Message, tc.want) {
+				t.Fatalf("want one finding containing %q, got %+v", tc.want, got)
+			}
+		})
+	}
+}
+
+func TestProseCasing_MultiWordPossessive(t *testing.T) {
+	t.Parallel()
+
+	got := runProseCasing(t, []string{"API Gateway", "API Gateway's"}, nil, "The apigateway's stages.")
+	if len(got) != 1 || !strings.Contains(got[0].Message, `avoid "apigateway's"; use "API Gateway's"`) {
+		t.Fatalf("got %+v", got)
+	}
+}
+
+func TestProseCasing_MultiWordBlockStyleHeadingGetsBackticksOnlyMessage(t *testing.T) {
+	t.Parallel()
+
+	// "### autoscaling" resolves to block autoscaling; "### Auto Scaling"
+	// would not.
+	got := runProseCasing(t, []string{"Auto Scaling"}, nil, "### autoscaling")
+	if len(got) != 1 || !strings.Contains(got[0].Message, "add backticks around it instead of capitalizing") {
+		t.Fatalf("got %+v", got)
+	}
+
+	got = runProseCasing(t, []string{"API Gateway"}, nil, "### Using api gateway with a VPC")
+	if len(got) != 1 || !strings.Contains(got[0].Message, `use "API Gateway"`) {
+		t.Fatalf("prose heading: got %+v", got)
+	}
+}
+
+func TestProseCasing_IgnoreWordsMatchByKey(t *testing.T) {
+	t.Parallel()
+
+	content := "The autoscaling and the api gateway."
+	testCases := map[string]struct {
+		ignore []string
+		want   int
+	}{
+		"none":                  {nil, 2},
+		"spaced ignores merged": {[]string{"auto scaling"}, 1},
+		"merged ignores spaced": {[]string{"autoscaling"}, 1},
+		// Ignoring removes the entry, not the text: "api" inside it is then
+		// the default API entry's to report.
+		"ignored name exposes shorter entry": {[]string{"apigateway"}, 2},
+		"target scoped":                      {[]string{"aws_thing/Auto Scaling"}, 1},
+		"other target unaffected":            {[]string{"aws_other/Auto Scaling"}, 2},
+	}
+	for name, tc := range testCases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			got := runProseCasing(t, []string{"Auto Scaling", "API Gateway"}, tc.ignore, content)
+			if len(got) != tc.want {
+				t.Fatalf("got %d findings, want %d: %+v", len(got), tc.want, got)
+			}
+		})
+	}
+}
+
+func TestProseCasing_EnforceCasingRejectsUnmatchableEntry(t *testing.T) {
+	t.Parallel()
+
+	for _, entry := range []string{"X-Ray", "Amazon S3.", "C++", "Café"} {
+		t.Run(entry, func(t *testing.T) {
+			t.Parallel()
+			_, err := check.NewProseCasingRule([]string{entry}, nil, doc.DefaultHeadingTemplates(), false, check.SeverityWarning)
+			if err == nil || !strings.Contains(err.Error(), "words may contain only letters, digits, and underscores") {
+				t.Fatalf("err = %v, want an unmatchable-entry error", err)
+			}
+		})
+	}
+	for _, entry := range []string{"WAFv2", "EC2 Auto Scaling", "ID's", "  API   Gateway  "} {
+		t.Run(entry, func(t *testing.T) {
+			t.Parallel()
+			if _, err := check.NewProseCasingRule([]string{entry}, nil, doc.DefaultHeadingTemplates(), false, check.SeverityWarning); err != nil {
+				t.Fatalf("err = %v, want nil", err)
+			}
+		})
+	}
+}
+
+func TestProseCasing_EnforceCasingOverridesDefaultBySpacing(t *testing.T) {
+	t.Parallel()
+
+	// A provider entry replaces a default with the same match key, spacing
+	// included: here "UI" becomes "U I" (contrived, but it exercises the
+	// path), so "UI" is now the wrong form.
+	got := runProseCasing(t, []string{"U I"}, nil, "The UI and the ui.")
+	if len(got) != 2 {
+		t.Fatalf("got %d findings, want 2: %+v", len(got), got)
+	}
+}
+
+func BenchmarkProseCasing(b *testing.B) {
+	enforce := strings.Fields(`ACL ACM ACMPCA AMI AppConfig AppFabric AppFlow AppStream AppSync ARN
+		ASG ASN BGP BYOIP CIDR CloudFormation CloudFront CloudHSM CloudTrail CloudWatch CMK CNAME
+		CodeArtifact CodeBuild CodeCatalyst CodeCommit CodeConnections CodeDeploy CodeGuru
+		CodePipeline CoIP CSV DataBrew DataSync DataZone DAX DB DHCP DKIM DLM DMS DNSSEC DocDB
+		DynamoDB EBS EC2 ECMP ECR ECS EFS EIP EKS ElastiCache Elasticsearch ELB EMR EventBridge
+		FIFO FMS FQDNs FSx GameLift GCM GraphQL gRPC GuardDuty HAProxy HSM HVM IAM IoT IPAM IPSet
+		iSCSI JDBC KMS MFA MicroVMs MSK MWAA MySQL NFS OAuth OIDC OpsWorks PHP PITR POSIX QLDB
+		QuickSight RabbitMQ RDS RFC SageMaker SASL SFN SMB SMS SMTP SNS SQS SSM SSO STS SWF TTL VGW
+		VoIP VPC VPN WAF WAFv2 WorkLink WorkMail XRay XSS YAML`)
+	enforce = append(enforce, "API Gateway", "App Runner", "App Mesh", "Lake Formation",
+		"Auto Scaling group", "Auto Scaling groups", "EC2 Auto Scaling", "Application Auto Scaling")
+	r, err := check.NewProseCasingRule(enforce, nil, doc.DefaultHeadingTemplates(), false, check.SeverityWarning)
+	if err != nil {
+		b.Fatal(err)
+	}
+	line := "* `vpc_id` - (Optional) ID of the VPC in which the [Auto Scaling group](https://docs.aws.amazon.com/x) and its instances run.\n" +
+		"Provides a resource to manage an API Gateway REST API stage with logging to CloudWatch and tracing enabled.\n" +
+		"The name of the resource, which must be unique within the account and region and may contain letters.\n"
+	ctx := check.FileCheckContext{Resource: "aws_thing", Path: "p", Content: []byte(strings.Repeat(line, 300))}
+	b.ResetTimer()
+	for b.Loop() {
+		r.CheckFile(ctx)
+	}
+}
