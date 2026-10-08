@@ -76,6 +76,20 @@ cannot tell which is right: `arn` in `the arn format is` should become
 stay lowercase and gain backticks instead. `ssh` is the clearest case —
 `` `ssh` `` and `SSH` are both correct, bare `ssh` is not, and which one
 applies depends on whether the sentence names the command or the protocol.
+A literal isn't always lowercase — an enum value (`Vpc`), a field name
+(`Id`), an environment variable prefix (`CODEBUILD_`) — so the backticks
+branch doesn't claim it is:
+
+```
+avoid "Cloudwatch"; use "CloudWatch" instead, or add backticks around it if it's a literal (code, a value, or a field name)
+```
+
+A match containing a space or tab can't be a literal identifier or value,
+so it gets only the capitalization fix:
+
+```
+avoid "Auto Scaling Group"; use "Auto Scaling group" instead
+```
 
 A finding with two candidate fixes names a defect without naming its
 remedy, which is a deliberate concession: the alternative is guessing, and
@@ -302,11 +316,25 @@ become undocumented, and a cosmetic warning become a coverage error:
 #### client_authentication tls  ->  #### … TLS      same
 ```
 
-Rather than infer the style, test the suggestion against the heading matcher
-and withhold the fix that would break it:
+A multi-word canonical form adds a second way to break one: respacing a
+`{Title}` heading changes its snake-case name, `### Autoscaling Policy
+Configuration` (`autoscaling_policy_configuration`) becoming `### Auto
+Scaling Policy Configuration` (`auto_scaling_policy_configuration`).
+
+Only headings the doc parser resolves can break. It resolves a heading
+against the schema only at level 3 or deeper inside a level-2 section whose
+heading begins with `Argument` or `Attribute` (`doc.ParseWithOptions`), so
+the rule tracks the same thing: a level-2 heading sets or clears the
+section, a level-1 heading clears it, and heading-shaped lines inside
+fences are ignored. Everywhere else — Example Usage, Import, the
+introduction — a heading is prose and gets the ordinary message, so
+`### With AppMesh Proxy` under Example Usage gets `use "App Mesh"` (#107).
+
+Within those sections, rather than infer the style, test the suggestion
+against the heading matcher and withhold the fix that would break it:
 
 ```go
-if isHeadingLine {
+if isBlockHeading { // level >= 3, inside Argument/Attribute Reference
 	before := templates.Match(headingText)
 	after := templates.Match(strings.Replace(headingText, got, want, 1))
 	if before != "" && after != before {
@@ -319,8 +347,12 @@ if isHeadingLine {
 `block_heading_styles` value at construction and nothing else. It needs no
 case analysis and no schema: a `{Block}` or `{Path}` heading resolves before
 and not after, so only backticks are offered; a `{Title}` heading resolves
-to the same name either way, so capitalization is; and a prose heading
-resolves to nothing before, so capitalization is offered there too.
+to the same name after a case-only fix, so capitalization is; a respaced
+`{Title}` heading resolves to a different name, so only backticks are
+offered; and a prose heading resolves to nothing before, so capitalization
+is offered there too. Withholding inside these sections doesn't consult
+the schema: a heading there that names no block is already reported by
+`schema_docs`, and the rule can't tell which name the author meant.
 
 The backticks branch agrees with `schema_docs`'s separate preferred-style
 finding, which already points unbackticked `{Block}` headings toward the
@@ -451,6 +483,13 @@ table-driven with `t.Parallel()`.
 - One case per never-guess condition asserting no finding: unterminated
   backtick span, each glue character, quoted literal — plus one asserting
   a sentence-final match *is* reported.
+- Section tracking: a respaced `{Title}` heading under Example Usage, before
+  any section, after `## Import`, as a level-2 heading, and after a level-1
+  reset gets the canonical name; the same heading inside each of Argument,
+  Attribute, and Attributes Reference gets backticks only; a fenced
+  `## Argument Reference` line doesn't open a section.
+- Message shape: a multi-word or tab-separated match gets the
+  capitalization fix only; a single token, whatever its case, gets both.
 - A bare, unbackticked `{Block}`-style heading (`## tls Argument
   Reference`) *is* reported for `tls`, with the backticks-only message,
   because capitalizing would stop the heading resolving. A `{Title}`-style
