@@ -169,6 +169,7 @@ func (r *ProseCasing) CheckFile(ctx FileCheckContext) []Result {
 	}
 	var fenceChar byte
 	fenceLen := 0
+	var sections *headingSections // parsed on the first line with a match
 	for i, raw := range lines {
 		if i <= fmEnd {
 			continue
@@ -201,7 +202,10 @@ func (r *ProseCasing) CheckFile(ctx FileCheckContext) []Result {
 		}
 
 		scannable := maskProseCasingLiterals(maskUnscannable(raw))
-		isHeading := strings.HasPrefix(strings.TrimSpace(raw), "#")
+		if sections == nil {
+			sections = newHeadingSections(ctx.Content)
+		}
+		blockHeading := sections.blockHeadingText(i + 1)
 
 		spans, buf = r.find(scannable, raw, buf, spans[:0], -1)
 		for _, sp := range spans {
@@ -217,7 +221,7 @@ func (r *ProseCasing) CheckFile(ctx FileCheckContext) []Result {
 				Resource: ctx.Resource,
 				Severity: r.severity,
 				Line:     i + 1,
-				Message:  r.message(raw, got, want, isHeading),
+				Message:  r.message(got, want, blockHeading),
 			})
 		}
 	}
@@ -379,22 +383,65 @@ func cutLastSlash(s string) (target, word string, ok bool) {
 	return s[:i], s[i+1:], true
 }
 
-// message builds the finding text. A word that is the entire resolvable
-// content of a heading only gets the capitalization fix when capitalizing
-// would not change whether the heading resolves against the schema (a
-// {Title}-style heading, or one that doesn't resolve to a block either
-// way); otherwise only the backticks fix is offered, since capitalizing a
-// {Block}/{Path}-style heading would make it stop resolving.
-func (r *ProseCasing) message(raw, got, want string, isHeading bool) string {
-	if isHeading && r.headingTemplates != nil {
-		text := doc.HeadingText(raw)
-		before := r.headingTemplates.Match(text)
-		after := r.headingTemplates.Match(strings.Replace(text, got, want, 1))
+// message builds the finding text. blockHeading is the text of the heading
+// on the finding's line when that heading can name a block, else "". On such a heading, a
+// fix that would change which block the heading resolves to (capitalizing
+// a {Block} or {Path} name, or respacing a {Title}) is withheld and only
+// backticks are offered. Otherwise the capitalization fix is offered, plus
+// backticks when the match is a single token: a span with a space in it
+// can't be a literal identifier or value.
+func (r *ProseCasing) message(got, want, blockHeading string) string {
+	if blockHeading != "" && r.headingTemplates != nil {
+		before := r.headingTemplates.Match(blockHeading)
+		after := r.headingTemplates.Match(strings.Replace(blockHeading, got, want, 1))
 		if before != "" && after != before {
 			return fmt.Sprintf("avoid %q; add backticks around it instead of capitalizing — capitalizing would stop this heading resolving to its block", got)
 		}
 	}
-	return fmt.Sprintf("avoid %q; use %q instead, or add backticks around it if this is a correct, lowercase technical reference", got, want)
+	if strings.ContainsAny(got, " \t") {
+		return fmt.Sprintf("avoid %q; use %q instead", got, want)
+	}
+	return fmt.Sprintf("avoid %q; use %q instead, or add backticks around it if it's a literal (code, a value, or a field name)", got, want)
+}
+
+// headingSections answers which lines are headings that can name a block:
+// level 3 or deeper inside a level-2 section whose heading begins with
+// "Argument" or "Attribute", the only place the doc parser resolves headings
+// against the schema (doc.ParseWithOptions). Elsewhere, such as Example
+// Usage, a heading is prose. Headings come from doc.HeadingLines, the
+// parser's own Markdown semantics, so Setext headings, indentation, and
+// fences agree with it.
+type headingSections struct {
+	headings map[int]doc.HeadingLine
+	starts   []int  // ascending lines of level-1 and level-2 headings
+	isBlock  []bool // whether the section opened at starts[i] holds block headings
+}
+
+func newHeadingSections(content []byte) *headingSections {
+	hs := &headingSections{headings: doc.HeadingLines(content)}
+	for _, line := range slices.Sorted(maps.Keys(hs.headings)) {
+		h := hs.headings[line]
+		if h.Level > 2 {
+			continue
+		}
+		hs.starts = append(hs.starts, line)
+		hs.isBlock = append(hs.isBlock, h.Level == 2 && (strings.HasPrefix(h.Text, "Argument") || strings.HasPrefix(h.Text, "Attribute")))
+	}
+	return hs
+}
+
+// blockHeadingText returns the text of the heading on 1-based line when it
+// can name a block, or "".
+func (hs *headingSections) blockHeadingText(line int) string {
+	h, ok := hs.headings[line]
+	if !ok || h.Level < 3 {
+		return ""
+	}
+	i, _ := slices.BinarySearch(hs.starts, line)
+	if i == 0 || !hs.isBlock[i-1] {
+		return ""
+	}
+	return h.Text
 }
 
 var (

@@ -4,6 +4,7 @@
 package doc_test
 
 import (
+	"maps"
 	"slices"
 	"testing"
 
@@ -215,5 +216,21 @@ func TestParse_MalformedFrontmatter_DoesNotCorruptBody(t *testing.T) {
 	}
 	if d.Sections.Arguments == nil {
 		t.Error("Argument Reference section should be discovered")
+	}
+}
+
+func TestHeadingLines(t *testing.T) {
+	t.Parallel()
+
+	source := []byte("---\ndescription: |-\n  Not a heading\n---\n\n# Title\n\nSetext Two\n----------\n\n### `tls` Block\n\n```\n## fenced\n```\n\n    ## indented code\n\n> ## Quoted\n")
+	got := doc.HeadingLines(source)
+	want := map[int]doc.HeadingLine{
+		6:  {Level: 1, Text: "Title"},
+		8:  {Level: 2, Text: "Setext Two"},
+		11: {Level: 3, Text: "tls Block"},
+		19: {Level: 2, Text: "Quoted"},
+	}
+	if !maps.Equal(got, want) {
+		t.Errorf("HeadingLines() = %v, want %v", got, want)
 	}
 }

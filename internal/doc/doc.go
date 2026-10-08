@@ -151,6 +151,36 @@ func (t HeadingTemplates) Match(heading string) string {
 	return ""
 }
 
+// HeadingLine is one heading found by HeadingLines.
+type HeadingLine struct {
+	Level int
+	Text  string
+}
+
+// HeadingLines returns every heading in source keyed by the 1-based line its
+// text is on, parsed the way ParseWithOptions parses (frontmatter blanked
+// first), so ATX and Setext headings, indentation, and fences agree with the
+// parser's own block resolution. A Setext heading is keyed by its text line,
+// not its underline. An empty ATX heading ("##") has no text line and is
+// omitted.
+func HeadingLines(source []byte) map[int]HeadingLine {
+	parseSource := stripFrontmatter(source)
+	tree := goldmark.New().Parser().Parse(text.NewReader(parseSource))
+	idx := newLineIndex(parseSource)
+	out := make(map[int]HeadingLine)
+	_ = ast.Walk(tree, func(node ast.Node, entering bool) (ast.WalkStatus, error) {
+		h, ok := node.(*ast.Heading)
+		if !entering || !ok {
+			return ast.WalkContinue, nil
+		}
+		if line := nodeLineNumber(h, idx); line > 0 {
+			out[line] = HeadingLine{Level: h.Level, Text: string(h.Text(parseSource))}
+		}
+		return ast.WalkSkipChildren, nil
+	})
+	return out
+}
+
 // HeadingText parses a single Markdown heading line and returns the same
 // text Goldmark hands HeadingTemplates.Match during a full document parse:
 // inline markup (emphasis, code spans, link text) resolved to plain text,

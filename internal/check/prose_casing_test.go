@@ -320,7 +320,7 @@ func TestProseCasing_BlockStyleHeadingGetsBackticksOnlyMessage(t *testing.T) {
 	// A bare, unbackticked {Block}-style heading: capitalizing "tls" would
 	// stop isSnakeCaseSegment matching, breaking the heading's resolution.
 	// Only the backticks fix is offered.
-	content := "### tls Block\n\nSome text."
+	content := "## Argument Reference\n\n### tls Block\n\nSome text."
 	got := runProseCasing(t, nil, nil, content)
 	if len(got) != 1 {
 		t.Fatalf("got %d findings, want 1: %+v", len(got), got)
@@ -342,7 +342,7 @@ func TestProseCasing_EmphasizedBlockStyleHeadingGetsBackticksOnlyMessage(t *test
 	// Stripping only the leading "#"s and leaving "*tls*" in place would
 	// make the heading look unresolvable (before == ""), wrongly offering
 	// the unsafe capitalize fix.
-	content := "### *tls* Block\n\nSome text."
+	content := "## Argument Reference\n\n### *tls* Block\n\nSome text."
 	got := runProseCasing(t, nil, nil, content)
 	if len(got) != 1 {
 		t.Fatalf("got %d findings, want 1: %+v", len(got), got)
@@ -658,7 +658,7 @@ func TestProseCasing_MultiWordBlockStyleHeadingGetsBackticksOnlyMessage(t *testi
 
 	// "### autoscaling" resolves to block autoscaling; "### Auto Scaling"
 	// would not.
-	got := runProseCasing(t, []string{"Auto Scaling"}, nil, "### autoscaling")
+	got := runProseCasing(t, []string{"Auto Scaling"}, nil, "## Argument Reference\n\n### autoscaling")
 	if len(got) != 1 || !strings.Contains(got[0].Message, "add backticks around it instead of capitalizing") {
 		t.Fatalf("got %+v", got)
 	}
@@ -754,5 +754,128 @@ func BenchmarkProseCasing(b *testing.B) {
 	b.ResetTimer()
 	for b.Loop() {
 		r.CheckFile(ctx)
+	}
+}
+
+// The #107 cases: a {Title}-style heading outside Argument and Attribute
+// Reference is never resolved against the schema, so respacing it is safe
+// and the canonical name is the fix.
+func TestProseCasing_ExampleHeadingGetsRespacingFix(t *testing.T) {
+	t.Parallel()
+
+	testCases := map[string]struct {
+		enforce []string
+		content string
+		want    string
+	}{
+		"example usage":   {[]string{"App Mesh"}, "## Example Usage\n\n### With AppMesh Proxy", `avoid "AppMesh"; use "App Mesh"`},
+		"before sections": {[]string{"Lake Formation"}, "### Enable EMR access to LakeFormation resources", `avoid "LakeFormation"; use "Lake Formation"`},
+		"after attrs, h2": {[]string{"Auto Scaling groups"}, "## Attribute Reference\n\n## Import\n\n### Using with AutoScaling Groups", `avoid "AutoScaling Groups"; use "Auto Scaling groups"`},
+		"h2 in section":   {[]string{"App Mesh"}, "## Argument Reference\n\n## AppMesh Settings", `avoid "AppMesh"; use "App Mesh"`},
+		"after h1 reset":  {[]string{"App Mesh"}, "## Argument Reference\n\n# Title\n\n### AppMesh Proxy", `avoid "AppMesh"; use "App Mesh"`},
+	}
+	for name, tc := range testCases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			got := runProseCasing(t, tc.enforce, nil, tc.content)
+			if len(got) != 1 || !strings.Contains(got[0].Message, tc.want) {
+				t.Fatalf("want one finding containing %q, got %+v", tc.want, got)
+			}
+		})
+	}
+}
+
+// Inside Argument or Attribute Reference, respacing a {Title} heading
+// changes the block it resolves to, so only backticks are offered.
+func TestProseCasing_BlockSectionTitleHeadingRespacingWithheld(t *testing.T) {
+	t.Parallel()
+
+	for _, section := range []string{"## Argument Reference", "## Attribute Reference", "## Attributes Reference"} {
+		t.Run(section, func(t *testing.T) {
+			t.Parallel()
+			content := section + "\n\n### Autoscaling Policy Configuration"
+			got := runProseCasing(t, []string{"Auto Scaling"}, nil, content)
+			if len(got) != 1 || !strings.Contains(got[0].Message, "instead of capitalizing") {
+				t.Fatalf("want the backticks-only message, got %+v", got)
+			}
+		})
+	}
+
+	// A heading-shaped line inside a fence doesn't change section.
+	content := "## Example Usage\n\n```\n## Argument Reference\n```\n\n### With AppMesh Proxy"
+	got := runProseCasing(t, []string{"App Mesh"}, nil, content)
+	if len(got) != 1 || !strings.Contains(got[0].Message, `use "App Mesh"`) {
+		t.Fatalf("fenced heading: got %+v", got)
+	}
+}
+
+// The #108 cases: backticks fit only a single token, and the suggestion
+// never assumes the matched text is lowercase.
+func TestProseCasing_MessageOffersBackticksOnlyForSingleToken(t *testing.T) {
+	t.Parallel()
+
+	testCases := map[string]struct {
+		enforce []string
+		content string
+		want    string
+	}{
+		"multi-word": {[]string{"Auto Scaling group"}, "The Auto Scaling Group.", `avoid "Auto Scaling Group"; use "Auto Scaling group" instead`},
+		"tab":        {[]string{"API Gateway"}, "The api\tgateway.", `avoid "api\tgateway"; use "API Gateway" instead`},
+		"mixed case": {[]string{"CloudWatch"}, "The Cloudwatch logs.", `avoid "Cloudwatch"; use "CloudWatch" instead, or add backticks around it if it's a literal (code, a value, or a field name)`},
+		"merged":     {[]string{"API Gateway"}, "The apigateway.", `avoid "apigateway"; use "API Gateway" instead, or add backticks around it if it's a literal (code, a value, or a field name)`},
+		"lowercase":  {nil, "The api.", `avoid "api"; use "API" instead, or add backticks around it if it's a literal (code, a value, or a field name)`},
+	}
+	for name, tc := range testCases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			got := runProseCasing(t, tc.enforce, nil, tc.content)
+			if len(got) != 1 || got[0].Message != tc.want {
+				t.Fatalf("want message %q, got %+v", tc.want, got)
+			}
+		})
+	}
+}
+
+// Section state comes from the same Markdown parse the doc parser uses, so
+// a Setext section heading opens or closes a block section and an indented
+// code line that looks like a heading does neither.
+func TestProseCasing_SectionTrackingFollowsMarkdownHeadings(t *testing.T) {
+	t.Parallel()
+
+	testCases := map[string]struct {
+		enforce []string
+		content string
+		want    string
+	}{
+		"setext argument section": {nil, "Argument Reference\n------------------\n\n### tls Block", "instead of capitalizing"},
+		"setext example after arguments": {
+			[]string{"App Mesh"},
+			"## Argument Reference\n\nExample Usage\n-------------\n\n### With AppMesh Proxy",
+			`use "App Mesh"`,
+		},
+		"setext h1 resets": {
+			[]string{"App Mesh"},
+			"## Argument Reference\n\nTitle\n=====\n\n### With AppMesh Proxy",
+			`use "App Mesh"`,
+		},
+		"indented code is not a heading": {
+			[]string{"App Mesh"},
+			"## Example Usage\n\n    ## Argument Reference\n\n### With AppMesh Proxy",
+			`use "App Mesh"`,
+		},
+		"frontmatter closer is not a setext heading": {
+			[]string{"App Mesh"},
+			"---\nsubcategory: \"ECS\"\ndescription: |-\n  Argument stuff\n---\n\n### With AppMesh Proxy",
+			`use "App Mesh"`,
+		},
+	}
+	for name, tc := range testCases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			got := runProseCasing(t, tc.enforce, nil, tc.content)
+			if len(got) != 1 || !strings.Contains(got[0].Message, tc.want) {
+				t.Fatalf("want one finding containing %q, got %+v", tc.want, got)
+			}
+		})
 	}
 }
