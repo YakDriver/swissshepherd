@@ -31,10 +31,12 @@ the word is wrong. Here the word is right and only its case is wrong.
 
 ## Matching
 
-Each configured entry has a canonical form, held exactly as configured and
-never derived by upcasing the match: `DynamoDB`, `OAuth`, `iSCSI`, `API
-Gateway`. An entry is one or more words separated by spaces; each word is a
-run of `[0-9A-Za-z_]`, the characters Go's `\b` treats as word characters.
+Each configured entry has a canonical form: the entry trimmed, with inner
+whitespace collapsed to single spaces, its letters' casing kept exactly as
+configured and never derived by upcasing the match: `DynamoDB`, `OAuth`,
+`iSCSI`, `API Gateway`. An entry is one or more words separated by spaces;
+each word is a run of `[0-9A-Za-z_]`, the characters Go's `\b` treats as
+word characters.
 
 From the canonical form the rule derives a **match key**, the canonical
 lowercased with spaces removed (`API Gateway` → `apigateway`), and its

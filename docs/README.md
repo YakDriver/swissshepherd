@@ -313,7 +313,7 @@ The scan covers the whole document — descriptions, prose, callouts, and frontm
 
 ### `prose_casing`
 
-Flags a word in doc prose whose casing should be a configured canonical form but isn't — `arn` should be `ARN`, `dynamodb` should be `DynamoDB`. Unlike `banned_glosses`, which bans a spelled-out phrase in favor of its abbreviation, this check corrects the casing of a word that's already the right word. It ships a small, vendor-neutral default list (`ID`, `API`, `URL`, `JSON`, `CPU`, and similar common initialisms); AWS- or provider-specific vocabulary (`ARN`, `VPC`, `DynamoDB`) is added via `enforce_casing`. This check is **opt-in**: unlike `banned_glosses`, it ships with a non-empty default list, so it requires an explicit `enabled = true` rather than defaulting on.
+Flags a word or multi-word name in doc prose whose casing or spacing should be a configured canonical form but isn't — `arn` should be `ARN`, `dynamodb` should be `DynamoDB`, `apigateway` should be `API Gateway`. Unlike `banned_glosses`, which bans a spelled-out phrase in favor of its abbreviation, this check corrects the casing and spacing of a name that's already the right name. It ships a small, vendor-neutral default list (`ID`, `API`, `URL`, `JSON`, `CPU`, and similar common initialisms); AWS- or provider-specific vocabulary (`ARN`, `VPC`, `DynamoDB`) is added via `enforce_casing`. This check is **opt-in**: unlike `banned_glosses`, it ships with a non-empty default list, so it requires an explicit `enabled = true` rather than defaulting on.
 
 ```hcl
 check "prose_casing" {
