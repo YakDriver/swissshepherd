@@ -169,6 +169,7 @@ func (r *ProseCasing) CheckFile(ctx FileCheckContext) []Result {
 	}
 	var fenceChar byte
 	fenceLen := 0
+	inBlockSection := false
 	for i, raw := range lines {
 		if i <= fmEnd {
 			continue
@@ -184,6 +185,14 @@ func (r *ProseCasing) CheckFile(ctx FileCheckContext) []Result {
 		}
 		if fenceChar != 0 {
 			continue
+		}
+		level := headingLevel(raw)
+		switch level {
+		case 1:
+			inBlockSection = false
+		case 2:
+			text := doc.HeadingText(raw)
+			inBlockSection = strings.HasPrefix(text, "Argument") || strings.HasPrefix(text, "Attribute")
 		}
 		// An unterminated inline code span can't be told apart from real
 		// text by maskUnscannable (it only matches balanced pairs), so a
@@ -201,7 +210,11 @@ func (r *ProseCasing) CheckFile(ctx FileCheckContext) []Result {
 		}
 
 		scannable := maskProseCasingLiterals(maskUnscannable(raw))
-		isHeading := strings.HasPrefix(strings.TrimSpace(raw), "#")
+		// Only a level-3+ heading inside an Argument or Attribute section
+		// can name a block: that's where the doc parser resolves headings
+		// against the schema (doc.ParseWithOptions). Elsewhere, such as
+		// Example Usage, a heading is prose.
+		isBlockHeading := level >= 3 && inBlockSection
 
 		spans, buf = r.find(scannable, raw, buf, spans[:0], -1)
 		for _, sp := range spans {
@@ -217,7 +230,7 @@ func (r *ProseCasing) CheckFile(ctx FileCheckContext) []Result {
 				Resource: ctx.Resource,
 				Severity: r.severity,
 				Line:     i + 1,
-				Message:  r.message(raw, got, want, isHeading),
+				Message:  r.message(raw, got, want, isBlockHeading),
 			})
 		}
 	}
@@ -379,14 +392,14 @@ func cutLastSlash(s string) (target, word string, ok bool) {
 	return s[:i], s[i+1:], true
 }
 
-// message builds the finding text. A word that is the entire resolvable
-// content of a heading only gets the capitalization fix when capitalizing
-// would not change whether the heading resolves against the schema (a
-// {Title}-style heading, or one that doesn't resolve to a block either
-// way); otherwise only the backticks fix is offered, since capitalizing a
-// {Block}/{Path}-style heading would make it stop resolving.
-func (r *ProseCasing) message(raw, got, want string, isHeading bool) string {
-	if isHeading && r.headingTemplates != nil {
+// message builds the finding text. On a heading that can name a block, a
+// fix that would change which block the heading resolves to (capitalizing
+// a {Block} or {Path} name, or respacing a {Title}) is withheld and only
+// backticks are offered. Otherwise the capitalization fix is offered, plus
+// backticks when the match is a single token: a span with a space in it
+// can't be a literal identifier or value.
+func (r *ProseCasing) message(raw, got, want string, isBlockHeading bool) string {
+	if isBlockHeading && r.headingTemplates != nil {
 		text := doc.HeadingText(raw)
 		before := r.headingTemplates.Match(text)
 		after := r.headingTemplates.Match(strings.Replace(text, got, want, 1))
@@ -394,7 +407,24 @@ func (r *ProseCasing) message(raw, got, want string, isHeading bool) string {
 			return fmt.Sprintf("avoid %q; add backticks around it instead of capitalizing — capitalizing would stop this heading resolving to its block", got)
 		}
 	}
-	return fmt.Sprintf("avoid %q; use %q instead, or add backticks around it if this is a correct, lowercase technical reference", got, want)
+	if strings.ContainsAny(got, " \t") {
+		return fmt.Sprintf("avoid %q; use %q instead", got, want)
+	}
+	return fmt.Sprintf("avoid %q; use %q instead, or add backticks around it if it's a literal (code, a value, or a field name)", got, want)
+}
+
+// headingLevel returns the level of an ATX heading line (1 for "# x"), or
+// 0 if the line isn't one.
+func headingLevel(line string) int {
+	t := strings.TrimLeft(line, " ")
+	n := 0
+	for n < len(t) && t[n] == '#' {
+		n++
+	}
+	if n == 0 || n > 6 || n < len(t) && t[n] != ' ' && t[n] != '\t' {
+		return 0
+	}
+	return n
 }
 
 var (
