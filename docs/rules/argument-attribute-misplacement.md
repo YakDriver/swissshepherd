@@ -74,6 +74,8 @@ accepted, measured limitation tracked as a follow-up — not an oversight.
 
 ## 3. Core principle
 
+> **Superseded in part by [field-homes.md](field-homes.md) (#111).** `configurableArgAtPath` now counts `Optional+Computed` as an argument, so the "not pure-config" rows below no longer cover it, and a field that Argument Reference also lists is a repeat (reported by the repeated-field finding), not a move.
+
 **Detect per attribute. Aggregate for the message only.**
 
 The per-attribute primitive already exists:

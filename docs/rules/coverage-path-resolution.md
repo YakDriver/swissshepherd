@@ -54,6 +54,8 @@ The paths S *serves* are the schema paths that resolve to S under §4, excluding
 
 ### Field homes
 
+> **Superseded by [field-homes.md](field-homes.md) (#111).** Optional+Computed fields, and child blocks whose subtree has any `Required` or `Optional` field, are now Argument Reference only, and no field may be listed in both sections. The table below records the #77 design.
+
 Several rules below depend on which reference section a field belongs in. This is the misplacement rule's classification (argument-attribute-misplacement.md §3), extended to separate "either" from "Attribute Reference only" for child blocks. The implementation reuses `configurableArgAtPath` for the Argument Reference rows.
 
 | Field at path P | Home |

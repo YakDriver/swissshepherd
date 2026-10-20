@@ -121,7 +121,8 @@ When [`nested_object_attributes`](schema_docs.md) is enabled, expansion sets a
 - **Parent is Optional and/or Required** → per-field configurability is
   unknowable, so `ConfigUnknown = true`. Coverage still requires each field to
   be documented, but accepts **either** Argument or Attribute Reference and does
-  not dictate a section. A genuinely undocumented field is still reported, with
+  not dictate a section. Listing it in both is still a repeat
+  ([field-homes.md](field-homes.md)). A genuinely undocumented field is still reported, with
   a neutral "is not documented" message.
 
 `ConfigUnknown` is, in effect, a **proto5-shape detector**: it is true only
