@@ -553,35 +553,50 @@ func (r *SchemaDocsRule) checkRepeated(ctx CheckContext, idx map[*doc.DocBlock][
 				continue
 			}
 			seen[k] = true
+			// A shared section's entry may be another path's documentation of
+			// f; removing it would damage that path. The fix is then to stop the
+			// section documenting p: headings that resolve only to the paths
+			// that need it. Like the shared-section warnings, the message states
+			// that condition and gives one full-path example, which always
+			// resolves only to its own path (coverage-path-resolution.md §6).
+			drop := func(inAttrs bool) string {
+				section := argSection
+				if inAttrs {
+					section = attrSection
+				}
+				need := r.neededElsewhere(ctx, idx, section, p, f, inAttrs)
+				if len(need) == 0 {
+					return fmt.Sprintf("remove the %s entry", referenceName(inAttrs))
+				}
+				verb := "needs"
+				if len(need) > 1 {
+					verb = "need"
+				}
+				return fmt.Sprintf("don't remove the %s entry: section %q (line %d) also documents %s, which %s it; give the paths that need it a heading that resolves only to them, e.g. %q",
+					referenceName(inAttrs), section.Name, section.HeadingLine, pointerList(need), verb, doc.RenderHeading(r.pathTemplate(), need[0]))
+			}
 			// implicit_attributes (id, tags_all) aren't held to a home: SDKv2
 			// reports id as Optional+Computed whether or not anyone sets it.
-			// A shared section's entry may be needed by another path it
-			// documents; removing it would damage that path, so the fix is to
-			// qualify the heading instead (one finding per section pair, so the
-			// fix must hold for every path either section documents).
-			argNeed := r.neededElsewhere(ctx, idx, argSection, p, f, false)
-			attrNeed := r.neededElsewhere(ctx, idx, attrSection, p, f, true)
-			kind, fix := "attribute", "keep one entry"
+			kind, fix := "attribute", ""
 			switch {
-			case slices.Contains(r.implicit(), f):
+			case slices.Contains(r.implicit(), f) || !(r.homeOnlyIn(rs, p, f, false) || r.homeOnlyIn(rs, p, f, true)):
+				argNeeded := len(r.neededElsewhere(ctx, idx, argSection, p, f, false)) > 0
+				attrNeeded := len(r.neededElsewhere(ctx, idx, attrSection, p, f, true)) > 0
+				switch {
+				case argNeeded:
+					fix = drop(true)
+				case attrNeeded:
+					fix = drop(false)
+				default:
+					fix = "keep one entry"
+				}
 			case optionalComputedOnly(rs, p, f):
-				kind, fix = "argument", "remove the Attribute Reference entry if it can be set; if setting it has no effect, remove the Argument Reference entry instead, and the schema should mark it Computed only"
+				kind = "argument"
+				fix = "if it can be set, " + drop(true) + "; if setting it has no effect, " + drop(false) + ", and the schema should mark it Computed only"
 			case r.homeOnlyIn(rs, p, f, false):
-				kind, fix = "argument", "remove the Attribute Reference entry"
-			case r.homeOnlyIn(rs, p, f, true):
-				fix = "remove the Argument Reference entry"
-			}
-			switch {
-			case len(argNeed) > 0 && len(attrNeed) > 0:
-				fix = r.qualifyFix(argSection, false, argNeed, f) + "; and " + r.qualifyFix(attrSection, true, attrNeed, f)
-			case len(attrNeed) > 0 && kind == "argument":
-				fix = r.qualifyFix(attrSection, true, attrNeed, f)
-			case len(argNeed) > 0 && kind == "attribute" && fix != "keep one entry":
-				fix = r.qualifyFix(argSection, false, argNeed, f)
-			case fix == "keep one entry" && len(attrNeed) > 0:
-				fix = "remove the Argument Reference entry"
-			case fix == "keep one entry" && len(argNeed) > 0:
-				fix = "remove the Attribute Reference entry"
+				kind, fix = "argument", drop(true)
+			default:
+				fix = drop(false)
 			}
 			where := ""
 			if p != "" {
@@ -613,18 +628,13 @@ func (r *SchemaDocsRule) neededElsewhere(ctx CheckContext, idx map[*doc.DocBlock
 			other = ctx.Doc.AttributeBlocks
 		}
 		_, otherLists := listedBullet(resolveSection(rs, other, q), f)
-		single := r.homeOnlyIn(rs, q, f, false) || r.homeOnlyIn(rs, q, f, true)
-		if r.homeOnlyIn(rs, q, f, inAttrs) || (!single && !otherLists) {
+		implicit := slices.Contains(r.implicit(), f)
+		single := !implicit && (r.homeOnlyIn(rs, q, f, false) || r.homeOnlyIn(rs, q, f, true))
+		if (!implicit && r.homeOnlyIn(rs, q, f, inAttrs)) || (!single && !otherLists) {
 			out = append(out, q)
 		}
 	}
 	return out
-}
-
-// qualifyFix is the repeated-field fix when the entry to remove is also the
-// documentation another path needs: give those paths their own heading.
-func (r *SchemaDocsRule) qualifyFix(section *doc.DocBlock, inAttrs bool, need []string, f string) string {
-	return fmt.Sprintf("don't remove the %s entry, which also documents %q for %s; give %s its own %s heading, e.g. %q", referenceName(inAttrs), f, pointerList(need), pointerList(need[:1]), referenceName(inAttrs), doc.RenderHeading(r.pathTemplate(), need[0]))
 }
 
 // --- Shared sections ---

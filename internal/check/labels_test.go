@@ -1765,7 +1765,7 @@ func TestLabels_OptionalComputedMisplaced(t *testing.T) {
 
 	results := labelResults(t, src, rs)
 	for _, want := range []string{
-		`argument "settings" is listed in both Argument Reference (line 6) and Attribute Reference (line 10); remove the Attribute Reference entry if it can be set; if setting it has no effect, remove the Argument Reference entry instead, and the schema should mark it Computed only`,
+		`argument "settings" is listed in both Argument Reference (line 6) and Attribute Reference (line 10); if it can be set, remove the Attribute Reference entry; if setting it has no effect, remove the Argument Reference entry, and the schema should mark it Computed only`,
 		`argument "mode" in block "settings" is Optional+Computed in the schema but is documented only under Attribute Reference; if it can be set, move it to Argument Reference and label it (Optional); if setting it has no effect, the schema should mark it Computed only`,
 	} {
 		if !hasMsg(results, want) {

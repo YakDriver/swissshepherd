@@ -2097,7 +2097,7 @@ func TestCoverage_Repeated(t *testing.T) {
 		"optional+computed is an argument": {
 			child: []schema.Attribute{{Name: "size", Optional: true, Computed: true}},
 			md:    "## Argument Reference\n\n* `c` - (Optional) C.\n\n### `c` Block\n\n* `size` - (Optional) Size.\n\n## Attribute Reference\n\n### `c` Block\n\n* `size` - Size.\n",
-			want:  []string{`argument "size" in block "c" is listed in both Argument Reference (line 7) and Attribute Reference (line 13); remove the Attribute Reference entry`},
+			want:  []string{`argument "size" in block "c" is listed in both Argument Reference (line 7) and Attribute Reference (line 13); if it can be set, remove the Attribute Reference entry; if setting it has no effect, remove the Argument Reference entry, and the schema should mark it Computed only`},
 		},
 		// Every field of the subsection is a repeat: no "move this subsection".
 		"whole subsection repeated, labeled": {
@@ -2207,7 +2207,7 @@ func TestCoverage_Repeated(t *testing.T) {
 		"shared attribute section needed by another path": {
 			rs:      twoC([]schema.Attribute{{Name: "x", Optional: true}}, []schema.Attribute{{Name: "x", Computed: true}}),
 			md:      "## Argument Reference\n\n* `a` - (Optional) A.\n* `b` - (Optional) B.\n\n### `a` Block\n\n* `c` - (Optional) C.\n* `n` - (Optional) N.\n\n### `b` Block\n\n* `n` - (Optional) N.\n\n### `a.c` Block\n\n* `x` - (Optional) X.\n\n## Attribute Reference\n\n### `c` Block\n\n* `x` - X.\n",
-			want:    []string{"argument \"x\" in block \"a.c\" is listed in both Argument Reference (line 17) and Attribute Reference (line 23); don't remove the Attribute Reference entry, which also documents \"x\" for \"b.c\"; give \"b.c\" its own Attribute Reference heading, e.g. \"`b.c` Block\""},
+			want:    []string{"argument \"x\" in block \"a.c\" is listed in both Argument Reference (line 17) and Attribute Reference (line 23); don't remove the Attribute Reference entry: section \"c\" (line 21) also documents \"b.c\", which needs it; give the paths that need it a heading that resolves only to them, e.g. \"`b.c` Block\""},
 			without: "; remove the Attribute Reference entry",
 		},
 		// Review #112: both sections shared, opposite homes. Only b.c needs
@@ -2217,7 +2217,7 @@ func TestCoverage_Repeated(t *testing.T) {
 			rs: twoC([]schema.Attribute{{Name: "x", Optional: true}}, []schema.Attribute{{Name: "x", Computed: true}}),
 			md: "## Argument Reference\n\n* `a` - (Optional) A.\n* `b` - (Optional) B.\n\n### `a` Block\n\n* `c` - (Optional) C.\n* `n` - (Optional) N.\n\n### `b` Block\n\n* `n` - (Optional) N.\n\n### `c` Block\n\n* `x` - (Optional) X.\n\n## Attribute Reference\n\n### `c` Block\n\n* `x` - X.\n",
 			want: []string{
-				"argument \"x\" in block \"a.c\" is listed in both Argument Reference (line 17) and Attribute Reference (line 23); don't remove the Attribute Reference entry, which also documents \"x\" for \"b.c\"; give \"b.c\" its own Attribute Reference heading, e.g. \"`b.c` Block\"",
+				"argument \"x\" in block \"a.c\" is listed in both Argument Reference (line 17) and Attribute Reference (line 23); don't remove the Attribute Reference entry: section \"c\" (line 21) also documents \"b.c\", which needs it; give the paths that need it a heading that resolves only to them, e.g. \"`b.c` Block\"",
 				`section "c" (line 15) in Argument Reference documents 2 paths; "x" is (Optional) at "a.c" and (Read-Only) at "b.c"`,
 			},
 			without: "; remove the",
