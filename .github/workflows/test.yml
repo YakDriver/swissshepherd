@@ -70,7 +70,7 @@ jobs:
           check-latest: true
 
       - name: Modern Go code check
-        run: go run golang.org/x/tools/gopls/internal/analysis/modernize/cmd/modernize@latest -test ./...
+        run: go run golang.org/x/tools/go/analysis/passes/modernize/cmd/modernize@v0.52.0 -test ./...
 
   copyright:
     name: Copyright Check

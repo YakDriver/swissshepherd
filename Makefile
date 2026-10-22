@@ -37,11 +37,11 @@ ci: tidy build test vet ## Run all CI checks locally
 
 modern-check: ## Check for modern Go code
 	@echo "make: Checking for modern Go code..."
-	@go run golang.org/x/tools/gopls/internal/analysis/modernize/cmd/modernize@latest -test ./...
+	@go run golang.org/x/tools/go/analysis/passes/modernize/cmd/modernize@v0.52.0 -test ./...
 
 modern: ## Fix modern Go code issues
 	@echo "make: Fixing checks for modern Go code..."
-	@go run golang.org/x/tools/gopls/internal/analysis/modernize/cmd/modernize@latest -fix -test ./...
+	@go run golang.org/x/tools/go/analysis/passes/modernize/cmd/modernize@v0.52.0 -fix -test ./...
 
 corpus: ## Compare findings with BASE (default main) on a provider: make corpus PROVIDER_DIR=... [BASE=...]
 	@scripts/corpus.sh $(or $(BASE),main)
