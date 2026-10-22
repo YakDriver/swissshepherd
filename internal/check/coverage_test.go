@@ -1992,14 +1992,19 @@ func TestCoverage_OutsideHome(t *testing.T) {
 			nAttrs: "* `size` - (Optional) Size.\n* `state` - State.\n",
 			want:   []string{`argument "size" in block "c" ` + msg + "; move it to Argument Reference"},
 		},
+		// A repeat, not a misplacement: checkRepeated reports it.
 		"also under arguments": {
 			child:  []schema.Attribute{{Name: "size", Optional: true}},
 			nArgs:  "* `size` - (Optional) Size.\n",
 			nAttrs: "* `size` - Size.\n",
 		},
-		"optional+computed has two homes": {
-			child:  []schema.Attribute{{Name: "size", Optional: true, Computed: true}},
-			nAttrs: "* `size` - Size.\n",
+		// Optional+Computed may be an output the schema left Optional
+		// (field-homes.md), so the finding names both fixes, as a warning.
+		"optional+computed": {
+			child:    []schema.Attribute{{Name: "size", Optional: true, Computed: true}},
+			nAttrs:   "* `size` - Size.\n",
+			want:     []string{`argument "size" in block "c" is Optional+Computed in the schema but is documented only under Attribute Reference; if it can be set, move it to Argument Reference and label it (Optional); if setting it has no effect, the schema should mark it Computed only`},
+			wantWarn: true,
 		},
 		"config unknown": {
 			child:   []schema.Attribute{{Name: "size", Optional: true}},
@@ -2032,7 +2037,7 @@ func TestCoverage_OutsideHome(t *testing.T) {
 			results := rule.Check(check.CheckContext{Resource: rs.Name, Schema: rs, Doc: d})
 			var got []string
 			for _, r := range results {
-				if strings.Contains(r.Message, msg) {
+				if strings.Contains(r.Message, msg) || strings.Contains(r.Message, "documented only under Attribute Reference") {
 					got = append(got, r.Message)
 					if (r.Severity == check.SeverityWarning) != tc.wantWarn {
 						t.Errorf("severity = %v, want warning = %t", r.Severity, tc.wantWarn)
@@ -2043,6 +2048,300 @@ func TestCoverage_OutsideHome(t *testing.T) {
 				t.Errorf("got:\n  %s\nwant:\n  %s\nall:\n  %s", strings.Join(got, "\n  "), strings.Join(tc.want, "\n  "), joinMessages(results))
 			}
 		})
+	}
+}
+
+// TestCoverage_Repeated covers docs/rules/field-homes.md: a field listed in
+// both reference sections for the same path is reported once, with the entry
+// to remove named from the field's home. The deferral cases pin that labels'
+// old findings for the same bullet (a move, or "remove it from Argument
+// Reference") no longer fire, and that this finding does.
+func TestCoverage_Repeated(t *testing.T) {
+	t.Parallel()
+
+	const both = "is listed in both"
+	on, off := true, false
+	twoC := func(a, b []schema.Attribute) *schema.ResourceSchema {
+		return &schema.ResourceSchema{Name: "aws_test", Blocks: map[string]*schema.Block{
+			"":    {Attributes: []schema.Attribute{{Name: "id", Optional: true, Computed: true}}, ChildBlocks: []string{"a", "b"}},
+			"a":   {Attributes: []schema.Attribute{{Name: "n", Optional: true}}, ChildBlocks: []string{"a.c"}},
+			"b":   {Attributes: []schema.Attribute{{Name: "n", Optional: true}}, ChildBlocks: []string{"b.c"}},
+			"a.c": {Attributes: a},
+			"b.c": {Attributes: b},
+		}}
+	}
+	testCases := map[string]struct {
+		root, child []schema.Attribute
+		rs          *schema.ResourceSchema // overrides root/child
+		unknown     bool                   // child is ConfigUnknown
+		md          string
+		coverage    *bool
+		labels      *bool
+		inline      *bool
+		skip        []string
+		want        []string
+		without     string // substring no finding may contain
+	}{
+		// aws_media_packagev2_channel_group before the aws_m* doc pass.
+		"root optional, unlabeled under attributes": {
+			root: []schema.Attribute{{Name: "description", Optional: true}, {Name: "arn", Computed: true}},
+			md:   "## Argument Reference\n\n* `c` - (Optional) C.\n* `description` - (Optional) Description.\n\n## Attribute Reference\n\n* `arn` - ARN.\n* `description` - The same as `description`.\n",
+			want: []string{`argument "description" is listed in both Argument Reference (line 4) and Attribute Reference (line 9); remove the Attribute Reference entry`},
+		},
+		"root required, labeled under attributes": {
+			root:    []schema.Attribute{{Name: "name", Required: true}},
+			md:      "## Argument Reference\n\n* `c` - (Optional) C.\n* `name` - (Required) Name.\n\n## Attribute Reference\n\n* `name` - (Required) Name.\n",
+			want:    []string{`argument "name" is listed in both Argument Reference (line 4) and Attribute Reference (line 8); remove the Attribute Reference entry`},
+			without: "move it to Argument Reference",
+		},
+		"optional+computed is an argument": {
+			child: []schema.Attribute{{Name: "size", Optional: true, Computed: true}},
+			md:    "## Argument Reference\n\n* `c` - (Optional) C.\n\n### `c` Block\n\n* `size` - (Optional) Size.\n\n## Attribute Reference\n\n### `c` Block\n\n* `size` - Size.\n",
+			want:  []string{`argument "size" in block "c" is listed in both Argument Reference (line 7) and Attribute Reference (line 13); if it can be set, remove the Attribute Reference entry; if setting it has no effect, remove the Argument Reference entry, and the schema should mark it Computed only`},
+		},
+		// Every field of the subsection is a repeat: no "move this subsection".
+		"whole subsection repeated, labeled": {
+			child:   []schema.Attribute{{Name: "kind", Required: true}, {Name: "size", Optional: true}},
+			md:      "## Argument Reference\n\n* `c` - (Optional) C.\n\n### `c` Block\n\n* `kind` - (Required) Kind.\n* `size` - (Optional) Size.\n\n## Attribute Reference\n\n### `c` Block\n\n* `kind` - (Required) Kind.\n* `size` - (Optional) Size.\n",
+			want:    []string{`argument "kind" in block "c" is listed in both Argument Reference (line 7) and Attribute Reference (line 14)`, `argument "size" in block "c" is listed in both Argument Reference (line 8) and Attribute Reference (line 15)`},
+			without: "to Argument Reference",
+		},
+		// One repeat keeps the subsection from collapsing: moving it whole
+		// would repeat kind in Argument Reference. size still gets its move.
+		"partial repeat, rest misplaced": {
+			child: []schema.Attribute{{Name: "kind", Required: true}, {Name: "size", Optional: true}},
+			md:    "## Argument Reference\n\n* `c` - (Optional) C.\n\n### `c` Block\n\n* `kind` - (Required) Kind.\n\n## Attribute Reference\n\n### `c` Block\n\n* `kind` - (Required) Kind.\n* `size` - (Optional) Size.\n",
+			want: []string{
+				`argument "kind" in block "c" is listed in both Argument Reference (line 7) and Attribute Reference (line 13); remove the Attribute Reference entry`,
+				`argument "size" in block "c" is documented under Attribute Reference but is a configurable argument in the schema; move it to Argument Reference`,
+			},
+			without: "move this subsection",
+		},
+		"child block bullet repeated": {
+			child: []schema.Attribute{{Name: "size", Optional: true}},
+			md:    "## Argument Reference\n\n* `c` - (Optional) C.\n\n### `c` Block\n\n* `size` - (Optional) Size.\n\n## Attribute Reference\n\n* `c` - C.\n",
+			want:  []string{`argument "c" is listed in both Argument Reference (line 3) and Attribute Reference (line 11); remove the Attribute Reference entry`},
+		},
+		"computed-only labeled in arguments": {
+			root:    []schema.Attribute{{Name: "arn", Computed: true}},
+			md:      "## Argument Reference\n\n* `c` - (Optional) C.\n* `arn` - (Optional) ARN.\n\n## Attribute Reference\n\n* `arn` - ARN.\n",
+			want:    []string{`attribute "arn" is listed in both Argument Reference (line 4) and Attribute Reference (line 8); remove the Argument Reference entry`},
+			without: "is labeled",
+		},
+		"computed-only, inline read-only allowed": {
+			root:   []schema.Attribute{{Name: "arn", Computed: true}},
+			inline: &on,
+			md:     "## Argument Reference\n\n* `c` - (Optional) C.\n* `arn` - (Read-Only) ARN.\n\n## Attribute Reference\n\n* `arn` - ARN.\n",
+			want:   []string{`attribute "arn" is listed in both Argument Reference (line 4) and Attribute Reference (line 8); keep one entry`},
+		},
+		"config unknown": {
+			child:   []schema.Attribute{{Name: "size", Optional: true}},
+			unknown: true,
+			md:      "## Argument Reference\n\n* `c` - (Optional) C.\n\n### `c` Block\n\n* `size` - (Optional) Size.\n\n## Attribute Reference\n\n### `c` Block\n\n* `size` - Size.\n",
+			want:    []string{`attribute "size" in block "c" is listed in both Argument Reference (line 7) and Attribute Reference (line 13); keep one entry`},
+		},
+		// One bullet in a shared bare-leaf section is one repeat, not one per path.
+		"shared section, one finding": {
+			rs:   twoC([]schema.Attribute{{Name: "x", Optional: true}}, []schema.Attribute{{Name: "x", Optional: true}}),
+			md:   "## Argument Reference\n\n* `a` - (Optional) A.\n* `b` - (Optional) B.\n\n### `a` Block\n\n* `c` - (Optional) C.\n* `n` - (Optional) N.\n\n### `b` Block\n\n* `c` - (Optional) C.\n* `n` - (Optional) N.\n\n### `c` Block\n\n* `x` - (Optional) X.\n\n## Attribute Reference\n\n### `c` Block\n\n* `x` - X.\n",
+			want: []string{`argument "x" in block "a.c" is listed in both Argument Reference (line 18) and Attribute Reference (line 24); remove the Attribute Reference entry`},
+		},
+		"labels only": {
+			root:     []schema.Attribute{{Name: "name", Optional: true}},
+			coverage: &off,
+			md:       "## Argument Reference\n\n* `c` - (Optional) C.\n* `name` - (Optional) Name.\n\n## Attribute Reference\n\n* `name` - Name.\n",
+			want:     []string{`argument "name" is listed in both`},
+		},
+		"coverage only": {
+			root:   []schema.Attribute{{Name: "name", Optional: true}},
+			labels: &off,
+			md:     "## Argument Reference\n\n* `c` - (Optional) C.\n* `name` - (Optional) Name.\n\n## Attribute Reference\n\n* `name` - Name.\n",
+			want:   []string{`argument "name" is listed in both`},
+		},
+		"coverage and labels off": {
+			root:     []schema.Attribute{{Name: "name", Optional: true}},
+			coverage: &off,
+			labels:   &off,
+			md:       "## Argument Reference\n\n* `c` - (Optional) C.\n* `name` - (Optional) Name.\n\n## Attribute Reference\n\n* `name` - Name.\n",
+		},
+		// SDKv2 reports id as Optional+Computed; it's implicit, so it has no
+		// enforced home, but a repeat is still a repeat.
+		"implicit id": {
+			md:   "## Argument Reference\n\n* `c` - (Optional) C.\n* `id` - (Optional) ID.\n\n## Attribute Reference\n\n* `id` - ID.\n",
+			want: []string{`attribute "id" is listed in both Argument Reference (line 4) and Attribute Reference (line 8); keep one entry`},
+		},
+		// A labeled implicit field under Attribute Reference keeps the
+		// strip-label finding; it's never told to move.
+		"implicit tags_all labeled under attributes": {
+			root:    []schema.Attribute{{Name: "tags_all", Optional: true, Computed: true}},
+			md:      "## Argument Reference\n\n* `c` - (Optional) C.\n\n## Attribute Reference\n\n* `tags_all` - (Optional) Tags.\n",
+			want:    []string{`attribute "tags_all" in block "(root)" should not have (Optional) label`},
+			without: "to Argument Reference",
+		},
+		// ignore_deprecated relaxes "must be documented", not "listed once".
+		"ignored deprecated": {
+			root: []schema.Attribute{{Name: "old", Optional: true, Deprecated: true}},
+			md:   "## Argument Reference\n\n* `c` - (Optional) C.\n* `old` - (Optional, **Deprecated**) Old.\n\n## Attribute Reference\n\n* `old` - Old.\n",
+			want: []string{`argument "old" is listed in both Argument Reference (line 4) and Attribute Reference (line 8); remove the Attribute Reference entry`},
+		},
+		"skip_blocks": {
+			child: []schema.Attribute{{Name: "size", Optional: true}},
+			skip:  []string{"c"},
+			md:    "## Argument Reference\n\n* `c` - (Optional) C.\n\n### `c` Block\n\n* `size` - (Optional) Size.\n\n## Attribute Reference\n\n### `c` Block\n\n* `size` - Size.\n",
+		},
+		// Review #112: two Argument Reference `c` headings can't say which
+		// documents b.c, so x isn't certainly listed for b.c and nothing is
+		// reported (the fit rule judges the headings).
+		"duplicate argument headings, not all list it": {
+			rs:   twoC([]schema.Attribute{{Name: "x", Optional: true}}, []schema.Attribute{{Name: "y", Optional: true}, {Name: "x", Computed: true}}),
+			md:   "## Argument Reference\n\n* `a` - (Optional) A.\n* `b` - (Optional) B.\n\n### `a` Block\n\n* `c` - (Optional) C.\n* `n` - (Optional) N.\n\n### `b` Block\n\n* `c` - (Optional) C.\n* `n` - (Optional) N.\n\n### `c` Block\n\n* `x` - (Optional) X.\n\n### `c` Block\n\n* `y` - (Optional) Y.\n\n## Attribute Reference\n\n### `b.c` Block\n\n* `x` - X.\n",
+			want: []string{`2 headings in Argument Reference normalize to "c"`},
+		},
+		"duplicate argument headings, all list it": {
+			rs:   twoC([]schema.Attribute{{Name: "x", Optional: true}}, []schema.Attribute{{Name: "x", Optional: true}}),
+			md:   "## Argument Reference\n\n* `a` - (Optional) A.\n* `b` - (Optional) B.\n\n### `a` Block\n\n* `c` - (Optional) C.\n* `n` - (Optional) N.\n\n### `b` Block\n\n* `c` - (Optional) C.\n* `n` - (Optional) N.\n\n### `c` Block\n\n* `x` - (Optional) X.\n\n### `c` Block\n\n* `x` - (Optional) X.\n\n## Attribute Reference\n\n### `b.c` Block\n\n* `x` - X.\n",
+			want: []string{`2 headings in Argument Reference normalize to "c"`, `argument "x" in block "b.c" is listed in both Argument Reference (line 18) and Attribute Reference (line 28); remove the Attribute Reference entry`},
+		},
+		// Review #112: the shared Attribute Reference `c` entry is b.c's only
+		// documentation of x, so removing it would damage b.c.
+		"shared attribute section needed by another path": {
+			rs:      twoC([]schema.Attribute{{Name: "x", Optional: true}}, []schema.Attribute{{Name: "x", Computed: true}}),
+			md:      "## Argument Reference\n\n* `a` - (Optional) A.\n* `b` - (Optional) B.\n\n### `a` Block\n\n* `c` - (Optional) C.\n* `n` - (Optional) N.\n\n### `b` Block\n\n* `n` - (Optional) N.\n\n### `a.c` Block\n\n* `x` - (Optional) X.\n\n## Attribute Reference\n\n### `c` Block\n\n* `x` - X.\n",
+			want:    []string{"argument \"x\" in block \"a.c\" is listed in both Argument Reference (line 17) and Attribute Reference (line 23); don't remove the Attribute Reference entry: section \"c\" (line 21) also documents \"b.c\", which needs it; give the paths that need it a heading that resolves only to them, e.g. \"`b.c` Block\""},
+			without: "; remove the Attribute Reference entry",
+		},
+		// Review #112: both sections shared, opposite homes. Only b.c needs
+		// the Attribute Reference entry, so the fix qualifies that heading;
+		// the Argument Reference side is the shared-section label conflict.
+		"both sections shared, opposite homes": {
+			rs: twoC([]schema.Attribute{{Name: "x", Optional: true}}, []schema.Attribute{{Name: "x", Computed: true}}),
+			md: "## Argument Reference\n\n* `a` - (Optional) A.\n* `b` - (Optional) B.\n\n### `a` Block\n\n* `c` - (Optional) C.\n* `n` - (Optional) N.\n\n### `b` Block\n\n* `n` - (Optional) N.\n\n### `c` Block\n\n* `x` - (Optional) X.\n\n## Attribute Reference\n\n### `c` Block\n\n* `x` - X.\n",
+			want: []string{
+				"argument \"x\" in block \"a.c\" is listed in both Argument Reference (line 17) and Attribute Reference (line 23); don't remove the Attribute Reference entry: section \"c\" (line 21) also documents \"b.c\", which needs it; give the paths that need it a heading that resolves only to them, e.g. \"`b.c` Block\"",
+				`section "c" (line 15) in Argument Reference documents 2 paths; "x" is (Optional) at "a.c" and (Read-Only) at "b.c"`,
+			},
+			without: "; remove the",
+		},
+		"different paths are different fields": {
+			rs: twoC([]schema.Attribute{{Name: "x", Optional: true}}, []schema.Attribute{{Name: "x", Computed: true}}),
+			md: "## Argument Reference\n\n* `a` - (Optional) A.\n* `b` - (Optional) B.\n\n### `a` Block\n\n* `c` - (Optional) C.\n* `n` - (Optional) N.\n\n### `b` Block\n\n* `n` - (Optional) N.\n\n### `a.c` Block\n\n* `x` - (Optional) X.\n\n## Attribute Reference\n\n### `b.c` Block\n\n* `x` - X.\n",
+		},
+	}
+	for name, tc := range testCases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			rs := tc.rs
+			if rs == nil {
+				root := append([]schema.Attribute{{Name: "id", Optional: true, Computed: true}}, tc.root...)
+				rs = &schema.ResourceSchema{Name: "aws_test", Blocks: map[string]*schema.Block{
+					"":  {Attributes: root, ChildBlocks: []string{"c"}},
+					"c": {Attributes: tc.child, ConfigUnknown: tc.unknown},
+				}}
+			}
+			d, err := doc.ParseWithTemplates([]byte(tc.md), rs.Name, doc.HeadingTemplates{"`{Path}` Block", "`{Block}` Block"})
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			rule := &check.SchemaDocsRule{
+				Ordering: &off, Description: &off, Format: &off, Byline: &off, Heading: &off,
+				Coverage: tc.coverage, Labels: tc.labels, AllowInlineReadOnly: tc.inline, IgnoreDeprecated: true, SkipBlocks: tc.skip,
+			}
+			results := rule.Check(check.CheckContext{Resource: rs.Name, Schema: rs, Doc: d})
+			var got []string
+			for _, r := range results {
+				if strings.Contains(r.Message, both) {
+					got = append(got, r.Message)
+					if r.Severity != check.SeverityError {
+						t.Errorf("severity = %v, want error: %s", r.Severity, r.Message)
+					}
+				}
+			}
+			var unmatched []string
+			for _, w := range tc.want {
+				if !slices.ContainsFunc(results, func(r check.Result) bool { return strings.Contains(r.Message, w) }) {
+					unmatched = append(unmatched, w)
+				}
+			}
+			nWant := 0
+			for _, w := range tc.want {
+				if strings.Contains(w, both) {
+					nWant++
+				}
+			}
+			if len(unmatched) > 0 || len(got) != nWant {
+				t.Errorf("repeated findings = %d, want %d; missing:\n  %s\nall:\n  %s", len(got), nWant, strings.Join(unmatched, "\n  "), joinMessages(results))
+			}
+			if tc.without != "" && slices.ContainsFunc(results, func(r check.Result) bool { return strings.Contains(r.Message, tc.without) }) {
+				t.Errorf("no finding may contain %q; all:\n  %s", tc.without, joinMessages(results))
+			}
+		})
+	}
+}
+
+// TestCoverage_RepeatedSameLine pins that a bullet the parser recorded in
+// both reference sections (same source line) isn't a repeat.
+func TestCoverage_RepeatedSameLine(t *testing.T) {
+	t.Parallel()
+
+	rs := &schema.ResourceSchema{Name: "aws_test", Blocks: map[string]*schema.Block{
+		"": {Attributes: []schema.Attribute{{Name: "name", Optional: true}}},
+	}}
+	bullet := doc.DocAttribute{Name: "name", Optional: true, Line: 5}
+	d := &doc.Document{
+		ArgumentBlocks:  map[string]*doc.DocBlock{"": {Attributes: []doc.DocAttribute{bullet}}},
+		AttributeBlocks: map[string]*doc.DocBlock{"": {Attributes: []doc.DocAttribute{bullet}}},
+	}
+	off := false
+	rule := &check.SchemaDocsRule{Ordering: &off, Description: &off, Format: &off, Byline: &off, Heading: &off}
+	for _, r := range rule.Check(check.CheckContext{Resource: rs.Name, Schema: rs, Doc: d}) {
+		if strings.Contains(r.Message, "is listed in both") {
+			t.Errorf("unexpected repeat: %s", r.Message)
+		}
+	}
+}
+
+// TestCoverage_RepeatedDeterministic runs a doc with many repeats across
+// sibling blocks repeatedly and requires identical output.
+func TestCoverage_RepeatedDeterministic(t *testing.T) {
+	t.Parallel()
+
+	blocks := map[string]*schema.Block{"": {}}
+	md := "## Argument Reference\n\n"
+	var attrMd string
+	for i := range 12 {
+		n := fmt.Sprintf("b%02d", i)
+		blocks[""].ChildBlocks = append(blocks[""].ChildBlocks, n)
+		blocks[n] = &schema.Block{Attributes: []schema.Attribute{{Name: "match", Optional: true}, {Name: "fields", Required: true}}}
+		md += fmt.Sprintf("* `%s` - (Optional) B.\n", n)
+		attrMd += fmt.Sprintf("### `%s` Block\n\n* `fields` - F.\n* `match` - M.\n\n", n)
+	}
+	md += "\n"
+	for i := range 12 {
+		md += fmt.Sprintf("### `b%02d` Block\n\n* `fields` - (Required) F.\n* `match` - (Optional) M.\n\n", i)
+	}
+	md += "## Attribute Reference\n\n" + attrMd
+	rs := &schema.ResourceSchema{Name: "aws_test", Blocks: blocks}
+	off := false
+	run := func() []string {
+		d, err := doc.ParseWithTemplates([]byte(md), rs.Name, doc.HeadingTemplates{"`{Block}` Block"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		rule := &check.SchemaDocsRule{Ordering: &off, Description: &off, Format: &off, Byline: &off, Heading: &off}
+		var out []string
+		for _, r := range rule.Check(check.CheckContext{Resource: rs.Name, Schema: rs, Doc: d}) {
+			out = append(out, r.Message)
+		}
+		return out
+	}
+	first := run()
+	if n := len(slices.DeleteFunc(slices.Clone(first), func(m string) bool { return !strings.Contains(m, "is listed in both") })); n != 24 {
+		t.Fatalf("repeated findings = %d, want 24; all:\n  %s", n, strings.Join(first, "\n  "))
+	}
+	for range 50 {
+		if got := run(); !slices.Equal(got, first) {
+			t.Fatalf("output changed between runs:\n  %s\nvs\n  %s", strings.Join(got, "\n  "), strings.Join(first, "\n  "))
+		}
 	}
 }
 

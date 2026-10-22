@@ -4,6 +4,7 @@
 package check_test
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -642,6 +643,14 @@ func labelResults(t *testing.T, src string, rs *schema.ResourceSchema) []check.R
 	}
 	return (&check.SchemaDocsRule{IgnoreDeprecated: true}).Check(
 		check.CheckContext{Resource: "aws_thing", Schema: rs, Doc: d})
+}
+
+func findMsg(results []check.Result, sub string) (check.Result, bool) {
+	i := slices.IndexFunc(results, func(r check.Result) bool { return strings.Contains(r.Message, sub) })
+	if i < 0 {
+		return check.Result{}, false
+	}
+	return results[i], true
 }
 
 func hasMsg(results []check.Result, sub string) bool {
@@ -1419,12 +1428,10 @@ func TestLabels_ScalarLinkingToMovedSubsectionStillFlagged(t *testing.T) {
 	}
 }
 
-// Point 1: a child block whose only field is Optional+Computed is not a
-// configurable argument block (the placement rule excludes Optional+Computed),
-// so a parent bullet referencing it must NOT be flagged as misplaced. Guards
-// against reusing the coverage helper (hasConfigurableAttributes), which counts
-// Optional+Computed.
-func TestLabels_ChildBlockOptionalComputedOnlyNotMisplaced(t *testing.T) {
+// Point 1: a child block whose only field is Optional+Computed is an argument
+// block (docs/rules/field-homes.md), so a parent subsection under Attribute
+// Reference that documents it is misplaced.
+func TestLabels_ChildBlockOptionalComputedOnlyMisplaced(t *testing.T) {
 	t.Parallel()
 
 	src := `# Resource: aws_thing
@@ -1442,13 +1449,43 @@ func TestLabels_ChildBlockOptionalComputedOnlyNotMisplaced(t *testing.T) {
 	rs := &schema.ResourceSchema{Blocks: map[string]*schema.Block{
 		"":        {Attributes: []schema.Attribute{{Name: "name", Required: true}}, ChildBlocks: []string{"wrapper"}},
 		"wrapper": {Path: "wrapper", ChildBlocks: []string{"settings"}},
-		// settings' only field is Optional+Computed — not a pure-config arg.
+		// settings' only field is Optional+Computed, so settings is an argument.
 		"wrapper.settings": {Path: "wrapper.settings", Attributes: []schema.Attribute{{Name: "mode", Optional: true, Computed: true}}},
 	}}
 
 	results := labelResults(t, src, rs)
-	if hasMsg(results, "move this subsection to Argument Reference") {
-		t.Errorf("child block with only Optional+Computed field must not be flagged misplaced: %+v", results)
+	r, ok := findMsg(results, `argument "settings" in block "wrapper" has only Optional+Computed arguments in the schema but is documented only under Attribute Reference; if it can be set, move it to Argument Reference and label it (Optional); if setting it has no effect, the schema should mark it Computed only`)
+	if !ok || r.Severity != check.SeverityWarning {
+		t.Errorf("child block with only an Optional+Computed field must get the two-fix warning: %+v", results)
+	}
+}
+
+// Review #112: an unlabeled Optional+Computed field also keeps its
+// subsection from collapsing; "move this subsection" would move it too.
+func TestLabels_OptionalComputedUnlabeledBlocksCollapse(t *testing.T) {
+	t.Parallel()
+
+	src := "# Resource: aws_thing\n\n" +
+		"## Argument Reference\n\n" +
+		"* `name` - (Required) Name.\n\n" +
+		"## Attribute Reference\n\n" +
+		"### `settings` Block\n\n" +
+		"* `mode` - (Optional) Mode.\n" +
+		"* `state` - State.\n"
+	rs := &schema.ResourceSchema{Blocks: map[string]*schema.Block{
+		"": {Attributes: []schema.Attribute{{Name: "name", Required: true}}, ChildBlocks: []string{"settings"}},
+		"settings": {Path: "settings", Attributes: []schema.Attribute{
+			{Name: "mode", Optional: true},
+			{Name: "state", Optional: true, Computed: true},
+		}},
+	}}
+
+	results := labelResults(t, src, rs)
+	if hasMsg(results, "move this subsection") {
+		t.Errorf("an unlabeled Optional+Computed field must block the collapse: %+v", results)
+	}
+	if !hasMsg(results, `argument "mode" in block "settings" is documented under Attribute Reference but is a configurable argument in the schema; move it to Argument Reference`) {
+		t.Errorf("the settable field must still get its move: %+v", results)
 	}
 }
 
@@ -1700,10 +1737,10 @@ func TestLabels_SharedLeafComputedScalarNotSuppressed(t *testing.T) {
 	}
 }
 
-// Optional+Computed attributes may legitimately be documented under either
-// section, so a labeled Optional+Computed attribute under Attribute Reference
-// must not be reported as a misplaced argument.
-func TestLabels_OptionalComputedNotMisplaced(t *testing.T) {
+// An Optional+Computed attribute is an argument (docs/rules/field-homes.md): a
+// labeled one under Attribute Reference is misplaced, and a parent bullet
+// listed in both sections is a repeat.
+func TestLabels_OptionalComputedMisplaced(t *testing.T) {
 	t.Parallel()
 
 	src := `# Resource: aws_thing
@@ -1722,14 +1759,18 @@ func TestLabels_OptionalComputedNotMisplaced(t *testing.T) {
 * ` + "`mode`" + ` - (Optional) Mode.
 `
 	rs := &schema.ResourceSchema{Blocks: map[string]*schema.Block{
-		"": {Attributes: []schema.Attribute{{Name: "name", Required: true}}, ChildBlocks: []string{"settings"}},
-		// mode is Optional AND Computed — valid in either section.
+		"":         {Attributes: []schema.Attribute{{Name: "name", Required: true}}, ChildBlocks: []string{"settings"}},
 		"settings": {Path: "settings", Attributes: []schema.Attribute{{Name: "mode", Optional: true, Computed: true}}},
 	}}
 
 	results := labelResults(t, src, rs)
-	if hasMsg(results, "move this subsection to Argument Reference") {
-		t.Errorf("Optional+Computed attr must not be flagged as misplaced: %+v", results)
+	for _, want := range []string{
+		`argument "settings" is listed in both Argument Reference (line 6) and Attribute Reference (line 10); if it can be set, remove the Attribute Reference entry; if setting it has no effect, remove the Argument Reference entry, and the schema should mark it Computed only`,
+		`argument "mode" in block "settings" is Optional+Computed in the schema but is documented only under Attribute Reference; if it can be set, move it to Argument Reference and label it (Optional); if setting it has no effect, the schema should mark it Computed only`,
+	} {
+		if !hasMsg(results, want) {
+			t.Errorf("missing %q: %+v", want, results)
+		}
 	}
 }
 
@@ -1821,11 +1862,10 @@ func TestLabels_MoveSeverities(t *testing.T) {
 	}
 }
 
-// §8 case 3b — the negative twin for the sole inference step (§4): a bare
-// heading whose unique-leaf match is an Optional+Computed attribute must NOT be
-// flagged as misplaced. configurableArgAtPath excludes Optional+Computed, so
-// unique-leaf resolution can never promote it to a move.
-func TestLabels_UniqueLeafOptionalComputedNotMoved(t *testing.T) {
+// §8 case 3b — the sole inference step (§4): a bare heading whose unique-leaf
+// match holds an Optional+Computed attribute is misplaced, because
+// Optional+Computed is an argument (docs/rules/field-homes.md).
+func TestLabels_UniqueLeafOptionalComputedMoved(t *testing.T) {
 	t.Parallel()
 
 	src := `# Resource: aws_thing
@@ -1848,8 +1888,8 @@ func TestLabels_UniqueLeafOptionalComputedNotMoved(t *testing.T) {
 	}}
 
 	results := labelResults(t, src, rs)
-	if hasMsg(results, "move it to Argument Reference") || hasMsg(results, "move this subsection to Argument Reference") {
-		t.Errorf("unique-leaf resolution to an Optional+Computed attr must not produce a move: %+v", results)
+	if r, ok := findMsg(results, `argument "address" in block "cluster.endpoint" is Optional+Computed in the schema but is documented only under Attribute Reference; if it can be set, move it to Argument Reference and label it (Optional); if setting it has no effect, the schema should mark it Computed only`); !ok || r.Severity != check.SeverityWarning {
+		t.Errorf("unique-leaf resolution to an Optional+Computed attr must get the two-fix warning: %+v", results)
 	}
 }
 
@@ -2215,11 +2255,11 @@ func TestLabels_MixedAliasGroupDoesNotCollapse(t *testing.T) {
 	}
 }
 
-// A collapsing subsection must not also emit a strip-label finding for an
-// Optional+Computed field it contains: the collapse moves the whole subsection
-// to Argument Reference, where that field is a valid argument and must keep its
-// (Optional) label. Emitting both would create a new labels error.
-func TestLabels_CollapseSuppressesOptionalComputedStrip(t *testing.T) {
+// An Optional+Computed field may be an output the schema left Optional
+// (docs/rules/field-homes.md), so a subsection documenting one doesn't
+// collapse into "move this subsection": the settable field gets its move, the
+// Optional+Computed one the warning naming both fixes, and neither a strip.
+func TestLabels_OptionalComputedBlocksCollapse(t *testing.T) {
 	t.Parallel()
 
 	src := "# Resource: aws_thing\n\n" +
@@ -2233,17 +2273,22 @@ func TestLabels_CollapseSuppressesOptionalComputedStrip(t *testing.T) {
 	rs := &schema.ResourceSchema{Blocks: map[string]*schema.Block{
 		"": {Attributes: []schema.Attribute{{Name: "name", Required: true}}, ChildBlocks: []string{"settings"}},
 		"settings": {Path: "settings", Attributes: []schema.Attribute{
-			{Name: "mode", Optional: true},                  // pure config -> drives the collapse
-			{Name: "state", Optional: true, Computed: true}, // Optional+Computed -> would strip
+			{Name: "mode", Optional: true},
+			{Name: "state", Optional: true, Computed: true},
 		}},
 	}}
 
 	results := labelResults(t, src, rs)
-	if !hasMsg(results, `block "settings" is documented under Attribute Reference but is a configurable argument block`) {
-		t.Fatalf("expected the subsection to collapse: %+v", results)
+	for _, want := range []string{
+		`argument "mode" in block "settings" is documented under Attribute Reference but is a configurable argument in the schema; move it to Argument Reference`,
+		`argument "state" in block "settings" is Optional+Computed ` + "in the schema but is documented only under Attribute Reference; if it can be set",
+	} {
+		if !hasMsg(results, want) {
+			t.Errorf("missing %q: %+v", want, results)
+		}
 	}
-	if hasMsg(results, "should not have") {
-		t.Errorf("a collapsing subsection must not also strip an Optional+Computed field's label: %+v", results)
+	if hasMsg(results, "move this subsection") || hasMsg(results, "should not have") {
+		t.Errorf("no collapse and no strip: %+v", results)
 	}
 }
 
@@ -2531,20 +2576,20 @@ func TestLabels_ServedPaths(t *testing.T) {
 			coverage: &off,
 			want:     []string{`argument "r" in block "z" is labeled (Optional) but is computed-only in the schema; move it to Attribute Reference and remove the label`},
 		},
-		// Attribute Reference documents it at every path, so coverage is
-		// satisfied and nothing else reports the labeled duplicate.
+		// Attribute Reference documents it at every path: a repeat, so labels
+		// defers to the repeated-field finding, which names the entry to remove
+		// (docs/rules/field-homes.md).
 		"computed-only also in Attribute Reference": {
 			rs:   twoZ(block(opt("x"), ro("r")), block(opt("x"), ro("r"))),
 			md:   parents + "### `z` Block\n\n* `x` - (Optional) X.\n* `r` - (Optional) R.\n" + attrs + "\n### `z` Block\n\n* `r` - R.\n",
-			want: []string{`argument "r" in block "z" is labeled (Optional) but is computed-only in the schema; Attribute Reference already documents it, so remove it from Argument Reference`},
+			also: `attribute "r" in block "a.z" is listed in both Argument Reference (line 19) and Attribute Reference (line 27); remove the Argument Reference entry`,
 		},
-		// Strict mode: (Read-Only) isn't an Argument Reference label, so a
-		// computed-only field labeled (Read-Only) and also documented in
-		// Attribute Reference is a duplicate to remove.
+		// Strict mode: (Read-Only) isn't an Argument Reference label, but the
+		// defect is the repeat.
 		"strict Read-Only, also in Attribute Reference": {
 			rs:   twoZ(block(opt("x"), ro("r")), block(opt("x"), ro("r"))),
 			md:   parents + "### `z` Block\n\n* `x` - (Optional) X.\n* `r` - (Read-Only) R.\n" + attrs + "\n### `z` Block\n\n* `r` - R.\n",
-			want: []string{`argument "r" in block "z" is labeled (Read-Only) but is computed-only in the schema; Attribute Reference already documents it`},
+			also: `attribute "r" in block "a.z" is listed in both Argument Reference (line 19) and Attribute Reference (line 27); remove the Argument Reference entry`,
 		},
 		// Coverage reports the move; "add (Required) or (Optional)" would be
 		// the wrong fix.
@@ -2555,11 +2600,11 @@ func TestLabels_ServedPaths(t *testing.T) {
 			without: `"r" in block "z" is missing`,
 		},
 		// A path without the field doesn't stop the check: Attribute
-		// Reference documents it at every path that has it.
+		// Reference documents it at every path that has it, so it's a repeat.
 		"computed-only absent at one path, also in Attribute Reference": {
 			rs:   twoZ(block(opt("x"), ro("r")), block(opt("x"))),
 			md:   parents + "### `z` Block\n\n* `x` - (Optional) X.\n* `r` - (Optional) R.\n" + attrs + "\n### `a.z` Block\n\n* `r` - R.\n",
-			want: []string{`argument "r" in block "z" is labeled (Optional) but is computed-only in the schema; Attribute Reference already documents it`},
+			also: `attribute "r" in block "a.z" is listed in both Argument Reference (line 19) and Attribute Reference (line 27); remove the Argument Reference entry`,
 		},
 		"computed-only, inline Read-Only allowed": {
 			rs:     twoZ(block(opt("x"), ro("r")), block(opt("x"), ro("r"))),

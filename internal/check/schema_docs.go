@@ -141,6 +141,9 @@ func (r *SchemaDocsRule) Check(ctx CheckContext) []Result {
 	if enabled(r.Coverage) {
 		results = append(results, r.checkCoverage(ctx, idx, shared)...)
 	}
+	if idx != nil {
+		results = append(results, r.checkRepeated(ctx, idx)...)
+	}
 	if enabled(r.Ordering) {
 		results = append(results, r.checkOrdering(ctx)...)
 	}
@@ -268,7 +271,7 @@ func (r *SchemaDocsRule) checkCoverage(ctx CheckContext, idx map[*doc.DocBlock][
 			if r.shouldSkipAttribute(attr) {
 				continue
 			}
-			if argDuplicated && !schemaBlock.ConfigUnknown && !attr.Computed {
+			if argDuplicated && !schemaBlock.ConfigUnknown {
 				continue
 			}
 			if !documented[attr.Name] {
@@ -358,7 +361,7 @@ func (r *SchemaDocsRule) checkCoverage(ctx CheckContext, idx map[*doc.DocBlock][
 	return results
 }
 
-// outsideHome reports a pure-configurable argument at p that is documented
+// outsideHome reports an argument at p (field-homes.md) that is documented
 // only under Attribute Reference, with no label (§2 home section). The union
 // of p's sections counts it as documented, and labels reads an unlabeled
 // bullet there as a computed output, so nothing else reports it. A labeled
@@ -390,10 +393,248 @@ func (r *SchemaDocsRule) outsideHome(ctx CheckContext, p string, attr schema.Att
 	} else {
 		where = fmt.Sprintf(" in block %q", displayPath(p))
 	}
-	return Result{
-		Rule: r.Name(), Resource: ctx.Resource, Severity: sev, Block: p, Line: da.Line,
-		Message: fmt.Sprintf("argument %q%s is documented under Attribute Reference but is a configurable argument in the schema; move it to Argument Reference and label it %s", attr.Name, where, label),
-	}, true
+	msg := fmt.Sprintf("argument %q%s is documented under Attribute Reference but is a configurable argument in the schema; move it to Argument Reference and label it %s", attr.Name, where, label)
+	if optionalComputedOnly(ctx.Schema, p, attr.Name) {
+		sev, msg = SeverityWarning, optionalComputedMove(ctx.Schema, p, attr.Name)
+	}
+	return Result{Rule: r.Name(), Resource: ctx.Resource, Severity: sev, Block: p, Line: da.Line, Message: msg}, true
+}
+
+// optionalComputedOnly reports whether field f at path p is an argument only
+// through Optional+Computed: an Optional+Computed scalar, or a child block
+// whose configurable subtree has no Required or Optional, non-Computed
+// field. The schema can't tell whether such a field is a real input or an
+// output that was left Optional (TagsSchemaComputed in terraform-provider-aws,
+// hashicorp/terraform-provider-aws#50491), so a finding that it's misplaced or
+// repeated names both possible fixes (docs/rules/field-homes.md).
+func optionalComputedOnly(rs *schema.ResourceSchema, p, f string) bool {
+	if !configurableArgAtPath(rs, p, f) {
+		return false
+	}
+	b := rs.Blocks[p]
+	if a, ok := attrAt(b, f); ok {
+		return a.Optional && a.Computed && !a.Required
+	}
+	c, ok := childPathForAttr(p, b, f)
+	return ok && !blockTreeHasSettable(rs, c, make(map[string]bool))
+}
+
+// blockTreeHasSettable reports whether the subtree at path has a Required
+// field, or an Optional field that isn't also Computed.
+func blockTreeHasSettable(rs *schema.ResourceSchema, path string, visited map[string]bool) bool {
+	if visited[path] {
+		return false
+	}
+	visited[path] = true
+	b, ok := rs.Blocks[path]
+	if !ok || b.ConfigUnknown {
+		return false
+	}
+	if slices.ContainsFunc(b.Attributes, func(a schema.Attribute) bool { return a.Required || (a.Optional && !a.Computed) }) {
+		return true
+	}
+	return slices.ContainsFunc(b.ChildBlocks, func(c string) bool { return blockTreeHasSettable(rs, childBlockPath(path, c), visited) })
+}
+
+// optionalComputedMove is the finding for an optionalComputedOnly field
+// documented only under Attribute Reference.
+func optionalComputedMove(rs *schema.ResourceSchema, p, f string) string {
+	where, what := "", "is Optional+Computed"
+	if p != "" {
+		where = fmt.Sprintf(" in block %q", displayPath(p))
+	}
+	if _, ok := attrAt(rs.Blocks[p], f); !ok {
+		what = "has only Optional+Computed arguments"
+	}
+	return fmt.Sprintf("argument %q%s %s in the schema but is documented only under Attribute Reference; if it can be set, move it to Argument Reference and label it (Optional); if setting it has no effect, the schema should mark it Computed only", f, where, what)
+}
+
+// repeatedBullets returns the bullets for field f in a path's Argument
+// Reference section and Attribute Reference section when both list it as
+// separate bullets. A bullet the parser recorded in both (same line) is one
+// bullet, not a repeat.
+func repeatedBullets(argSection, attrSection *doc.DocBlock, f string) (doc.DocAttribute, doc.DocAttribute, bool) {
+	a, okA := listedBullet(argSection, f)
+	b, okB := listedBullet(attrSection, f)
+	if !okA || !okB || a.Line == b.Line {
+		return doc.DocAttribute{}, doc.DocAttribute{}, false
+	}
+	return a, b, true
+}
+
+// listedBullet returns section's bullet for field f when the section
+// certainly lists it for every path it documents. A key with several headings
+// can't say which heading documents which path (the fit rule's concern), so it
+// lists f only if every heading with bullets does; routed content isn't
+// attributed to a heading and doesn't count.
+func listedBullet(section *doc.DocBlock, f string) (doc.DocAttribute, bool) {
+	if section == nil {
+		return doc.DocAttribute{}, false
+	}
+	byName := func(a doc.DocAttribute) bool { return a.Name == f }
+	if !duplicated(section) {
+		i := slices.IndexFunc(section.Attributes, byName)
+		if i < 0 {
+			return doc.DocAttribute{}, false
+		}
+		return section.Attributes[i], true
+	}
+	var first doc.DocAttribute
+	found := false
+	for _, o := range section.Occurrences {
+		if len(o.Attributes) == 0 {
+			continue
+		}
+		i := slices.IndexFunc(o.Attributes, byName)
+		if i < 0 {
+			return doc.DocAttribute{}, false
+		}
+		if !found {
+			first, found = o.Attributes[i], true
+		}
+	}
+	return first, found
+}
+
+// repeatable reports whether checkRepeated judges field f of schema block b:
+// any schema attribute or child block. Callers that defer a repeat to
+// checkRepeated must use the same test, so the deferral never drops a finding.
+func repeatable(b *schema.Block, f string) bool {
+	if b == nil {
+		return false
+	}
+	if _, ok := attrAt(b, f); ok {
+		return true
+	}
+	return slices.ContainsFunc(b.ChildBlocks, func(c string) bool { return leafName(c) == f })
+}
+
+// checkRepeated reports a field listed in both reference sections for the
+// same schema path: every field has one home and is listed only there
+// (docs/rules/field-homes.md). The finding names the entry to remove, from the
+// field's home; a field with no single home (ConfigUnknown, computed-only
+// under allow_inline_read_only, or implicit_attributes) is told to keep one
+// entry. One finding per
+// pair of sections and field, so a shared section serving several paths
+// reports its repeated bullet once.
+func (r *SchemaDocsRule) checkRepeated(ctx CheckContext, idx map[*doc.DocBlock][]string) []Result {
+	rs := ctx.Schema
+	type key struct {
+		arg, attr *doc.DocBlock
+		field     string
+	}
+	seen := make(map[key]bool)
+	var results []Result
+	for _, p := range slices.Sorted(maps.Keys(rs.Blocks)) {
+		b := rs.Blocks[p]
+		if b == nil || slices.Contains(r.skipBlocks(), p) {
+			continue
+		}
+		argSection := resolveSection(rs, ctx.Doc.ArgumentBlocks, p)
+		attrSection := resolveSection(rs, ctx.Doc.AttributeBlocks, p)
+		if argSection == nil || attrSection == nil {
+			continue
+		}
+		var fields []string
+		for _, a := range b.Attributes {
+			fields = append(fields, a.Name)
+		}
+		for _, c := range b.ChildBlocks {
+			fields = append(fields, leafName(c))
+		}
+		slices.Sort(fields)
+		for _, f := range fields {
+			argBullet, attrBullet, ok := repeatedBullets(argSection, attrSection, f)
+			if !ok {
+				continue
+			}
+			k := key{argSection, attrSection, f}
+			if seen[k] {
+				continue
+			}
+			seen[k] = true
+			// A shared section's entry may be another path's documentation of
+			// f; removing it would damage that path. The fix is then to stop the
+			// section documenting p: headings that resolve only to the paths
+			// that need it. Like the shared-section warnings, the message states
+			// that condition and gives one full-path example, which always
+			// resolves only to its own path (coverage-path-resolution.md §6).
+			drop := func(inAttrs bool) string {
+				section := argSection
+				if inAttrs {
+					section = attrSection
+				}
+				need := r.neededElsewhere(ctx, idx, section, p, f, inAttrs)
+				if len(need) == 0 {
+					return fmt.Sprintf("remove the %s entry", referenceName(inAttrs))
+				}
+				verb := "needs"
+				if len(need) > 1 {
+					verb = "need"
+				}
+				return fmt.Sprintf("don't remove the %s entry: section %q (line %d) also documents %s, which %s it; give the paths that need it a heading that resolves only to them, e.g. %q",
+					referenceName(inAttrs), section.Name, section.HeadingLine, pointerList(need), verb, doc.RenderHeading(r.pathTemplate(), need[0]))
+			}
+			// implicit_attributes (id, tags_all) aren't held to a home: SDKv2
+			// reports id as Optional+Computed whether or not anyone sets it.
+			kind, fix := "attribute", ""
+			switch {
+			case slices.Contains(r.implicit(), f) || !(r.homeOnlyIn(rs, p, f, false) || r.homeOnlyIn(rs, p, f, true)):
+				argNeeded := len(r.neededElsewhere(ctx, idx, argSection, p, f, false)) > 0
+				attrNeeded := len(r.neededElsewhere(ctx, idx, attrSection, p, f, true)) > 0
+				switch {
+				case argNeeded:
+					fix = drop(true)
+				case attrNeeded:
+					fix = drop(false)
+				default:
+					fix = "keep one entry"
+				}
+			case optionalComputedOnly(rs, p, f):
+				kind = "argument"
+				fix = "if it can be set, " + drop(true) + "; if setting it has no effect, " + drop(false) + ", and the schema should mark it Computed only"
+			case r.homeOnlyIn(rs, p, f, false):
+				kind, fix = "argument", drop(true)
+			default:
+				fix = drop(false)
+			}
+			where := ""
+			if p != "" {
+				where = fmt.Sprintf(" in block %q", p)
+			}
+			results = append(results, Result{
+				Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityError, Block: p, Line: attrBullet.Line,
+				Message: fmt.Sprintf("%s %q%s is listed in both Argument Reference (line %d) and Attribute Reference (line %d); %s", kind, f, where, argBullet.Line, attrBullet.Line, fix),
+			})
+		}
+	}
+	return results
+}
+
+// neededElsewhere returns the paths other than p, sorted, that section
+// documents and that need it to list f: f is a field there, and either the
+// section is f's only home there, or f has no single home and the path's other
+// reference section doesn't list it.
+func (r *SchemaDocsRule) neededElsewhere(ctx CheckContext, idx map[*doc.DocBlock][]string, section *doc.DocBlock, p, f string, inAttrs bool) []string {
+	rs := ctx.Schema
+	var out []string
+	for _, q := range idx[section] {
+		b := rs.Blocks[q]
+		if q == p || !repeatable(b, f) {
+			continue
+		}
+		other := ctx.Doc.ArgumentBlocks
+		if !inAttrs {
+			other = ctx.Doc.AttributeBlocks
+		}
+		_, otherLists := listedBullet(resolveSection(rs, other, q), f)
+		implicit := slices.Contains(r.implicit(), f)
+		single := !implicit && (r.homeOnlyIn(rs, q, f, false) || r.homeOnlyIn(rs, q, f, true))
+		if (!implicit && r.homeOnlyIn(rs, q, f, inAttrs)) || (!single && !otherLists) {
+			out = append(out, q)
+		}
+	}
+	return out
 }
 
 // --- Shared sections ---
@@ -631,43 +872,26 @@ func labelFor(a schema.Attribute) string {
 }
 
 // homeOnlyIn reports whether field f at path p may be documented only in the
-// given reference section (§2 field homes).
+// given reference section (docs/rules/field-homes.md): Argument Reference for
+// an argument (Required or Optional, including Optional+Computed, or a child
+// block with one in its subtree), Attribute Reference for anything else unless
+// allow_inline_read_only permits either. A ConfigUnknown block's fields have
+// no single home.
 func (r *SchemaDocsRule) homeOnlyIn(rs *schema.ResourceSchema, p, f string, inAttrs bool) bool {
 	b := rs.Blocks[p]
 	if b.ConfigUnknown {
 		return false
 	}
-	readOnlyHome := inAttrs && !r.allowInlineReadOnly()
+	var arg bool
 	if a, ok := attrAt(b, f); ok {
-		switch {
-		case (a.Required || a.Optional) && !a.Computed:
-			return !inAttrs
-		case a.Computed && !a.Required && !a.Optional:
-			return readOnlyHome
-		}
-		return false
+		arg = a.Required || a.Optional
+	} else {
+		arg = blockTreeHasConfigurable(rs, childBlockPath(p, f), make(map[string]bool))
 	}
-	c := childBlockPath(p, f)
-	switch {
-	case blockTreeHasPureConfigurable(rs, c, make(map[string]bool)):
+	if arg {
 		return !inAttrs
-	case blockTreeHasConfigurable(rs, c):
-		return false
 	}
-	return readOnlyHome
-}
-
-// blockTreeHasConfigurable reports whether any Required or Optional field
-// exists in the subtree at path.
-func blockTreeHasConfigurable(rs *schema.ResourceSchema, path string) bool {
-	b, ok := rs.Blocks[path]
-	if !ok {
-		return false
-	}
-	if slices.ContainsFunc(b.Attributes, func(a schema.Attribute) bool { return a.Required || a.Optional }) {
-		return true
-	}
-	return slices.ContainsFunc(b.ChildBlocks, func(c string) bool { return blockTreeHasConfigurable(rs, childBlockPath(path, c)) })
+	return inAttrs && !r.allowInlineReadOnly()
 }
 
 // sharedSectionResults renders the shared-section findings.
@@ -1014,15 +1238,15 @@ func (r *SchemaDocsRule) fitMismatches(rs *schema.ResourceSchema, o doc.Occurren
 		if listed[sa.Name] || slices.Contains(r.implicit(), sa.Name) || (r.IgnoreDeprecated && sa.Deprecated) {
 			continue
 		}
-		pure := (sa.Required || sa.Optional) && !sa.Computed
-		computedOnly := sa.Computed && !sa.Required && !sa.Optional
-		if (!inAttrs && pure) || (inAttrs && computedOnly && !r.allowInlineReadOnly()) {
+		arg := sa.Required || sa.Optional
+		computedOnly := sa.Computed && !arg
+		if (!inAttrs && arg) || (inAttrs && computedOnly && !r.allowInlineReadOnly()) {
 			n = append(n, fmt.Sprintf("%q isn't listed", sa.Name))
 		}
 	}
 	if !inAttrs {
 		for _, c := range b.ChildBlocks {
-			if !listed[leafName(c)] && blockTreeHasPureConfigurable(rs, childBlockPath(p, c), make(map[string]bool)) {
+			if !listed[leafName(c)] && blockTreeHasConfigurable(rs, childBlockPath(p, c), make(map[string]bool)) {
 				n = append(n, fmt.Sprintf("%q isn't listed", leafName(c)))
 			}
 		}
@@ -2195,25 +2419,47 @@ func (r *SchemaDocsRule) labelCorrectness(ctx CheckContext, idx map[*doc.DocBloc
 	//     only when coverage is enabled. Labels defers exactly then, avoiding a
 	//     double finding, and otherwise reports it itself.
 	if want == "(Read-Only)" && !r.allowInlineReadOnly() {
-		inAttrs := !slices.ContainsFunc(paths, func(p string) bool {
-			if b := ctx.Schema.Blocks[p]; b == nil || b.ConfigUnknown {
-				return false
-			} else if _, ok := attrAt(b, attr.Name); !ok {
+		// Attribute Reference documents it at every path that has it.
+		hasIt := func(p string) bool {
+			b := ctx.Schema.Blocks[p]
+			if b == nil || b.ConfigUnknown {
 				return false
 			}
-			s := resolveSection(ctx.Schema, ctx.Doc.AttributeBlocks, p)
-			return s == nil || !slices.ContainsFunc(s.Attributes, func(a doc.DocAttribute) bool { return a.Name == attr.Name })
+			_, ok := attrAt(b, attr.Name)
+			return ok
+		}
+		inAttrs := !slices.ContainsFunc(paths, func(p string) bool {
+			if !hasIt(p) {
+				return false
+			}
+			_, ok := listedBullet(resolveSection(ctx.Schema, ctx.Doc.AttributeBlocks, p), attr.Name)
+			return !ok
 		})
-		if enabled(r.Coverage) && !inAttrs {
+		// checkRepeated reports it wherever it sees the repeat; defer only then,
+		// so the deferral can't drop the finding.
+		repeated := slices.ContainsFunc(paths, func(p string) bool {
+			if !hasIt(p) {
+				return false
+			}
+			_, _, ok := repeatedBullets(resolveSection(ctx.Schema, ctx.Doc.ArgumentBlocks, p), resolveSection(ctx.Schema, ctx.Doc.AttributeBlocks, p), attr.Name)
+			return ok
+		})
+		if inAttrs && repeated {
+			return nil // checkRepeated reports it
+		}
+		if inAttrs {
+			msg := fmt.Sprintf("argument %q is labeled %s but is computed-only in the schema; Attribute Reference already documents it, so remove it from Argument Reference", attr.Name, have)
+			if blockName != "" {
+				msg = fmt.Sprintf("argument %q in block %q is labeled %s but is computed-only in the schema; Attribute Reference already documents it, so remove it from Argument Reference", attr.Name, displayPath(blockName), have)
+			}
+			return &Result{Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityError, Message: msg, Block: blockName, Line: attr.Line}
+		}
+		if enabled(r.Coverage) {
 			return nil // checkComputedMisplacement or Read-Only coverage reports the move
 		}
-		fix := "move it to Attribute Reference and remove the label"
-		if inAttrs {
-			fix = "Attribute Reference already documents it, so remove it from Argument Reference"
-		}
-		msg := fmt.Sprintf("argument %q is labeled %s but is computed-only in the schema; %s", attr.Name, have, fix)
+		msg := fmt.Sprintf("argument %q is labeled %s but is computed-only in the schema; move it to Attribute Reference and remove the label", attr.Name, have)
 		if blockName != "" {
-			msg = fmt.Sprintf("argument %q in block %q is labeled %s but is computed-only in the schema; %s", attr.Name, displayPath(blockName), have, fix)
+			msg = fmt.Sprintf("argument %q in block %q is labeled %s but is computed-only in the schema; move it to Attribute Reference and remove the label", attr.Name, displayPath(blockName), have)
 		}
 		return &Result{
 			Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityError,
@@ -2348,7 +2594,9 @@ func (r *SchemaDocsRule) attributeMisplacementFindings(ctx CheckContext) []Resul
 		heading   string
 		line      int
 		spans     bool // entry spans multiple physical subsections; never collapse
-		hasMis    bool // documents at least one misplaced (labeled pure-config) attribute
+		repeats   bool // documents a field Argument Reference also lists; never collapse
+		ocOnly    bool // documents a misplaced optionalComputedOnly field; never collapse
+		hasMis    bool // documents at least one misplaced (labeled argument) attribute
 		hasComp   bool // documents a field that must stay under Attribute Reference (blocks collapse)
 		eligible  bool // this subsection is collapse-eligible on its own
 		collapses bool // will actually collapse (self eligible AND whole alias group eligible)
@@ -2389,14 +2637,34 @@ func (r *SchemaDocsRule) attributeMisplacementFindings(ctx CheckContext) []Resul
 
 		sm := &subMeta{path: path, resolved: resolved, heading: block.Heading, line: block.HeadingLine, spans: block.SpansSubsections}
 		subs[name] = sm
+		// A field this subsection shares with its path's Argument Reference
+		// section is a repeat, which checkRepeated reports with the right fix
+		// (remove this entry). Only when this subsection is the one
+		// checkRepeated resolves for the path, so the deferral can't drop a
+		// finding.
+		var argSection *doc.DocBlock
+		if resolved && resolveSection(ctx.Schema, ctx.Doc.AttributeBlocks, path) == block {
+			argSection = resolveSection(ctx.Schema, ctx.Doc.ArgumentBlocks, path)
+		}
 
 		for _, attr := range block.Attributes {
+			if _, _, ok := repeatedBullets(argSection, block, attr.Name); ok && repeatable(ctx.Schema.Blocks[path], attr.Name) {
+				sm.repeats = true
+				continue
+			}
 			switch classifyAttrPlacement(ctx.Schema, path, resolved, attr) {
 			case placementOK:
 				// Unlabeled computed output — correctly placed.
 			case placementStripLabel:
 				strips = append(strips, stripEntry{name, attr})
 			case placementMisplaced:
+				if slices.Contains(r.implicit(), attr.Name) {
+					// implicit_attributes (id, tags_all) aren't held to a home;
+					// SDKv2 reports some as Optional+Computed. A label on one is
+					// still wrong under Attribute Reference.
+					strips = append(strips, stripEntry{name, attr})
+					continue
+				}
 				target := path
 				if b, okb := ctx.Schema.Blocks[path]; okb {
 					if cp, isChild := childPathForAttr(path, b, attr.Name); isChild {
@@ -2419,6 +2687,12 @@ func (r *SchemaDocsRule) attributeMisplacementFindings(ctx CheckContext) []Resul
 			}
 			if resolved && fieldRequiresAttributeReference(ctx.Schema, path, attr.Name) {
 				sm.hasComp = true
+			}
+			// Labeled or not, an Optional+Computed-only field may be an output
+			// the schema left Optional: moving the subsection whole would
+			// assert its move (field-homes.md).
+			if resolved && !slices.Contains(r.implicit(), attr.Name) && optionalComputedOnly(ctx.Schema, path, attr.Name) {
+				sm.ocOnly = true
 			}
 		}
 		// Malformed bullets (bad separator / unparseable) live only in
@@ -2461,7 +2735,7 @@ func (r *SchemaDocsRule) attributeMisplacementFindings(ctx CheckContext) []Resul
 	// *different* subsection that happens to resolve to the same path.
 	for _, name := range names {
 		sm := subs[name]
-		sm.eligible = sm.resolved && sm.heading != "" && sm.path != "" && sm.hasMis && !sm.hasComp && !sm.spans
+		sm.eligible = sm.resolved && sm.heading != "" && sm.path != "" && sm.hasMis && !sm.hasComp && !sm.spans && !sm.repeats && !sm.ocOnly
 	}
 
 	// Combined headings (`### `foo` and `bar``) mirror one physical subsection to
@@ -2550,17 +2824,20 @@ func (r *SchemaDocsRule) attributeMisplacementFindings(ctx CheckContext) []Resul
 		} else {
 			msg = fmt.Sprintf("argument %q in block %q is documented under Attribute Reference but is a configurable argument in the schema; move it to Argument Reference", m.attr.Name, displayPath(m.block))
 		}
+		if optionalComputedOnly(ctx.Schema, m.path, m.attr.Name) {
+			sev, msg = SeverityWarning, optionalComputedMove(ctx.Schema, m.path, m.attr.Name)
+		}
 		out = append(out, Result{Rule: r.Name(), Resource: ctx.Resource, Severity: sev, Message: msg, Block: m.block, Line: m.attr.Line})
 	}
 
 	// Strip-label findings: labeled attributes that are not configurable
-	// arguments (computed-only, Optional+Computed, ConfigUnknown, or unresolved)
+	// arguments (computed-only, ConfigUnknown, or unresolved)
 	// keep the legacy "should not have label" guidance.
 	for _, s := range strips {
 		// A collapsing subsection moves wholesale to Argument Reference, where a
-		// labeled Optional+Computed field is a valid argument that must keep its
-		// label. Emitting a strip here would contradict the collapse and create a
-		// new labels error, so skip strips the collapse already relocates.
+		// labeled ConfigUnknown or unresolved field may be a valid argument that
+		// must keep its label. Emitting a strip here would contradict the
+		// collapse, so skip strips the collapse already relocates.
 		if subs[s.block].collapses {
 			continue
 		}
@@ -2595,7 +2872,7 @@ func fieldRequiresAttributeReference(rs *schema.ResourceSchema, path, attrName s
 		if cb, okc := rs.Blocks[cp]; okc && cb.ConfigUnknown {
 			return true
 		}
-		return !blockTreeHasPureConfigurable(rs, cp, make(map[string]bool))
+		return !blockTreeHasConfigurable(rs, cp, make(map[string]bool))
 	}
 	return false
 }
@@ -2728,20 +3005,21 @@ const (
 // classification table by composing label state with configurableArgAtPath:
 //
 //   - unlabeled                          -> placementOK (proper computed output)
-//   - (Read-Only), pure-config arg at P   -> placementMisplaced (move it; the
+//   - (Read-Only), argument at P          -> placementMisplaced (move it; the
 //     label is fixed once in Argument Reference)
-//   - (Read-Only), not pure-config        -> placementStripLabel (no label allowed
+//   - (Read-Only), not an argument        -> placementStripLabel (no label allowed
 //     under Attribute Reference, regardless of allow_inline_read_only) (Gap B)
-//   - labeled, pure-config arg at P       -> placementMisplaced (move it)
-//   - labeled, not pure-config / unresolved -> placementStripLabel (legacy)
+//   - labeled, argument at P              -> placementMisplaced (move it)
+//   - labeled, not an argument / unresolved -> placementStripLabel (legacy)
 //
 // resolved is the ok result from resolveSubsectionPath and must gate the
 // misplacement branch: it distinguishes a genuine root subsection (path == ""
 // with resolved == true, for #62 top-level scalars) from an *unresolved*
 // subsection that also carries an empty path — without it, an attribute whose
 // name happened to match a configurable root argument would be spuriously
-// flagged as misplaced. Optional+Computed and ConfigUnknown are non-misplacement
-// by construction (configurableArgAtPath returns false), honoring the #62 guard.
+// flagged as misplaced. ConfigUnknown is non-misplacement by construction
+// (configurableArgAtPath returns false). Optional+Computed is an argument
+// (docs/rules/field-homes.md).
 func classifyAttrPlacement(rs *schema.ResourceSchema, path string, resolved bool, attr doc.DocAttribute) placement {
 	if !attr.Required && !attr.Optional {
 		if !attr.ReadOnly {
@@ -2763,13 +3041,12 @@ func classifyAttrPlacement(rs *schema.ResourceSchema, path string, resolved bool
 	return placementStripLabel
 }
 
-// configurableArgAtPath reports whether attrName is a purely configurable
-// argument ((Required || Optional) && !Computed) of the schema block at the
-// given canonical map-key path — either as a scalar attribute, or as an
-// immediate child block that (itself or via a descendant) carries such an
-// attribute. ConfigUnknown blocks and unresolved paths return false so an
-// ERROR never fires on a guess. Optional+Computed scalars are excluded because
-// they may legitimately appear under either section.
+// configurableArgAtPath reports whether attrName is an argument (Required or
+// Optional, including Optional+Computed) of the schema block at the given
+// canonical map-key path — either as a scalar attribute, or as an immediate
+// child block that (itself or via a descendant) carries such an attribute. Its
+// only home is Argument Reference (docs/rules/field-homes.md). ConfigUnknown
+// blocks and unresolved paths return false so an ERROR never fires on a guess.
 func configurableArgAtPath(rs *schema.ResourceSchema, path, attrName string) bool {
 	if rs == nil {
 		return false
@@ -2780,11 +3057,11 @@ func configurableArgAtPath(rs *schema.ResourceSchema, path, attrName string) boo
 	}
 	for _, a := range b.Attributes {
 		if a.Name == attrName {
-			return (a.Required || a.Optional) && !a.Computed
+			return a.Required || a.Optional
 		}
 	}
 	if childPath, found := childPathForAttr(path, b, attrName); found {
-		return blockTreeHasPureConfigurable(rs, childPath, make(map[string]bool))
+		return blockTreeHasConfigurable(rs, childPath, make(map[string]bool))
 	}
 	return false
 }
@@ -2817,12 +3094,12 @@ func childPathForAttr(parentPath string, pb *schema.Block, attrName string) (str
 	return "", false
 }
 
-// blockTreeHasPureConfigurable reports whether the schema block at path, or any
-// descendant block, has a purely configurable (Required or Optional and NOT
-// Computed) attribute. Blocks are looked up by exact full path (unambiguous),
+// blockTreeHasConfigurable reports whether the schema block at path, or any
+// descendant block, has a Required or Optional attribute (including
+// Optional+Computed). Blocks are looked up by exact full path (unambiguous),
 // ConfigUnknown blocks are skipped, and visited guards against pathological
 // cycles.
-func blockTreeHasPureConfigurable(rs *schema.ResourceSchema, path string, visited map[string]bool) bool {
+func blockTreeHasConfigurable(rs *schema.ResourceSchema, path string, visited map[string]bool) bool {
 	if rs == nil || visited[path] {
 		return false
 	}
@@ -2832,12 +3109,12 @@ func blockTreeHasPureConfigurable(rs *schema.ResourceSchema, path string, visite
 		return false
 	}
 	for _, a := range b.Attributes {
-		if (a.Required || a.Optional) && !a.Computed {
+		if a.Required || a.Optional {
 			return true
 		}
 	}
 	for _, child := range b.ChildBlocks {
-		if blockTreeHasPureConfigurable(rs, childBlockPath(path, child), visited) {
+		if blockTreeHasConfigurable(rs, childBlockPath(path, child), visited) {
 			return true
 		}
 	}

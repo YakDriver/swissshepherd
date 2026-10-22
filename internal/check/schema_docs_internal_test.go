@@ -68,11 +68,11 @@ func TestClassifyAttrPlacement(t *testing.T) {
 			want:     placementStripLabel,
 		},
 		{
-			name:     "labeled Optional+Computed strips label (never a move)",
+			name:     "labeled Optional+Computed is an argument, misplaced",
 			path:     "",
 			resolved: true,
 			attr:     doc.DocAttribute{Name: "mode", Optional: true},
-			want:     placementStripLabel,
+			want:     placementMisplaced,
 		},
 		{
 			name:     "unresolved subsection never moves even on a matching root name",
