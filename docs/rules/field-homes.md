@@ -32,7 +32,7 @@ Optional+Computed is sometimes not an input at all. terraform-provider-aws's SDK
 
 A field that is an argument *only* through Optional+Computed (an Optional+Computed scalar, or a child block whose configurable subtree has no `Required` field and no `Optional` field that isn't also `Computed`) therefore gets findings that name both fixes:
 
-- Documented only under Attribute Reference: a **warning**, `argument "tags" is Optional+Computed in the schema but is documented only under Attribute Reference; if it can be set, move it to Argument Reference and label it (Optional); if setting it has no effect, the schema should mark it Computed only`. (A child block says "has only Optional+Computed arguments".) A subsection that documents such a field doesn't collapse into "move this subsection", since that would assert the move.
+- Documented only under Attribute Reference: a **warning**, `argument "tags" is Optional+Computed in the schema but is documented only under Attribute Reference; if it can be set, move it to Argument Reference and label it (Optional); if setting it has no effect, the schema should mark it Computed only`. (A child block says "has only Optional+Computed arguments".) A subsection that documents such a field, labeled or not, doesn't collapse into "move this subsection", since that would assert the move.
 - Listed in both: still an **error** (the repeat is certain), with the fix "remove the Attribute Reference entry if it can be set; if setting it has no effect, remove the Argument Reference entry instead, and the schema should mark it Computed only".
 
 Its home is still Argument Reference: a correct `tags - (Optional)` filter in Argument Reference draws nothing. `tags_all` is an implicit attribute (below), so it's never told to move. When the provider makes output-only fields Computed, their warnings stop with no change here.
@@ -64,6 +64,8 @@ Scope and exclusions:
 - `implicit_attributes` (`id`, `tags_all`) have no enforced home: SDKv2 reports `id` as Optional+Computed whether or not anyone sets it, and coverage doesn't require them. A repeat is still reported, with "keep one entry". A labeled one under Attribute Reference keeps the strip-label finding and is never told to move.
 - `ignore_deprecated` relaxes "must be documented", not "listed once": deprecated fields are checked.
 - Two entries with the same source line are one bullet the parser recorded twice, not a repeat.
+- **Duplicate headings.** A key with several headings in one reference section can't say which heading documents which path (coverage-path-resolution.md §5), so it lists F only if every heading with bullets does. Otherwise no repeat is reported, and the fit rule judges the headings.
+- **Shared sections.** A section serving several paths can hold an entry another path needs. Before advising removal, every path each section serves is checked. If another path Q needs the entry (it's F's only home at Q, or F has no single home at Q and Q's other section doesn't list it), the fix is to give Q its own heading: `don't remove the Attribute Reference entry, which also documents "x" for "b.c"; give "b.c" its own Attribute Reference heading, e.g. "`b.c` Block"`.
 - Dedup: one finding per (Argument Reference section, Attribute Reference section, F). A bare-leaf heading pair serving several paths is one repeated bullet, so one finding, reported at the first path in sorted order.
 - Fields not in the schema at P are left to the phantom-field check.
 
@@ -82,3 +84,4 @@ Each row has a test that the repeated-field finding fires and the old finding do
 
 - A repeat across paths: F listed in A for P and in B's section for a different path Q. These are different fields.
 - A repeat within one section (two bullets for F under one heading). Not a cross-section question; ordering and the fit rule see some of these. Not addressed here.
+- A repeat under a duplicated key where only some headings list F. The fit rule reports a duplicated key always (warning at least), but not the repeat itself.

@@ -142,7 +142,7 @@ func (r *SchemaDocsRule) Check(ctx CheckContext) []Result {
 		results = append(results, r.checkCoverage(ctx, idx, shared)...)
 	}
 	if idx != nil {
-		results = append(results, r.checkRepeated(ctx)...)
+		results = append(results, r.checkRepeated(ctx, idx)...)
 	}
 	if enabled(r.Ordering) {
 		results = append(results, r.checkOrdering(ctx)...)
@@ -454,16 +454,46 @@ func optionalComputedMove(rs *schema.ResourceSchema, p, f string) string {
 // separate bullets. A bullet the parser recorded in both (same line) is one
 // bullet, not a repeat.
 func repeatedBullets(argSection, attrSection *doc.DocBlock, f string) (doc.DocAttribute, doc.DocAttribute, bool) {
-	if argSection == nil || attrSection == nil {
+	a, okA := listedBullet(argSection, f)
+	b, okB := listedBullet(attrSection, f)
+	if !okA || !okB || a.Line == b.Line {
 		return doc.DocAttribute{}, doc.DocAttribute{}, false
+	}
+	return a, b, true
+}
+
+// listedBullet returns section's bullet for field f when the section
+// certainly lists it for every path it documents. A key with several headings
+// can't say which heading documents which path (the fit rule's concern), so it
+// lists f only if every heading with bullets does; routed content isn't
+// attributed to a heading and doesn't count.
+func listedBullet(section *doc.DocBlock, f string) (doc.DocAttribute, bool) {
+	if section == nil {
+		return doc.DocAttribute{}, false
 	}
 	byName := func(a doc.DocAttribute) bool { return a.Name == f }
-	i := slices.IndexFunc(argSection.Attributes, byName)
-	j := slices.IndexFunc(attrSection.Attributes, byName)
-	if i < 0 || j < 0 || argSection.Attributes[i].Line == attrSection.Attributes[j].Line {
-		return doc.DocAttribute{}, doc.DocAttribute{}, false
+	if !duplicated(section) {
+		i := slices.IndexFunc(section.Attributes, byName)
+		if i < 0 {
+			return doc.DocAttribute{}, false
+		}
+		return section.Attributes[i], true
 	}
-	return argSection.Attributes[i], attrSection.Attributes[j], true
+	var first doc.DocAttribute
+	found := false
+	for _, o := range section.Occurrences {
+		if len(o.Attributes) == 0 {
+			continue
+		}
+		i := slices.IndexFunc(o.Attributes, byName)
+		if i < 0 {
+			return doc.DocAttribute{}, false
+		}
+		if !found {
+			first, found = o.Attributes[i], true
+		}
+	}
+	return first, found
 }
 
 // repeatable reports whether checkRepeated judges field f of schema block b:
@@ -487,7 +517,7 @@ func repeatable(b *schema.Block, f string) bool {
 // entry. One finding per
 // pair of sections and field, so a shared section serving several paths
 // reports its repeated bullet once.
-func (r *SchemaDocsRule) checkRepeated(ctx CheckContext) []Result {
+func (r *SchemaDocsRule) checkRepeated(ctx CheckContext, idx map[*doc.DocBlock][]string) []Result {
 	rs := ctx.Schema
 	type key struct {
 		arg, attr *doc.DocBlock
@@ -525,6 +555,12 @@ func (r *SchemaDocsRule) checkRepeated(ctx CheckContext) []Result {
 			seen[k] = true
 			// implicit_attributes (id, tags_all) aren't held to a home: SDKv2
 			// reports id as Optional+Computed whether or not anyone sets it.
+			// A shared section's entry may be needed by another path it
+			// documents; removing it would damage that path, so the fix is to
+			// qualify the heading instead (one finding per section pair, so the
+			// fix must hold for every path either section documents).
+			argNeed := r.neededElsewhere(ctx, idx, argSection, p, f, false)
+			attrNeed := r.neededElsewhere(ctx, idx, attrSection, p, f, true)
 			kind, fix := "attribute", "keep one entry"
 			switch {
 			case slices.Contains(r.implicit(), f):
@@ -534,6 +570,18 @@ func (r *SchemaDocsRule) checkRepeated(ctx CheckContext) []Result {
 				kind, fix = "argument", "remove the Attribute Reference entry"
 			case r.homeOnlyIn(rs, p, f, true):
 				fix = "remove the Argument Reference entry"
+			}
+			switch {
+			case len(argNeed) > 0 && len(attrNeed) > 0:
+				fix = r.qualifyFix(argSection, false, argNeed, f) + "; and " + r.qualifyFix(attrSection, true, attrNeed, f)
+			case len(attrNeed) > 0 && kind == "argument":
+				fix = r.qualifyFix(attrSection, true, attrNeed, f)
+			case len(argNeed) > 0 && kind == "attribute" && fix != "keep one entry":
+				fix = r.qualifyFix(argSection, false, argNeed, f)
+			case fix == "keep one entry" && len(attrNeed) > 0:
+				fix = "remove the Argument Reference entry"
+			case fix == "keep one entry" && len(argNeed) > 0:
+				fix = "remove the Attribute Reference entry"
 			}
 			where := ""
 			if p != "" {
@@ -546,6 +594,37 @@ func (r *SchemaDocsRule) checkRepeated(ctx CheckContext) []Result {
 		}
 	}
 	return results
+}
+
+// neededElsewhere returns the paths other than p, sorted, that section
+// documents and that need it to list f: f is a field there, and either the
+// section is f's only home there, or f has no single home and the path's other
+// reference section doesn't list it.
+func (r *SchemaDocsRule) neededElsewhere(ctx CheckContext, idx map[*doc.DocBlock][]string, section *doc.DocBlock, p, f string, inAttrs bool) []string {
+	rs := ctx.Schema
+	var out []string
+	for _, q := range idx[section] {
+		b := rs.Blocks[q]
+		if q == p || !repeatable(b, f) {
+			continue
+		}
+		other := ctx.Doc.ArgumentBlocks
+		if !inAttrs {
+			other = ctx.Doc.AttributeBlocks
+		}
+		_, otherLists := listedBullet(resolveSection(rs, other, q), f)
+		single := r.homeOnlyIn(rs, q, f, false) || r.homeOnlyIn(rs, q, f, true)
+		if r.homeOnlyIn(rs, q, f, inAttrs) || (!single && !otherLists) {
+			out = append(out, q)
+		}
+	}
+	return out
+}
+
+// qualifyFix is the repeated-field fix when the entry to remove is also the
+// documentation another path needs: give those paths their own heading.
+func (r *SchemaDocsRule) qualifyFix(section *doc.DocBlock, inAttrs bool, need []string, f string) string {
+	return fmt.Sprintf("don't remove the %s entry, which also documents %q for %s; give %s its own %s heading, e.g. %q", referenceName(inAttrs), f, pointerList(need), pointerList(need[:1]), referenceName(inAttrs), doc.RenderHeading(r.pathTemplate(), need[0]))
 }
 
 // --- Shared sections ---
@@ -2330,17 +2409,40 @@ func (r *SchemaDocsRule) labelCorrectness(ctx CheckContext, idx map[*doc.DocBloc
 	//     only when coverage is enabled. Labels defers exactly then, avoiding a
 	//     double finding, and otherwise reports it itself.
 	if want == "(Read-Only)" && !r.allowInlineReadOnly() {
-		inAttrs := !slices.ContainsFunc(paths, func(p string) bool {
-			if b := ctx.Schema.Blocks[p]; b == nil || b.ConfigUnknown {
-				return false
-			} else if _, ok := attrAt(b, attr.Name); !ok {
+		// Attribute Reference documents it at every path that has it.
+		hasIt := func(p string) bool {
+			b := ctx.Schema.Blocks[p]
+			if b == nil || b.ConfigUnknown {
 				return false
 			}
-			s := resolveSection(ctx.Schema, ctx.Doc.AttributeBlocks, p)
-			return s == nil || !slices.ContainsFunc(s.Attributes, func(a doc.DocAttribute) bool { return a.Name == attr.Name })
+			_, ok := attrAt(b, attr.Name)
+			return ok
+		}
+		inAttrs := !slices.ContainsFunc(paths, func(p string) bool {
+			if !hasIt(p) {
+				return false
+			}
+			_, ok := listedBullet(resolveSection(ctx.Schema, ctx.Doc.AttributeBlocks, p), attr.Name)
+			return !ok
 		})
+		// checkRepeated reports it wherever it sees the repeat; defer only then,
+		// so the deferral can't drop the finding.
+		repeated := slices.ContainsFunc(paths, func(p string) bool {
+			if !hasIt(p) {
+				return false
+			}
+			_, _, ok := repeatedBullets(resolveSection(ctx.Schema, ctx.Doc.ArgumentBlocks, p), resolveSection(ctx.Schema, ctx.Doc.AttributeBlocks, p), attr.Name)
+			return ok
+		})
+		if inAttrs && repeated {
+			return nil // checkRepeated reports it
+		}
 		if inAttrs {
-			return nil // checkRepeated reports it: remove the Argument Reference entry
+			msg := fmt.Sprintf("argument %q is labeled %s but is computed-only in the schema; Attribute Reference already documents it, so remove it from Argument Reference", attr.Name, have)
+			if blockName != "" {
+				msg = fmt.Sprintf("argument %q in block %q is labeled %s but is computed-only in the schema; Attribute Reference already documents it, so remove it from Argument Reference", attr.Name, displayPath(blockName), have)
+			}
+			return &Result{Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityError, Message: msg, Block: blockName, Line: attr.Line}
 		}
 		if enabled(r.Coverage) {
 			return nil // checkComputedMisplacement or Read-Only coverage reports the move
@@ -2569,15 +2671,18 @@ func (r *SchemaDocsRule) attributeMisplacementFindings(ctx CheckContext) []Resul
 				}
 				misplaced = append(misplaced, misplacedAttr{name, path, attr, target})
 				sm.hasMis = true
-				if optionalComputedOnly(ctx.Schema, path, attr.Name) {
-					sm.ocOnly = true
-				}
 				if sm.line == 0 {
 					sm.line = attr.Line
 				}
 			}
 			if resolved && fieldRequiresAttributeReference(ctx.Schema, path, attr.Name) {
 				sm.hasComp = true
+			}
+			// Labeled or not, an Optional+Computed-only field may be an output
+			// the schema left Optional: moving the subsection whole would
+			// assert its move (field-homes.md).
+			if resolved && !slices.Contains(r.implicit(), attr.Name) && optionalComputedOnly(ctx.Schema, path, attr.Name) {
+				sm.ocOnly = true
 			}
 		}
 		// Malformed bullets (bad separator / unparseable) live only in

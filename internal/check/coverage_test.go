@@ -2189,6 +2189,39 @@ func TestCoverage_Repeated(t *testing.T) {
 			skip:  []string{"c"},
 			md:    "## Argument Reference\n\n* `c` - (Optional) C.\n\n### `c` Block\n\n* `size` - (Optional) Size.\n\n## Attribute Reference\n\n### `c` Block\n\n* `size` - Size.\n",
 		},
+		// Review #112: two Argument Reference `c` headings can't say which
+		// documents b.c, so x isn't certainly listed for b.c and nothing is
+		// reported (the fit rule judges the headings).
+		"duplicate argument headings, not all list it": {
+			rs:   twoC([]schema.Attribute{{Name: "x", Optional: true}}, []schema.Attribute{{Name: "y", Optional: true}, {Name: "x", Computed: true}}),
+			md:   "## Argument Reference\n\n* `a` - (Optional) A.\n* `b` - (Optional) B.\n\n### `a` Block\n\n* `c` - (Optional) C.\n* `n` - (Optional) N.\n\n### `b` Block\n\n* `c` - (Optional) C.\n* `n` - (Optional) N.\n\n### `c` Block\n\n* `x` - (Optional) X.\n\n### `c` Block\n\n* `y` - (Optional) Y.\n\n## Attribute Reference\n\n### `b.c` Block\n\n* `x` - X.\n",
+			want: []string{`2 headings in Argument Reference normalize to "c"`},
+		},
+		"duplicate argument headings, all list it": {
+			rs:   twoC([]schema.Attribute{{Name: "x", Optional: true}}, []schema.Attribute{{Name: "x", Optional: true}}),
+			md:   "## Argument Reference\n\n* `a` - (Optional) A.\n* `b` - (Optional) B.\n\n### `a` Block\n\n* `c` - (Optional) C.\n* `n` - (Optional) N.\n\n### `b` Block\n\n* `c` - (Optional) C.\n* `n` - (Optional) N.\n\n### `c` Block\n\n* `x` - (Optional) X.\n\n### `c` Block\n\n* `x` - (Optional) X.\n\n## Attribute Reference\n\n### `b.c` Block\n\n* `x` - X.\n",
+			want: []string{`2 headings in Argument Reference normalize to "c"`, `argument "x" in block "b.c" is listed in both Argument Reference (line 18) and Attribute Reference (line 28); remove the Attribute Reference entry`},
+		},
+		// Review #112: the shared Attribute Reference `c` entry is b.c's only
+		// documentation of x, so removing it would damage b.c.
+		"shared attribute section needed by another path": {
+			rs:      twoC([]schema.Attribute{{Name: "x", Optional: true}}, []schema.Attribute{{Name: "x", Computed: true}}),
+			md:      "## Argument Reference\n\n* `a` - (Optional) A.\n* `b` - (Optional) B.\n\n### `a` Block\n\n* `c` - (Optional) C.\n* `n` - (Optional) N.\n\n### `b` Block\n\n* `n` - (Optional) N.\n\n### `a.c` Block\n\n* `x` - (Optional) X.\n\n## Attribute Reference\n\n### `c` Block\n\n* `x` - X.\n",
+			want:    []string{"argument \"x\" in block \"a.c\" is listed in both Argument Reference (line 17) and Attribute Reference (line 23); don't remove the Attribute Reference entry, which also documents \"x\" for \"b.c\"; give \"b.c\" its own Attribute Reference heading, e.g. \"`b.c` Block\""},
+			without: "; remove the Attribute Reference entry",
+		},
+		// Review #112: both sections shared, opposite homes. Only b.c needs
+		// the Attribute Reference entry, so the fix qualifies that heading;
+		// the Argument Reference side is the shared-section label conflict.
+		"both sections shared, opposite homes": {
+			rs: twoC([]schema.Attribute{{Name: "x", Optional: true}}, []schema.Attribute{{Name: "x", Computed: true}}),
+			md: "## Argument Reference\n\n* `a` - (Optional) A.\n* `b` - (Optional) B.\n\n### `a` Block\n\n* `c` - (Optional) C.\n* `n` - (Optional) N.\n\n### `b` Block\n\n* `n` - (Optional) N.\n\n### `c` Block\n\n* `x` - (Optional) X.\n\n## Attribute Reference\n\n### `c` Block\n\n* `x` - X.\n",
+			want: []string{
+				"argument \"x\" in block \"a.c\" is listed in both Argument Reference (line 17) and Attribute Reference (line 23); don't remove the Attribute Reference entry, which also documents \"x\" for \"b.c\"; give \"b.c\" its own Attribute Reference heading, e.g. \"`b.c` Block\"",
+				`section "c" (line 15) in Argument Reference documents 2 paths; "x" is (Optional) at "a.c" and (Read-Only) at "b.c"`,
+			},
+			without: "; remove the",
+		},
 		"different paths are different fields": {
 			rs: twoC([]schema.Attribute{{Name: "x", Optional: true}}, []schema.Attribute{{Name: "x", Computed: true}}),
 			md: "## Argument Reference\n\n* `a` - (Optional) A.\n* `b` - (Optional) B.\n\n### `a` Block\n\n* `c` - (Optional) C.\n* `n` - (Optional) N.\n\n### `b` Block\n\n* `n` - (Optional) N.\n\n### `a.c` Block\n\n* `x` - (Optional) X.\n\n## Attribute Reference\n\n### `b.c` Block\n\n* `x` - X.\n",

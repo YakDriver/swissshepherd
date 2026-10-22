@@ -1460,6 +1460,35 @@ func TestLabels_ChildBlockOptionalComputedOnlyMisplaced(t *testing.T) {
 	}
 }
 
+// Review #112: an unlabeled Optional+Computed field also keeps its
+// subsection from collapsing; "move this subsection" would move it too.
+func TestLabels_OptionalComputedUnlabeledBlocksCollapse(t *testing.T) {
+	t.Parallel()
+
+	src := "# Resource: aws_thing\n\n" +
+		"## Argument Reference\n\n" +
+		"* `name` - (Required) Name.\n\n" +
+		"## Attribute Reference\n\n" +
+		"### `settings` Block\n\n" +
+		"* `mode` - (Optional) Mode.\n" +
+		"* `state` - State.\n"
+	rs := &schema.ResourceSchema{Blocks: map[string]*schema.Block{
+		"": {Attributes: []schema.Attribute{{Name: "name", Required: true}}, ChildBlocks: []string{"settings"}},
+		"settings": {Path: "settings", Attributes: []schema.Attribute{
+			{Name: "mode", Optional: true},
+			{Name: "state", Optional: true, Computed: true},
+		}},
+	}}
+
+	results := labelResults(t, src, rs)
+	if hasMsg(results, "move this subsection") {
+		t.Errorf("an unlabeled Optional+Computed field must block the collapse: %+v", results)
+	}
+	if !hasMsg(results, `argument "mode" in block "settings" is documented under Attribute Reference but is a configurable argument in the schema; move it to Argument Reference`) {
+		t.Errorf("the settable field must still get its move: %+v", results)
+	}
+}
+
 // Point 2: a structural child block with no direct configurable attributes but
 // a configurable descendant IS a configurable reference. When that subsection
 // is moved, the parent reference bullet must be suppressed (no redundant
