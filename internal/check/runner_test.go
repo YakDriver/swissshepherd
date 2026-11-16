@@ -540,7 +540,7 @@ func newRunnerFixtureWithCheck(t *testing.T, checkName string, cc config.CheckCo
 	f := newRunnerFixture(t)
 	f.capture.name = checkName
 	cc.Name = checkName
-	cc.Enabled = true
+	cc.Enabled = new(true)
 	f.cfg.Checks = append(f.cfg.Checks, cc)
 	return f
 }
@@ -558,7 +558,7 @@ func TestRunner_RuleScope_TypesLimitsRuleToMatchingTypes(t *testing.T) {
 	// Add a second rule with no scoping — it should see all targets.
 	unscoped := &captureRule{name: "unscoped_rule"}
 	f.runner.Rules = append(f.runner.Rules, unscoped)
-	f.cfg.Checks = append(f.cfg.Checks, config.CheckConfig{Name: "unscoped_rule", Enabled: true})
+	f.cfg.Checks = append(f.cfg.Checks, config.CheckConfig{Name: "unscoped_rule", Enabled: new(true)})
 
 	f.addTarget(t, "resource", "test_res_one")
 	f.addTarget(t, "data_source", "test_ds_one")
@@ -678,8 +678,8 @@ func TestRunner_RuleScope_MixedScopes(t *testing.T) {
 	ec2Rule := &captureRule{name: "ec2_only"}
 	f.runner.Rules = []check.Rule{s3Rule, ec2Rule}
 	f.cfg.Checks = append(f.cfg.Checks,
-		config.CheckConfig{Name: "s3_only", Enabled: true, Prefixes: []string{"test_s3_"}},
-		config.CheckConfig{Name: "ec2_only", Enabled: true, Prefixes: []string{"test_ec2_"}},
+		config.CheckConfig{Name: "s3_only", Enabled: new(true), Prefixes: []string{"test_s3_"}},
+		config.CheckConfig{Name: "ec2_only", Enabled: new(true), Prefixes: []string{"test_ec2_"}},
 	)
 
 	f.addTarget(t, "resource", "test_s3_bucket")
@@ -707,7 +707,7 @@ func TestRunner_RuleScope_FileRuleFiltered(t *testing.T) {
 	f.runner.FileRules = []check.FileRule{fr}
 	f.cfg.Checks = append(f.cfg.Checks, config.CheckConfig{
 		Name:     "file_rule",
-		Enabled:  true,
+		Enabled:  new(true),
 		Prefixes: []string{"test_keep_"},
 	})
 

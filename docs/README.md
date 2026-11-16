@@ -184,6 +184,8 @@ Options ending in `_file` (`ignore_targets_file`, `allow_subcategories_file`, `i
 
 Each check has at most one `check "<name>"` block; a second block with the same name is a load error. For per-target `schema_docs` settings, use `override` blocks inside the one block (see [rules/schema_docs.md](rules/schema_docs.md#per-target-overrides)).
 
+Checks are on by default, whether or not they have a block; a block that omits `enabled` keeps the check on, so it can change options without restating `enabled = true`. Only `enabled = false` turns a check off. `prose_casing` is the exception: it is opt-in and runs only with `enabled = true`.
+
 ## Rules reference
 
 ### Overview
