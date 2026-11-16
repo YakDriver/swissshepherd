@@ -341,6 +341,8 @@ func TestAnchors_HTMLAnchorResolves(t *testing.T) {
 		{"name", "See [below](#legacy).\n\n<a name=\"legacy\"></a>\n", 0},
 		{"only in fenced code", "See [below](#fenced).\n\n```html\n<a id=\"fenced\"></a>\n```\n", 1},
 		{"case differs", "See [below](#Part).\n\n<a id=\"part\"></a>\n", 1},
+		{"commented inside an html block", "See [below](#hidden).\n\n<div>\n<!-- <a id=\"hidden\"></a> -->\n</div>\n", 1},
+		{"id after name", "See [below](#modern).\n\n<a name=\"legacy\" id=\"modern\"></a>\n", 0},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

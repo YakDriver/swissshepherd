@@ -473,6 +473,34 @@ func TestParse_HTMLAnchors(t *testing.T) {
 			not:  []string{"inline_comment"},
 		},
 		{
+			name: "id inside another attribute value",
+			md:   "<a title=\"see id='phantom'\" id=\"real\"></a>\n",
+			want: []string{"real"},
+			not:  []string{"phantom"},
+		},
+		{
+			name: "> inside a quoted value",
+			md:   "<a title=\"a > b\" id=\"after_gt\"></a>\n",
+			want: []string{"after_gt"},
+		},
+		{
+			name: "id and name differ",
+			md:   "<a id=\"modern\" name=\"legacy\"></a>\n",
+			want: []string{"modern", "legacy"},
+		},
+		{
+			name: "comment inside an html block",
+			md:   "<div>\n<!-- <a id=\"hidden\"></a> -->\n<a id=\"shown\"></a>\n</div>\n",
+			want: []string{"shown"},
+			not:  []string{"hidden"},
+		},
+		{
+			name: "anchor markup inside another tag's value",
+			md:   "<img alt=\"<a id='in_alt'>\" src=\"x.png\"> <A ID=\"upper\"></A>\n",
+			want: []string{"upper"},
+			not:  []string{"in_alt"},
+		},
+		{
 			name: "data-id attribute and other element",
 			md:   "<a data-id=\"data\"></a> <span id=\"span_id\"></span> <abbr id=\"abbr\"></abbr>\n",
 			not:  []string{"data", "span_id", "abbr"},

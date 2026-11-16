@@ -10,7 +10,6 @@ import (
 	"maps"
 	"net/url"
 	"os"
-	"regexp"
 	"slices"
 	"strings"
 	"unicode"
@@ -556,26 +555,12 @@ func ParseWithOptions(source []byte, name string, templates HeadingTemplates, op
 	return doc, nil
 }
 
-// htmlAnchorAttr matches an id or name attribute in an <a> start tag, with a
-// double-quoted, single-quoted, or unquoted value. The attribute must follow
-// whitespace, so data-id and similar don't count.
-var htmlAnchorAttr = regexp.MustCompile(`(?is)<a\s(?:[^>]*?\s)?(?:id|name)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>` + "`" + `]+))`)
-
 // collectHTMLAnchors returns the id and name values of <a> elements in the
 // document's raw HTML: HTML blocks and inline raw HTML. Goldmark never parses
 // HTML inside code spans or fenced code as either, so those are excluded
-// without extra work. Comments are skipped, both as HTML blocks and inline.
-// Values are entity-decoded, as a browser reads them.
+// without extra work.
 func collectHTMLAnchors(tree ast.Node, source []byte) map[string]bool {
 	set := make(map[string]bool)
-	add := func(raw []byte) {
-		for _, m := range htmlAnchorAttr.FindAllSubmatch(raw, -1) {
-			v := html.UnescapeString(string(bytes.Join(m[1:], nil)))
-			if v != "" {
-				set[v] = true
-			}
-		}
-	}
 	_ = ast.Walk(tree, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
 		if !entering {
 			return ast.WalkContinue, nil
@@ -583,29 +568,116 @@ func collectHTMLAnchors(tree ast.Node, source []byte) map[string]bool {
 		var raw []byte
 		switch t := n.(type) {
 		case *ast.HTMLBlock:
-			if t.HTMLBlockType == ast.HTMLBlockType2 {
-				return ast.WalkContinue, nil
-			}
 			lines := t.Lines()
 			for i := range lines.Len() {
 				seg := lines.At(i)
 				raw = append(raw, seg.Value(source)...)
+			}
+			if t.HasClosure() {
+				raw = append(raw, t.ClosureLine.Value(source)...)
 			}
 		case *ast.RawHTML:
 			for i := range t.Segments.Len() {
 				seg := t.Segments.At(i)
 				raw = append(raw, seg.Value(source)...)
 			}
-			if bytes.HasPrefix(raw, []byte("<!--")) {
-				return ast.WalkContinue, nil
-			}
 		default:
 			return ast.WalkContinue, nil
 		}
-		add(raw)
+		addHTMLAnchors(string(raw), set)
 		return ast.WalkContinue, nil
 	})
 	return set
+}
+
+// addHTMLAnchors adds to set the id and name values of every <a> start tag in
+// the HTML fragment s, entity-decoded as a browser reads them. It skips
+// comments and reads every start tag's attributes the way an HTML tokenizer
+// does, with quote-aware boundaries, so text inside a quoted value (an "id=",
+// a ">", or a whole "<a id=...>") is never taken for markup.
+func addHTMLAnchors(s string, set map[string]bool) {
+	for {
+		i := strings.IndexByte(s, '<')
+		if i < 0 {
+			return
+		}
+		s = s[i+1:]
+		if rest, ok := strings.CutPrefix(s, "!--"); ok {
+			_, after, found := strings.Cut(rest, "-->")
+			if !found {
+				return
+			}
+			s = after
+			continue
+		}
+		n := strings.IndexFunc(s, func(r rune) bool { return isHTMLSpace(r) || r == '/' || r == '>' })
+		if n < 0 {
+			n = len(s)
+		}
+		if n == 0 || !isASCIILetter(s[0]) {
+			continue
+		}
+		s = addTagAnchors(s[n:], strings.EqualFold(s[:n], "a"), set)
+	}
+}
+
+// addTagAnchors reads the attributes of a start tag whose name has been
+// consumed and returns the input after the tag's closing ">" ("" if the tag
+// is unterminated). For an <a> tag (isAnchor), it adds the id and name
+// values to set.
+func addTagAnchors(s string, isAnchor bool, set map[string]bool) string {
+	for {
+		s = strings.TrimLeftFunc(s, func(r rune) bool { return isHTMLSpace(r) || r == '/' })
+		if s == "" {
+			return ""
+		}
+		if s[0] == '>' {
+			return s[1:]
+		}
+		// An attribute name runs to whitespace, "/", ">", or "=", but a
+		// leading "=" belongs to the name, so every pass consumes input.
+		n := 1 + strings.IndexFunc(s[1:], func(r rune) bool {
+			return isHTMLSpace(r) || r == '/' || r == '>' || r == '='
+		})
+		if n == 0 {
+			n = len(s)
+		}
+		name := s[:n]
+		s = strings.TrimLeftFunc(s[n:], isHTMLSpace)
+		rest, ok := strings.CutPrefix(s, "=")
+		if !ok {
+			continue
+		}
+		s = strings.TrimLeftFunc(rest, isHTMLSpace)
+		var value string
+		switch {
+		case s == "":
+			return ""
+		case s[0] == '"' || s[0] == '\'':
+			v, after, found := strings.Cut(s[1:], s[:1])
+			if !found {
+				return ""
+			}
+			value, s = v, after
+		default:
+			end := strings.IndexFunc(s, func(r rune) bool { return isHTMLSpace(r) || r == '>' })
+			if end < 0 {
+				end = len(s)
+			}
+			value, s = s[:end], s[end:]
+		}
+		if isAnchor && value != "" && (strings.EqualFold(name, "id") || strings.EqualFold(name, "name")) {
+			set[html.UnescapeString(value)] = true
+		}
+	}
+}
+
+func isHTMLSpace(r rune) bool {
+	return r == ' ' || r == '\t' || r == '\n' || r == '\r' || r == '\f'
+}
+
+func isASCIILetter(c byte) bool {
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
 }
 
 // collectHeadingSlugs walks the whole AST and returns the GitHub anchor slug of
