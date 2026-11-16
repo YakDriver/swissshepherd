@@ -187,29 +187,60 @@ check "frontmatter" {
 	}
 }
 
-// TestIsCheckEnabled_DefaultTrue pins the default-on semantics: a check not
-// named in the config is on. A check that appears with enabled = false is off.
+// TestIsCheckEnabled_DefaultTrue pins the default-on semantics through HCL
+// loading, so an omitted "enabled" is distinguished from "enabled = false"
+// (#118): a check with no block, or a block that omits enabled, is on; only
+// enabled = false turns it off. prose_casing is the opt-in exception and
+// needs enabled = true.
 func TestIsCheckEnabled_DefaultTrue(t *testing.T) {
 	t.Parallel()
 
-	cfg := &config.Config{
-		Checks: []config.CheckConfig{
-			{Name: "attributes_section", Enabled: false},
-		},
-	}
-
 	tests := []struct {
-		name string
-		want bool
+		name  string
+		body  string
+		check string
+		want  bool
 	}{
-		{"arguments_section", true},   // not mentioned → enabled
-		{"attributes_section", false}, // explicitly disabled
-		{"nonexistent_rule", true},    // future-compat: unknown → enabled
+		{"no block", ``, "title_section", true},
+		{"empty block", `check "title_section" {}`, "title_section", true},
+		{"block omits enabled", `check "title_section" {
+  allow_prefixes = ["Resource"]
+}`, "title_section", true},
+		{"enabled true", `check "title_section" {
+  enabled = true
+}`, "title_section", true},
+		{"enabled false", `check "title_section" {
+  enabled = false
+}`, "title_section", false},
+		{"other check disabled", `check "anchors" {
+  enabled = false
+}`, "title_section", true},
+		{"unknown rule", ``, "nonexistent_rule", true},
+		{"opt-in no block", ``, "prose_casing", false},
+		{"opt-in block omits enabled", `check "prose_casing" {
+  enforce_casing = ["ARN"]
+}`, "prose_casing", false},
+		{"opt-in enabled true", `check "prose_casing" {
+  enabled = true
+}`, "prose_casing", true},
+		{"opt-in enabled false", `check "prose_casing" {
+  enabled = false
+}`, "prose_casing", false},
 	}
 	for _, tt := range tests {
-		if got := cfg.IsCheckEnabled(tt.name); got != tt.want {
-			t.Errorf("IsCheckEnabled(%q) = %v, want %v", tt.name, got, tt.want)
-		}
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			path := filepath.Join(t.TempDir(), "swissshepherd.hcl")
+			writeFile(t, path, tt.body)
+			cfg, err := config.Load(path)
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if got := cfg.IsCheckEnabled(tt.check); got != tt.want {
+				t.Errorf("IsCheckEnabled(%q) = %v, want %v", tt.check, got, tt.want)
+			}
+		})
 	}
 }
 

@@ -49,8 +49,12 @@ type Config struct {
 
 // CheckConfig represents a single check block in the config.
 type CheckConfig struct {
-	Name    string `hcl:"name,label"`
-	Enabled bool   `hcl:"enabled,optional"`
+	Name string `hcl:"name,label"`
+
+	// Enabled is nil when the block omits "enabled". A pointer, so an
+	// omitted value keeps the check's default instead of reading as false
+	// (#118). Use IsCheckEnabled rather than reading it directly.
+	Enabled *bool `hcl:"enabled,optional"`
 
 	// BlockHeadingStyles defines templates for recognizing block headings.
 	// Use {Block} as placeholder for the block name (snake_case).
@@ -493,15 +497,19 @@ func (c *Config) GetCheck(name string) CheckConfig {
 	return CheckConfig{Name: name}
 }
 
-// IsCheckEnabled returns true if a check is enabled.
-// Checks are enabled by default unless explicitly disabled in config.
+// optInChecks are off unless a check block sets enabled = true. prose_casing
+// ships a non-empty default word list, so default-on would give every
+// provider new findings on upgrade (docs/rules/prose-casing.md "Rollout").
+var optInChecks = []string{"prose_casing"}
+
+// IsCheckEnabled reports whether a check runs. A check block's enabled
+// setting wins; without one (no block, or a block that omits enabled),
+// every check is on except the opt-in checks.
 func (c *Config) IsCheckEnabled(name string) bool {
-	for _, ch := range c.Checks {
-		if ch.Name == name {
-			return ch.Enabled
-		}
+	if e := c.GetCheck(name).Enabled; e != nil {
+		return *e
 	}
-	return true // enabled by default if not mentioned in config
+	return !slices.Contains(optInChecks, name)
 }
 
 // ShouldIgnoreContents reports whether schema+doc rules should be skipped for
