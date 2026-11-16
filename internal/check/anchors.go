@@ -16,7 +16,8 @@ import (
 // become dead links that render silently on the Terraform Registry. The rule
 // validates link fragments captured anywhere in the document — prose, bullets,
 // callouts, any section — against the set of heading anchors the page
-// generates (including GitHub's duplicate "-1"/"-2" suffixes).
+// generates (including GitHub's duplicate "-1"/"-2" suffixes) and the id and
+// name values of <a> elements in raw HTML.
 //
 // Only in-page fragments are validated; external URLs and cross-file links are
 // out of scope. The rule is schema-independent: it needs only the parsed
@@ -38,16 +39,15 @@ func (r *AnchorsRule) Check(ctx CheckContext) []Result {
 	if d == nil || len(d.InPageLinks) == 0 {
 		return nil
 	}
-	anchors := d.HeadingAnchors
-
 	// Report each unresolved fragment once, at its earliest line, so a
 	// fragment reused across the document is flagged a single time and output
 	// is deterministic. Fragments are already normalized to their
 	// browser-resolved form (entities/backslash escapes resolved,
-	// percent-decoded) by the parser.
+	// percent-decoded) by the parser. A fragment resolves to a heading slug
+	// or to an <a id|name> in raw HTML (#120).
 	dangling := make(map[string]int)
 	for _, link := range d.InPageLinks {
-		if link.Fragment == "" || anchors[link.Fragment] {
+		if link.Fragment == "" || d.HeadingAnchors[link.Fragment] || d.HTMLAnchors[link.Fragment] {
 			continue
 		}
 		if ln, ok := dangling[link.Fragment]; !ok || link.Line < ln {

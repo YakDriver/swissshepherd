@@ -419,3 +419,83 @@ func TestParse_InPageFragmentDestinationDecoding(t *testing.T) {
 		})
 	}
 }
+
+// TestParse_HTMLAnchors guards that id and name values on <a> elements in raw
+// HTML are collected as link targets (#120), and that look-alikes in code,
+// comments, other attributes, and other elements are not.
+func TestParse_HTMLAnchors(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		md   string
+		want []string
+		not  []string
+	}{
+		{
+			name: "tfplugindocs anchor above heading",
+			md:   "<a id=\"nestedblock--part\"></a>\n### Nested Schema for `part`\n",
+			want: []string{"nestedblock--part"},
+		},
+		{
+			name: "inline in a paragraph",
+			md:   "Text <a name=\"inline_name\"></a> more.\n",
+			want: []string{"inline_name"},
+		},
+		{
+			name: "html block",
+			md:   "<div>\n<a href=\"#x\" id='single'>x</a>\n</div>\n",
+			want: []string{"single"},
+		},
+		{
+			name: "unquoted value and entity",
+			md:   "<a id=bare></a> <a id=\"a&amp;b\"></a>\n",
+			want: []string{"bare", "a&b"},
+		},
+		{
+			name: "fenced code",
+			md:   "```html\n<a id=\"fenced\"></a>\n```\n",
+			not:  []string{"fenced"},
+		},
+		{
+			name: "code span",
+			md:   "Use `<a id=\"span\"></a>` here.\n",
+			not:  []string{"span"},
+		},
+		{
+			name: "html comment block",
+			md:   "<!-- <a id=\"commented\"></a> -->\n",
+			not:  []string{"commented"},
+		},
+		{
+			name: "inline comment",
+			md:   "Text <!-- <a id=\"inline_comment\"></a> --> more.\n",
+			not:  []string{"inline_comment"},
+		},
+		{
+			name: "data-id attribute and other element",
+			md:   "<a data-id=\"data\"></a> <span id=\"span_id\"></span> <abbr id=\"abbr\"></abbr>\n",
+			not:  []string{"data", "span_id", "abbr"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			d, err := doc.Parse([]byte("# Resource: aws_thing\n\n"+tt.md), "aws_thing")
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, w := range tt.want {
+				if !d.HTMLAnchors[w] {
+					t.Errorf("HTMLAnchors missing %q; got %v", w, d.HTMLAnchors)
+				}
+			}
+			for _, n := range tt.not {
+				if d.HTMLAnchors[n] {
+					t.Errorf("HTMLAnchors must not contain %q; got %v", n, d.HTMLAnchors)
+				}
+			}
+		})
+	}
+}

@@ -4,6 +4,7 @@
 package check_test
 
 import (
+	"os"
 	"strings"
 	"testing"
 
@@ -322,5 +323,48 @@ func TestAnchors_ExternalAndCrossFileLinksIgnored(t *testing.T) {
 `
 	if results := anchorResults(t, src); len(results) != 0 {
 		t.Errorf("external/cross-file links must be ignored: %+v", results)
+	}
+}
+
+// TestAnchors_HTMLAnchorResolves guards that a link to an <a id> or <a name>
+// target resolves, while a link to a target that exists only in code is still
+// dead (#120).
+func TestAnchors_HTMLAnchorResolves(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		md   string
+		dead int
+	}{
+		{"id", "See [below](#nestedblock--part).\n\n<a id=\"nestedblock--part\"></a>\n### Nested Schema for `part`\n", 0},
+		{"name", "See [below](#legacy).\n\n<a name=\"legacy\"></a>\n", 0},
+		{"only in fenced code", "See [below](#fenced).\n\n```html\n<a id=\"fenced\"></a>\n```\n", 1},
+		{"case differs", "See [below](#Part).\n\n<a id=\"part\"></a>\n", 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			results := anchorResults(t, "# Resource: aws_thing\n\n## Argument Reference\n\n"+tt.md)
+			if len(results) != tt.dead {
+				t.Errorf("want %d dead-anchor findings, got %d: %+v", tt.dead, len(results), results)
+			}
+		})
+	}
+}
+
+// TestAnchors_TfplugindocsFixture is the #120 regression on cloudinit's
+// docs/resources/config.md (hashicorp/terraform-provider-cloudinit 7c4517d),
+// whose "#nestedblock--part" link targets the <a id> tfplugindocs writes.
+func TestAnchors_TfplugindocsFixture(t *testing.T) {
+	t.Parallel()
+
+	src, err := os.ReadFile("../../testdata/docs/r/cloudinit_config_tfplugindocs.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if results := anchorResults(t, string(src)); len(results) != 0 {
+		t.Errorf("tfplugindocs anchors must resolve: %+v", results)
 	}
 }

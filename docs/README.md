@@ -279,7 +279,7 @@ check "anchors" {
 }
 ```
 
-The rule validates link fragments found **anywhere** in the document — Argument/Attribute bullets, Example Usage prose, callouts, any section — against the set of heading anchors the page generates. It reproduces GitHub's slug algorithm, including underscore preservation (`` `ec2_configuration` Block `` → `#ec2_configuration-block`) and the numeric suffixes appended to duplicate headings (`#grpc-block`, `#grpc-block-1`). Only in-page `#` fragments are checked; external URLs and cross-file links are ignored. Each unresolved fragment is reported once, at its earliest line. Findings default to **error**; set `severity = "warning"` to soften. Like every check, it honors the standard scoping options.
+The rule validates link fragments found **anywhere** in the document — Argument/Attribute bullets, Example Usage prose, callouts, any section — against the set of heading anchors the page generates. It reproduces GitHub's slug algorithm, including underscore preservation (`` `ec2_configuration` Block `` → `#ec2_configuration-block`) and the numeric suffixes appended to duplicate headings (`#grpc-block`, `#grpc-block-1`). An explicit HTML anchor, the `id` or `name` of an `<a>` element such as the `<a id="nestedblock--part"></a>` that tfplugindocs writes above each nested schema heading, is also a valid target; one inside a code span, fenced code block, or HTML comment is not. Only in-page `#` fragments are checked; external URLs and cross-file links are ignored. Each unresolved fragment is reported once, at its earliest line. Findings default to **error**; set `severity = "warning"` to soften. Like every check, it honors the standard scoping options.
 
 ---
 

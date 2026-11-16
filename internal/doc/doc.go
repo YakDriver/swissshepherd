@@ -6,9 +6,11 @@ package doc
 import (
 	"bytes"
 	"fmt"
+	"html"
 	"maps"
 	"net/url"
 	"os"
+	"regexp"
 	"slices"
 	"strings"
 	"unicode"
@@ -463,6 +465,13 @@ type Document struct {
 	// to duplicate slugs (e.g. "grpc-block", "grpc-block-1"). Used to verify
 	// that in-page links (`](#anchor)`) resolve to a real heading.
 	HeadingAnchors map[string]bool
+	// HTMLAnchors is the set of id and name values on <a> elements in raw
+	// HTML outside code and comments, such as the <a id="nestedblock--part">
+	// that tfplugindocs writes above each nested schema heading. A link to
+	// one resolves like a link to a heading (#120). Kept apart from
+	// HeadingAnchors because they take no part in GitHub's duplicate-slug
+	// suffixing.
+	HTMLAnchors map[string]bool
 	// Orphans records H3+ headings in Argument or Attribute Reference that
 	// match no heading template. Their bullets belong to no section.
 	Orphans []Orphan
@@ -542,8 +551,61 @@ func ParseWithOptions(source []byte, name string, templates HeadingTemplates, op
 	idx := newLineIndex(source)
 	extractBlocks(tree, source, idx, doc, templates, opts.CaptureNestedAttributes)
 	doc.HeadingAnchors = dedupAnchorSet(collectHeadingSlugs(tree, source))
+	doc.HTMLAnchors = collectHTMLAnchors(tree, source)
 	doc.InPageLinks = collectInPageLinks(tree, idx)
 	return doc, nil
+}
+
+// htmlAnchorAttr matches an id or name attribute in an <a> start tag, with a
+// double-quoted, single-quoted, or unquoted value. The attribute must follow
+// whitespace, so data-id and similar don't count.
+var htmlAnchorAttr = regexp.MustCompile(`(?is)<a\s(?:[^>]*?\s)?(?:id|name)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>` + "`" + `]+))`)
+
+// collectHTMLAnchors returns the id and name values of <a> elements in the
+// document's raw HTML: HTML blocks and inline raw HTML. Goldmark never parses
+// HTML inside code spans or fenced code as either, so those are excluded
+// without extra work. Comments are skipped, both as HTML blocks and inline.
+// Values are entity-decoded, as a browser reads them.
+func collectHTMLAnchors(tree ast.Node, source []byte) map[string]bool {
+	set := make(map[string]bool)
+	add := func(raw []byte) {
+		for _, m := range htmlAnchorAttr.FindAllSubmatch(raw, -1) {
+			v := html.UnescapeString(string(bytes.Join(m[1:], nil)))
+			if v != "" {
+				set[v] = true
+			}
+		}
+	}
+	_ = ast.Walk(tree, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
+		if !entering {
+			return ast.WalkContinue, nil
+		}
+		var raw []byte
+		switch t := n.(type) {
+		case *ast.HTMLBlock:
+			if t.HTMLBlockType == ast.HTMLBlockType2 {
+				return ast.WalkContinue, nil
+			}
+			lines := t.Lines()
+			for i := range lines.Len() {
+				seg := lines.At(i)
+				raw = append(raw, seg.Value(source)...)
+			}
+		case *ast.RawHTML:
+			for i := range t.Segments.Len() {
+				seg := t.Segments.At(i)
+				raw = append(raw, seg.Value(source)...)
+			}
+			if bytes.HasPrefix(raw, []byte("<!--")) {
+				return ast.WalkContinue, nil
+			}
+		default:
+			return ast.WalkContinue, nil
+		}
+		add(raw)
+		return ast.WalkContinue, nil
+	})
+	return set
 }
 
 // collectHeadingSlugs walks the whole AST and returns the GitHub anchor slug of
