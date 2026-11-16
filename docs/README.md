@@ -186,6 +186,8 @@ Each check has at most one `check "<name>"` block; a second block with the same 
 
 Checks are on by default, whether or not they have a block; a block that omits `enabled` keeps the check on, so it can change options without restating `enabled = true`. Only `enabled = false` turns a check off. `prose_casing` is the exception: it is opt-in and runs only with `enabled = true`.
 
+Every check accepts `severity = "error"` or `severity = "warning"`, which replaces the severity of every finding the check reports. Only errors fail the run, so `"warning"` reports a check's findings without failing. On a check that mixes the two, such as `schema_docs`, it applies to all of them: `"error"` promotes the advisory warnings and `"warning"` demotes the errors. Without it, each finding keeps its own severity; `anchors` defaults to error and `banned_glosses` and `prose_casing` to warning. Any other value is a load error.
+
 ## Rules reference
 
 ### Overview

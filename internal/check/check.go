@@ -42,6 +42,18 @@ func ParseSeverity(s string, def Severity) Severity {
 	}
 }
 
+// OverrideSeverity sets each result's severity to its check block's severity,
+// when that is set, and returns results. It applies to every finding a check
+// reports, so on a check that mixes errors and warnings, "error" promotes the
+// warnings and "warning" demotes the errors.
+func OverrideSeverity(cfg *config.Config, results []Result) []Result {
+	for i := range results {
+		s := cfg.GetCheck(results[i].Rule).Severity
+		results[i].Severity = ParseSeverity(s, results[i].Severity)
+	}
+	return results
+}
+
 // Result represents a single finding from a check.
 type Result struct {
 	Rule     string   `json:"rule"`

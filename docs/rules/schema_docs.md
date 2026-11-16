@@ -70,6 +70,10 @@ check "schema_docs" {
 }
 ```
 
+## Severity
+
+`schema_docs` reports most findings as errors and some as warnings: advisories, such as a heading that resolves to no block, and findings that roll out gradually, such as a misplaced root scalar. `severity = "warning"` or `"error"` on the check block replaces the severity of all of them, so `"error"` turns the advisories into errors too. It applies to every target; an `override` block can't set it.
+
 ## Per-target overrides
 
 `ignore_targets` turns off every sub-check for a target. An `override` block turns off, or on, only the sub-checks it names, for only the targets it lists:

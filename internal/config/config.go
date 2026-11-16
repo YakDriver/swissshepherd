@@ -56,6 +56,11 @@ type CheckConfig struct {
 	// (#118). Use IsCheckEnabled rather than reading it directly.
 	Enabled *bool `hcl:"enabled,optional"`
 
+	// Severity, when set ("error" or "warning"), replaces the severity of
+	// every finding the check reports, including checks that mix the two
+	// (check.OverrideSeverity). Empty keeps each finding's own severity.
+	Severity string `hcl:"severity,optional"`
+
 	// BlockHeadingStyles defines templates for recognizing block headings.
 	// Use {Block} as placeholder for the block name (snake_case).
 	// Use {Title} as placeholder for title-case name (converted to snake_case).
@@ -136,11 +141,8 @@ type CheckConfig struct {
 	// the check does nothing unless a provider configures this map.
 	// SkipFrontmatter excludes the leading YAML frontmatter block from the
 	// scan (useful because subcategory values come from a fixed taxonomy).
-	// Severity sets the finding severity for this check ("error" or
-	// "warning"). Empty uses the check's own default.
 	BannedGlosses   map[string]string `hcl:"banned_glosses,optional"`
 	SkipFrontmatter bool              `hcl:"skip_frontmatter,optional"`
-	Severity        string            `hcl:"severity,optional"`
 
 	// ProseCasing rule options. EnforceCasing adds to (or, for a word whose
 	// lowercase form the built-in default list already has, overrides the
@@ -322,6 +324,9 @@ func Load(path string) (*Config, error) {
 	if err := cfg.validateProseCasing(); err != nil {
 		return nil, fmt.Errorf("config %s: %w", path, err)
 	}
+	if err := cfg.validateSeverity(); err != nil {
+		return nil, fmt.Errorf("config %s: %w", path, err)
+	}
 
 	return &cfg, nil
 }
@@ -449,6 +454,19 @@ func (c *Config) validateProseCasing() error {
 				return fmt.Errorf("check %q: enforce_casing entries %q and %q differ only in case and spacing, so they match the same text; keep one", ch.Name, prev, w)
 			}
 			seen[key] = w
+		}
+	}
+	return nil
+}
+
+// validateSeverity rejects a severity value that check.ParseSeverity would
+// silently replace with the default (#119).
+func (c *Config) validateSeverity() error {
+	for _, ch := range c.Checks {
+		switch strings.ToLower(strings.TrimSpace(ch.Severity)) {
+		case "", "error", "warning", "warn":
+		default:
+			return fmt.Errorf("check %q: severity %q must be \"error\" or \"warning\"", ch.Name, ch.Severity)
 		}
 	}
 	return nil
