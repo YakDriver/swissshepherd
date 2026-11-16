@@ -803,3 +803,54 @@ func TestLoad_ProseCasingValidation(t *testing.T) {
 		})
 	}
 }
+
+// TestLoad_SeverityValidation guards that every check accepts severity and
+// that an unrecognized value fails instead of silently falling back to the
+// default (#119).
+func TestLoad_SeverityValidation(t *testing.T) {
+	t.Parallel()
+
+	testCases := map[string]struct {
+		hcl     string
+		wantErr string
+	}{
+		"unknown value": {
+			hcl:     "check \"anchors\" {\n  severity = \"warnings\"\n}\n",
+			wantErr: `check "anchors": severity "warnings" must be "error" or "warning"`,
+		},
+		"unknown value, disabled check": {
+			hcl:     "check \"schema_docs\" {\n  enabled  = false\n  severity = \"fatal\"\n}\n",
+			wantErr: `check "schema_docs": severity "fatal" must be "error" or "warning"`,
+		},
+		"error": {
+			hcl: "check \"schema_docs\" {\n  severity = \"error\"\n}\n",
+		},
+		"warning": {
+			hcl: "check \"title_section\" {\n  severity = \"warning\"\n}\n",
+		},
+		"warn alias, mixed case": {
+			hcl: "check \"file_match\" {\n  severity = \" Warn \"\n}\n",
+		},
+		"unset": {
+			hcl: "check \"title_section\" {\n  allow_prefixes = [\"Resource\"]\n}\n",
+		},
+	}
+	for name, tc := range testCases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			path := filepath.Join(t.TempDir(), "swissshepherd.hcl")
+			writeFile(t, path, tc.hcl)
+			_, err := config.Load(path)
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("Load() error = %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("Load() error = %v, want it to contain %q", err, tc.wantErr)
+			}
+		})
+	}
+}

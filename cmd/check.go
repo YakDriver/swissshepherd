@@ -333,6 +333,8 @@ func runCheck(cmd *cobra.Command, args []string) error {
 		results = append(results, runner.RunAll()...)
 	}
 
+	results = check.OverrideSeverity(cfg, results)
+
 	// Output results
 	if outputJSON {
 		return outputResultsJSON(results)
