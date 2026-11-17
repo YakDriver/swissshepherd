@@ -4,6 +4,7 @@
 package doc_test
 
 import (
+	"maps"
 	"slices"
 	"strings"
 	"testing"
@@ -1094,6 +1095,134 @@ func TestBlocks_ProseNestedCapture(t *testing.T) {
 			}
 			if want := []string{tc.wantBlock}; tc.wantBlock == "" && len(keys) > 0 || tc.wantBlock != "" && !slices.Equal(keys, want) {
 				t.Errorf("captured settings blocks = %q, want %q", keys, tc.wantBlock)
+			}
+		})
+	}
+}
+
+// TestParse_Tfplugindocs guards the tfplugindocs reading of ## Schema
+// (docs/rules/doc-style.md): labels come from the root group headings and the
+// nested group paragraphs, both bullet forms are fields, and a bullet without
+// tfplugindocs's "(Type)" isn't.
+func TestParse_Tfplugindocs(t *testing.T) {
+	t.Parallel()
+
+	src := "# x_thing (Resource)\n\n## Schema\n\n" +
+		"### Required\n\n" +
+		"- `name` (String) The name.\n" +
+		"- **legacy** (String) Older releases bold the name.\n\n" +
+		"### Optional\n\n" +
+		"- `mode` (String, Deprecated) The mode.\n\n" +
+		"Available values:\n\n" +
+		"  * `fast` - not a field\n" +
+		"- `\"slow\"`: not a field either\n\n" +
+		"- `part` (Block List) Parts. (see [below for nested schema](#nestedblock--part))\n\n" +
+		"### Read-Only\n\n" +
+		"- `id` (String) The ID.\n\n" +
+		"<a id=\"nestedblock--part\"></a>\n" +
+		"### Nested Schema for `part`\n\n" +
+		"Required:\n\n" +
+		"- `content` (String) Body.\n\n" +
+		"Read-Only:\n\n" +
+		"- `size` (Number) Size.\n\n" +
+		"### Example: a custom template's heading\n\nProse.\n\n" +
+		"## Import\n\n```shell\nterraform import x_thing.a a\n```\n"
+	d, err := doc.ParseWithOptions([]byte(src), "x_thing", doc.DefaultHeadingTemplates(), doc.ParseOptions{Tfplugindocs: true, ArgumentsHeading: "Schema"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Sections.Arguments == nil || d.Sections.Arguments.Text != "Schema" {
+		t.Fatalf("## Schema should be the arguments section, got %+v", d.Sections.Arguments)
+	}
+	type label struct{ req, opt, ro, dep bool }
+	tests := []struct {
+		block, name string
+		want        label
+	}{
+		{"", "name", label{req: true}},
+		{"", "legacy", label{req: true}},
+		{"", "mode", label{opt: true, dep: true}},
+		{"", "part", label{opt: true}},
+		{"", "id", label{ro: true}},
+		{"part", "content", label{req: true}},
+		{"part", "size", label{ro: true}},
+	}
+	for _, tt := range tests {
+		b := d.ArgumentBlocks[tt.block]
+		if b == nil {
+			t.Fatalf("no block %q; blocks %v", tt.block, slices.Sorted(maps.Keys(d.ArgumentBlocks)))
+		}
+		i := slices.IndexFunc(b.Attributes, func(a doc.DocAttribute) bool { return a.Name == tt.name })
+		if i < 0 {
+			t.Errorf("block %q: %q not parsed", tt.block, tt.name)
+			continue
+		}
+		a := b.Attributes[i]
+		if got := (label{a.Required, a.Optional, a.ReadOnly, a.Deprecated}); got != tt.want {
+			t.Errorf("block %q: %q labels = %+v, want %+v", tt.block, tt.name, got, tt.want)
+		}
+	}
+	var names []string
+	for _, b := range d.ArgumentBlocks {
+		for _, a := range b.Attributes {
+			names = append(names, a.Name)
+		}
+	}
+	for _, bad := range []string{"fast", `"slow"`, "Required", "Optional", "Read-Only"} {
+		if slices.Contains(names, bad) {
+			t.Errorf("%q must not be parsed as a field; got %v", bad, names)
+		}
+	}
+	for _, bad := range []string{"required", "optional", "read_only"} {
+		if d.ArgumentBlocks[bad] != nil {
+			t.Errorf("group heading parsed as block %q", bad)
+		}
+	}
+	if len(d.Orphans) != 1 || d.Orphans[0].Text != "Example: a custom template's heading" {
+		t.Errorf("only the custom heading should be an orphan (no block heading but Nested Schema for): %+v", d.Orphans)
+	}
+	if d.ArgumentBlocks["example_a_custom_templates_heading"] != nil {
+		t.Error("a custom heading must not become a block")
+	}
+	if got := d.ArgumentBlocks["part"].Attributes[0].Description; got != "Body." {
+		t.Errorf("description = %q, want %q", got, "Body.")
+	}
+}
+
+// TestParse_SectionHeadings guards which level-2 headings open the reference
+// sections: a configured heading always does; the legacy "Argument" and
+// "Attribute" prefixes do only outside the tfplugindocs style.
+func TestParse_SectionHeadings(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name               string
+		heading            string
+		opts               doc.ParseOptions
+		wantArgs, wantAttr bool
+	}{
+		{"canonical", "Argument Reference", doc.ParseOptions{}, true, false},
+		{"plural prefix", "Arguments Reference", doc.ParseOptions{}, true, false},
+		{"attributes plural", "Attributes Reference", doc.ParseOptions{}, false, true},
+		{"schema unconfigured", "Schema", doc.ParseOptions{}, false, false},
+		{"schema configured", "Schema", doc.ParseOptions{ArgumentsHeading: "Schema"}, true, false},
+		{"configured attributes", "Outputs", doc.ParseOptions{AttributesHeading: "Outputs"}, false, true},
+		{"tfplugindocs schema", "Schema", doc.ParseOptions{ArgumentsHeading: "Schema", Tfplugindocs: true}, true, false},
+		{"tfplugindocs ignores prefix", "Argument Reference", doc.ParseOptions{ArgumentsHeading: "Schema", Tfplugindocs: true}, false, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			d, err := doc.ParseWithOptions([]byte("# t\n\n## "+tt.heading+"\n\n* `a` - (Optional) A.\n"), "t", doc.DefaultHeadingTemplates(), tt.opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := d.Sections.Arguments != nil; got != tt.wantArgs {
+				t.Errorf("arguments section = %v, want %v", got, tt.wantArgs)
+			}
+			if got := d.Sections.Attributes != nil; got != tt.wantAttr {
+				t.Errorf("attributes section = %v, want %v", got, tt.wantAttr)
 			}
 		})
 	}

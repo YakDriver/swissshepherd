@@ -182,15 +182,16 @@ func runCheck(cmd *cobra.Command, args []string) error {
 	// as nested blocks and capture their inline-indented doc sub-bullets, so
 	// their fields are covered and style-checked. One toggle drives both the
 	// schema expansion and the doc parser to keep them consistent.
-	nestedCfg := cfg.GetCheck("schema_docs").NestedObjectAttributes
+	nestedCfg := cfg.StyledCheck("schema_docs").NestedObjectAttributes
 	nestedObjects := cfg.IsCheckEnabled("schema_docs") && nestedCfg != nil && *nestedCfg
 	if nestedObjects {
 		schema.ExpandObjectAttributes(ps)
 	}
 
 	if cfg.IsCheckEnabled("schema_docs") {
-		cc := cfg.GetCheck("schema_docs")
+		cc := cfg.StyledCheck("schema_docs")
 		rules = append(rules, &check.SchemaDocsRule{
+			Tfplugindocs:              cfg.Tfplugindocs(),
 			IgnoreDeprecated:          cc.IgnoreDeprecated == nil || *cc.IgnoreDeprecated,
 			ImplicitAttributes:        cc.ImplicitAttributes,
 			AllowPhantoms:             cc.AllowPhantoms,
@@ -233,8 +234,11 @@ func runCheck(cmd *cobra.Command, args []string) error {
 		rules = append(rules, &check.TimeoutsSectionRule{})
 	}
 	if cfg.IsCheckEnabled("import_section") {
+		cc := cfg.StyledCheck("import_section")
 		rules = append(rules, &check.ImportSectionRule{
 			RequireIdentitySection: cfg.CheckBool("import_section", "require_identity_section", true),
+			AllowLanguages:         cc.AllowLanguages,
+			AllowNoImportBlock:     cc.RequireImportBlock != nil && !*cc.RequireImportBlock,
 		})
 	}
 	if cfg.IsCheckEnabled("example_section") {

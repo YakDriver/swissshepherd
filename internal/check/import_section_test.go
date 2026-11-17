@@ -4,6 +4,7 @@
 package check_test
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -146,6 +147,56 @@ func TestImportSectionRule(t *testing.T) {
 					}
 					t.Errorf("expected message containing %q, got:\n  %s", want, strings.Join(msgs, "\n  "))
 				}
+			}
+		})
+	}
+}
+
+// TestImportSectionRule_Tfplugindocs guards the import options the
+// tfplugindocs style sets (config.StyledCheck): shell blocks, a shell-only
+// example, and the "does not support import" wording, which also counts in
+// the reference style (Google's "This resource does not support import.").
+func TestImportSectionRule_Tfplugindocs(t *testing.T) {
+	t.Parallel()
+
+	tfp := &check.ImportSectionRule{AllowLanguages: []string{"terraform", "shell", "console"}, AllowNoImportBlock: true}
+	ref := &check.ImportSectionRule{RequireIdentitySection: true}
+	shellOnly := "# x_thing (Resource)\n\n## Import\n\nImport is supported using the following syntax:\n\n```shell\nterraform import x_thing.a a\n```\n"
+	tests := []struct {
+		name     string
+		rule     *check.ImportSectionRule
+		source   string
+		identity *schema.IdentitySchema
+		want     []string
+	}{
+		{"shell only accepted", tfp, shellOnly, nil, nil},
+		{"shell rejected in the reference style", ref, shellOnly, nil, []string{
+			"import code block type should be 'terraform' or 'console', got \"shell\"",
+			"first import code block should be ```terraform with an import block (import {)",
+		}},
+		{"terraform block after shell", tfp, shellOnly + "\n```terraform\nimport {\n  to = x_thing.a\n  id = \"a\"\n}\n```\n", nil, []string{
+			"all terraform import blocks should appear before console blocks",
+		}},
+		{"other language", tfp, strings.Replace(shellOnly, "```shell", "```bash", 1), nil, []string{
+			"import code block type should be 'terraform', 'shell', or 'console', got \"bash\"",
+		}},
+		{"does not support import", ref, "# Resource: x_thing\n\n## Import\n\nThis resource does not support import.\n", &schema.IdentitySchema{}, nil},
+		{"does not currently support terraform import", ref, "# Resource: x_thing\n\n## Import\n\n~> This resource does not currently support `terraform import`.\n", nil, nil},
+		{"unrelated does not", ref, "# Resource: x_thing\n\n## Import\n\nThis does not matter.\n", nil, []string{"import section should have at least one code block (or state that the resource cannot be imported)"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			d, err := doc.Parse([]byte(tt.source), "x_thing")
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := resultMessages(tt.rule.Check(check.CheckContext{Resource: "x_thing", Doc: d, IdentitySchema: tt.identity}))
+			slices.Sort(got)
+			want := slices.Sorted(slices.Values(tt.want))
+			if !slices.Equal(got, want) {
+				t.Errorf("got %q, want %q", got, want)
 			}
 		})
 	}

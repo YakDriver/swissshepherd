@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/YakDriver/swissshepherd/internal/check"
+	"github.com/YakDriver/swissshepherd/internal/config"
 	"github.com/YakDriver/swissshepherd/internal/doc"
 )
 
@@ -291,5 +292,41 @@ func TestTitleSectionRule_NoTitleFixture(t *testing.T) {
 	}
 	if !strings.Contains(results[0].Message, "missing title section") {
 		t.Errorf("unexpected message: %s", results[0].Message)
+	}
+}
+
+// TestTitleSectionRule_TitleFormat guards title_format (the tfplugindocs
+// "<name> (Resource)" title) and the quoted prefix list in the prefix
+// finding, which printed "[Action ... List Resource Resource]" and read as
+// separate "List" and "Resource" prefixes (#116).
+func TestTitleSectionRule_TitleFormat(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name, format, title, want string
+	}{
+		{"matches", "{name} (Resource)", "x_thing (Resource)", ""},
+		{"doc alias matches", "{name} (Resource)", "x_alias (Resource)", ""},
+		{"function", "function: {name}", "function: x_thing", ""},
+		{"wrong kind", "{name} (Resource)", "x_thing (Data Source)", `title section heading "x_thing (Data Source)" should be "x_thing (Resource)"`},
+		{"prefix style rejected", "{name} (Resource)", "Resource: x_thing", `should be "x_thing (Resource)"`},
+		{"prefix list quoted", "", "x_thing (Resource)", `should have one of these prefixes: "Action: ", "Data Source: ", "Ephemeral: ", "Function: ", "List Resource: ", "Resource: "`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			ctx := check.CheckContext{Resource: "x_thing", DocName: "x_alias", Type: &config.Type{Name: "resource", TitleFormat: tt.format}, Doc: parseDoc(t, "# "+tt.title+"\n\nBody.\n")}
+			results := (&check.TitleSectionRule{}).Check(ctx)
+			if tt.want == "" {
+				if len(results) != 0 {
+					t.Errorf("want no findings, got %v", resultMessages(results))
+				}
+				return
+			}
+			if !hasMessage(results, tt.want) {
+				t.Errorf("missing %q in %v", tt.want, resultMessages(results))
+			}
+		})
 	}
 }

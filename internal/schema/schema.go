@@ -47,6 +47,14 @@ type Attribute struct {
 	Deprecated bool
 	Sensitive  bool
 	Children   []Attribute // nested object attributes (from cty type or nested_type)
+	// Described is set when the schema gives the attribute a description.
+	// tfplugindocs lists a root id without one under Read-Only, whatever
+	// its flags.
+	Described bool
+	// Object is set for an object-typed attribute (a nested_type, or a cty
+	// object or collection of objects), even one whose object has no
+	// attributes and so no Children.
+	Object bool
 }
 
 // Block represents a flattened schema block with its attributes and child block names.
@@ -381,6 +389,8 @@ func flattenBlock(rs *ResourceSchema, path string, block *tfjson.SchemaBlock) {
 			Deprecated: attr.Deprecated,
 			Sensitive:  attr.Sensitive,
 			Children:   extractNestedAttributes(attr),
+			Object:     isObjectAttribute(attr),
+			Described:  attr.Description != "",
 		})
 	}
 
@@ -422,6 +432,22 @@ func extractNestedAttributes(attr *tfjson.SchemaAttribute) []Attribute {
 	return nil
 }
 
+// isObjectAttribute reports whether attr is object-typed: a Framework nested
+// attribute, or a cty object or collection of objects.
+func isObjectAttribute(attr *tfjson.SchemaAttribute) bool {
+	if attr.AttributeNestedType != nil {
+		return true
+	}
+	ty := attr.AttributeType
+	if ty == cty.NilType {
+		return false
+	}
+	if ty.IsCollectionType() {
+		ty = ty.ElementType()
+	}
+	return ty.IsObjectType()
+}
+
 // attributesFromCtyObject recursively extracts attributes from a cty object type.
 func attributesFromCtyObject(ty cty.Type) []Attribute {
 	children := make([]Attribute, 0, len(ty.AttributeTypes()))
@@ -432,6 +458,7 @@ func attributesFromCtyObject(ty cty.Type) []Attribute {
 			elemTy = elemTy.ElementType()
 		}
 		if elemTy.IsObjectType() {
+			child.Object = true
 			child.Children = attributesFromCtyObject(elemTy)
 		}
 		children = append(children, child)
@@ -450,6 +477,7 @@ func nestedFromSchemaAttrs(attrs map[string]*tfjson.SchemaAttribute) []Attribute
 			Deprecated: a.Deprecated,
 			Sensitive:  a.Sensitive,
 			Children:   extractNestedAttributes(a),
+			Object:     isObjectAttribute(a),
 		})
 	}
 	return result

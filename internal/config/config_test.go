@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -853,4 +854,119 @@ func TestLoad_SeverityValidation(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestLoad_DocStyle guards doc_style: the reference style is the default and
+// keeps the embedded defaults; tfplugindocs selects its own default types;
+// anything else is a load error.
+func TestLoad_DocStyle(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name, body, wantErr string
+		wantTitle, wantArgs string
+		wantSections        []string
+	}{
+		{name: "default", body: ``, wantArgs: "", wantSections: []string{"title", "example", "arguments", "attributes", "timeouts", "import", "signature"}},
+		{name: "reference", body: `doc_style = "reference"`, wantSections: []string{"title", "example", "arguments", "attributes", "timeouts", "import", "signature"}},
+		{name: "tfplugindocs", body: `doc_style = "tfplugindocs"`, wantTitle: "{name} (Resource)", wantArgs: "Schema", wantSections: []string{"title", "example", "arguments", "import", "signature"}},
+		{name: "unknown", body: `doc_style = "aws"`, wantErr: `doc_style "aws" must be "reference" or "tfplugindocs"`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			path := filepath.Join(t.TempDir(), "swissshepherd.hcl")
+			writeFile(t, path, tt.body)
+			cfg, err := config.Load(path)
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("Load() error = %v, want %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			i := slices.IndexFunc(cfg.Types, func(ty config.Type) bool { return ty.Name == "resource" })
+			r := cfg.Types[i]
+			var sections []string
+			for _, s := range r.Sections {
+				sections = append(sections, s.Name)
+			}
+			if r.TitleFormat != tt.wantTitle || r.ArgumentsHeading != tt.wantArgs || !slices.Equal(sections, tt.wantSections) {
+				t.Errorf("resource type: title_format %q, arguments_heading %q, sections %v; want %q, %q, %v",
+					r.TitleFormat, r.ArgumentsHeading, sections, tt.wantTitle, tt.wantArgs, tt.wantSections)
+			}
+		})
+	}
+}
+
+// TestStyledCheck guards the tfplugindocs defaults StyledCheck fills in, that
+// an explicit setting wins over them (except allow_inline_read_only, which
+// the one ## Schema section requires), and that the reference style changes
+// nothing.
+func TestStyledCheck(t *testing.T) {
+	t.Parallel()
+
+	load := func(t *testing.T, body string) *config.Config {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), "swissshepherd.hcl")
+		writeFile(t, path, body)
+		cfg, err := config.Load(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return cfg
+	}
+	b := func(p *bool) string {
+		if p == nil {
+			return "nil"
+		}
+		return strconv.FormatBool(*p)
+	}
+
+	t.Run("tfplugindocs defaults", func(t *testing.T) {
+		t.Parallel()
+		cfg := load(t, `doc_style = "tfplugindocs"`)
+		sd := cfg.StyledCheck("schema_docs")
+		if b(sd.AllowInlineReadOnly) != "true" || sd.SkipBlocks == nil || len(sd.SkipBlocks) != 0 || b(sd.NestedObjectAttributes) != "true" || b(sd.Description) != "false" {
+			t.Errorf("schema_docs = inline %s, skip %v, nested %s, description %s", b(sd.AllowInlineReadOnly), sd.SkipBlocks, b(sd.NestedObjectAttributes), b(sd.Description))
+		}
+		is := cfg.StyledCheck("import_section")
+		if !slices.Equal(is.AllowLanguages, []string{"terraform", "shell", "console"}) || b(is.RequireImportBlock) != "false" {
+			t.Errorf("import_section = languages %v, require_import_block %s", is.AllowLanguages, b(is.RequireImportBlock))
+		}
+	})
+	t.Run("explicit settings win", func(t *testing.T) {
+		t.Parallel()
+		cfg := load(t, `doc_style = "tfplugindocs"
+check "schema_docs" {
+  allow_inline_read_only   = false
+  skip_blocks              = ["timeouts"]
+  nested_object_attributes = false
+  description              = true
+}
+check "import_section" {
+  allow_languages      = ["terraform"]
+  require_import_block = true
+}`)
+		sd := cfg.StyledCheck("schema_docs")
+		if b(sd.AllowInlineReadOnly) != "true" || !slices.Equal(sd.SkipBlocks, []string{"timeouts"}) || b(sd.NestedObjectAttributes) != "false" || b(sd.Description) != "true" {
+			t.Errorf("schema_docs = inline %s, skip %v, nested %s, description %s", b(sd.AllowInlineReadOnly), sd.SkipBlocks, b(sd.NestedObjectAttributes), b(sd.Description))
+		}
+		is := cfg.StyledCheck("import_section")
+		if !slices.Equal(is.AllowLanguages, []string{"terraform"}) || b(is.RequireImportBlock) != "true" {
+			t.Errorf("import_section = languages %v, require_import_block %s", is.AllowLanguages, b(is.RequireImportBlock))
+		}
+	})
+	t.Run("reference style unchanged", func(t *testing.T) {
+		t.Parallel()
+		cfg := load(t, ``)
+		sd := cfg.StyledCheck("schema_docs")
+		is := cfg.StyledCheck("import_section")
+		if sd.AllowInlineReadOnly != nil || sd.SkipBlocks != nil || sd.NestedObjectAttributes != nil || sd.Description != nil || is.AllowLanguages != nil || is.RequireImportBlock != nil {
+			t.Errorf("reference style should leave settings unset: %+v %+v", sd, is)
+		}
+	})
 }

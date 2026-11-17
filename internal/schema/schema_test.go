@@ -4,6 +4,8 @@
 package schema_test
 
 import (
+	"os"
+	"path/filepath"
 	"slices"
 	"testing"
 
@@ -468,5 +470,48 @@ func TestExpandObjectAttributes_ConfigUnknownPropagates(t *testing.T) {
 
 	if b := rs.Blocks["config.logging"]; b == nil || !b.ConfigUnknown {
 		t.Errorf(`block "config.logging" ConfigUnknown = %v, want true (configurable ancestor)`, b != nil && b.ConfigUnknown)
+	}
+}
+
+// TestLoadFile_ObjectAndDescribed guards Attribute.Object, set for every
+// object-typed attribute including one whose object has no fields (no
+// Children), and Attribute.Described.
+func TestLoadFile_ObjectAndDescribed(t *testing.T) {
+	t.Parallel()
+
+	const js = `{"format_version":"1.0","provider_schemas":{"registry.terraform.io/x/x":{"resource_schemas":{"x_thing":{"version":0,"block":{"attributes":{
+		"empty":{"nested_type":{"nesting_mode":"single"},"optional":true},
+		"nested":{"nested_type":{"attributes":{"a":{"type":"string","optional":true}},"nesting_mode":"list"},"optional":true},
+		"cty":{"type":["list",["object",{"b":"string"}]],"computed":true},
+		"plain":{"type":"string","description":"Plain.","optional":true},
+		"id":{"type":"string","optional":true,"computed":true}
+	}}}}}}}`
+	path := filepath.Join(t.TempDir(), "schema.json")
+	if err := os.WriteFile(path, []byte(js), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ps, err := schema.LoadFile(path, "registry.terraform.io/x/x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	attrs := map[string]schema.Attribute{}
+	for _, a := range ps.Resources["x_thing"].Blocks[""].Attributes {
+		attrs[a.Name] = a
+	}
+	tests := []struct {
+		name              string
+		object, described bool
+	}{
+		{"empty", true, false},
+		{"nested", true, false},
+		{"cty", true, false},
+		{"plain", false, true},
+		{"id", false, false},
+	}
+	for _, tt := range tests {
+		a := attrs[tt.name]
+		if a.Object != tt.object || a.Described != tt.described {
+			t.Errorf("%s: Object=%v Described=%v, want %v %v", tt.name, a.Object, a.Described, tt.object, tt.described)
+		}
 	}
 }

@@ -6,6 +6,7 @@ package check_test
 import (
 	"fmt"
 	"maps"
+	"os"
 	"regexp"
 	"slices"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/YakDriver/swissshepherd/internal/check"
+	"github.com/YakDriver/swissshepherd/internal/config"
 	"github.com/YakDriver/swissshepherd/internal/doc"
 	"github.com/YakDriver/swissshepherd/internal/schema"
 )
@@ -3494,6 +3496,206 @@ func TestCoverage_PathKeyedHeadings_PartialPathStillAmbiguous(t *testing.T) {
 		t.Errorf("expected shared-section finding on partial-path key 'header.match' citing both colliding schema paths; got %d results", len(results))
 		for _, r := range results {
 			t.Logf("  result: %s", r.Message)
+		}
+	}
+}
+
+// TestCoverage_MissingHomeSection is the #117 regression. A doc whose
+// arguments or attributes section is missing used to leave its root fields
+// unchecked: elastic-infra/ldap's tfplugindocs page, read in the reference
+// style with section "schema" allowed, passed with its Required dn and
+// object_classes bullets deleted. Now one warning per missing section names
+// the fields it leaves unchecked, in place of per-field and per-block
+// findings that would call documented fields undocumented.
+func TestCoverage_MissingHomeSection(t *testing.T) {
+	t.Parallel()
+
+	rs := &schema.ResourceSchema{
+		Name: "x_thing",
+		Blocks: map[string]*schema.Block{
+			"": {Path: "", Attributes: []schema.Attribute{
+				{Name: "name", Required: true},
+				{Name: "mode", Optional: true},
+				{Name: "arn", Computed: true},
+			}, ChildBlocks: []string{"part"}},
+			"part": {Path: "part", Attributes: []schema.Attribute{
+				{Name: "content", Required: true},
+				{Name: "size", Computed: true},
+			}},
+		},
+	}
+	const args = "## Argument Reference\n\n* `name` - (Required) N.\n* `mode` - (Optional) M.\n* `part` - (Optional) P.\n\n### `part` Block\n\n* `content` - (Required) C.\n\n"
+	const attrs = "## Attribute Reference\n\n* `arn` - A.\n\n### `part` Block\n\n* `size` - S.\n\n"
+	tests := []struct {
+		name        string
+		src         string
+		inline      bool
+		want        []string
+		wantMissing []string // per-field or per-block messages that must not appear
+	}{
+		{
+			name: "no arguments section",
+			src:  attrs,
+			want: []string{"no ## Argument Reference section, so 3 arguments (`mode`, `name`, `part.content`) aren't checked against the schema"},
+			wantMissing: []string{
+				`attribute "name" in block "(root)" is not documented`,
+				`block "part" is not documented`,
+			},
+		},
+		{
+			name:        "no attributes section",
+			src:         args,
+			want:        []string{"no ## Attribute Reference section, so 2 Read-Only attributes (`arn`, `part.size`) aren't checked against the schema"},
+			wantMissing: []string{`Read-Only attribute "arn" should be documented`},
+		},
+		{
+			name: "neither section",
+			src:  "## Schema\n\n- `name` (String) N.\n",
+			want: []string{
+				"no ## Argument Reference section, so 3 arguments (`mode`, `name`, `part.content`) aren't checked against the schema",
+				"no ## Attribute Reference section, so 2 Read-Only attributes (`arn`, `part.size`) aren't checked against the schema",
+			},
+		},
+		{
+			name:   "neither section, Read-Only allowed inline",
+			src:    "## Schema\n",
+			inline: true,
+			want:   []string{"no ## Argument Reference section, so 5 fields (`arn`, `mode`, `name`, and 2 more) aren't checked against the schema"},
+		},
+		{
+			name:   "no attributes section, Read-Only allowed inline: they're checked in Argument Reference",
+			src:    args,
+			inline: true,
+			want:   []string{`Read-Only attribute "arn" should be documented in Attribute Reference section`},
+		},
+		{
+			name: "field listed in the other section is checked there, not counted",
+			src:  "## Attribute Reference\n\n* `arn` - A.\n* `name` - N.\n\n### `part` Block\n\n* `size` - S.\n\n",
+			want: []string{
+				"no ## Argument Reference section, so 2 arguments (`mode`, `part.content`) aren't checked against the schema",
+				`argument "name" is documented under Attribute Reference but is a configurable argument in the schema`,
+			},
+		},
+		{
+			name:        "both sections: per-field findings as before",
+			src:         "## Argument Reference\n\n* `mode` - (Optional) M.\n\n## Attribute Reference\n\n",
+			want:        []string{`attribute "name" in block "(root)" is not documented`, `block "part" is not documented`},
+			wantMissing: []string{"no ## "},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			d, err := doc.Parse([]byte("# Resource: x_thing\n\n"+tt.src), "x_thing")
+			if err != nil {
+				t.Fatal(err)
+			}
+			rule := &check.SchemaDocsRule{IgnoreDeprecated: true, AllowInlineReadOnly: &tt.inline}
+			results := rule.Check(check.CheckContext{Resource: "x_thing", Schema: rs, Doc: d})
+			for _, w := range tt.want {
+				if !hasMessage(results, w) {
+					t.Errorf("missing %q in:\n%s", w, joinMessages(results))
+				}
+			}
+			for _, m := range tt.wantMissing {
+				if hasMessage(results, m) {
+					t.Errorf("unexpected %q in:\n%s", m, joinMessages(results))
+				}
+			}
+			for _, r := range results {
+				if strings.HasPrefix(r.Message, "no ## ") && r.Severity != check.SeverityWarning {
+					t.Errorf("missing-section finding should be a warning: %+v", r)
+				}
+			}
+		})
+	}
+}
+
+// TestCoverage_MissingHomeSectionNamesConfiguredHeading guards that the #117
+// finding names the type's heading (arguments_heading), and that the ldap
+// fixture with its Required bullets deleted is reported (it passed before).
+func TestCoverage_MissingHomeSectionNamesConfiguredHeading(t *testing.T) {
+	t.Parallel()
+
+	ps, err := schema.LoadFile("../../testdata/schema/ldap.json", "registry.terraform.io/elastic-infra/ldap")
+	if err != nil {
+		t.Fatal(err)
+	}
+	src, err := os.ReadFile("../../testdata/docs/r/ldap_object_tfplugindocs.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var kept []string
+	for line := range strings.SplitSeq(string(src), "\n") {
+		if !strings.HasPrefix(line, "- **dn**") && !strings.HasPrefix(line, "- **object_classes**") {
+			kept = append(kept, line)
+		}
+	}
+	d, err := doc.Parse([]byte(strings.Join(kept, "\n")), "ldap_object")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := check.CheckContext{Resource: "ldap_object", Schema: ps.Resources["ldap_object"], Doc: d,
+		Type: &config.Type{Name: "resource", ArgumentsHeading: "Arguments"}}
+	results := (&check.SchemaDocsRule{IgnoreDeprecated: true}).Check(ctx)
+	want := "no ## Arguments section, so 3 arguments (`attributes`, `dn`, `object_classes`) aren't checked against the schema"
+	if !hasMessage(results, want) {
+		t.Errorf("missing %q in:\n%s", want, joinMessages(results))
+	}
+}
+
+// TestCoverage_MissingHomeSectionDeferral pins what reports a missing
+// Argument Reference under the default resource type: section_presence's
+// error and schema_docs's warning both fire, so neither check depends on the
+// other to report it.
+func TestCoverage_MissingHomeSectionDeferral(t *testing.T) {
+	t.Parallel()
+
+	rs := &schema.ResourceSchema{Name: "x_thing", Blocks: map[string]*schema.Block{
+		"": {Path: "", Attributes: []schema.Attribute{{Name: "name", Required: true}}},
+	}}
+	d, err := doc.Parse([]byte("# Resource: x_thing\n\n## Example Usage\n\n```terraform\nresource \"x_thing\" \"a\" {}\n```\n\n## Attribute Reference\n\n"), "x_thing")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := check.CheckContext{Resource: "x_thing", Schema: rs, Doc: d, Type: &config.Type{Name: "resource", Sections: resourceSpec()}}
+	sp := (&check.SectionPresenceRule{}).Check(ctx)
+	if !hasMessage(sp, "missing required section: ## Argument Reference") {
+		t.Errorf("section_presence should report the missing section:\n%s", joinMessages(sp))
+	}
+	sd := (&check.SchemaDocsRule{}).Check(ctx)
+	if !hasMessage(sd, "no ## Argument Reference section, so 1 argument (`name`) isn't checked against the schema") {
+		t.Errorf("schema_docs should report the unchecked field:\n%s", joinMessages(sd))
+	}
+}
+
+// TestCoverage_PhantomEmptyObject guards that a heading for an object-typed
+// attribute whose object has no fields isn't reported as a phantom block.
+// tfplugindocs writes "### Nested Schema for `x`" for every such attribute,
+// e.g. cloudflare's `include.everyone`; with no Children the attribute wasn't
+// in nestedAttributeLeaves.
+func TestCoverage_PhantomEmptyObject(t *testing.T) {
+	t.Parallel()
+
+	rs := &schema.ResourceSchema{Name: "x_thing", Blocks: map[string]*schema.Block{
+		"": {Path: "", Attributes: []schema.Attribute{
+			{Name: "everyone", Optional: true, Object: true},
+			{Name: "nothing", Optional: true},
+		}},
+	}}
+	src := "# Resource: x_thing\n\n## Argument Reference\n\n* `everyone` - (Optional) E.\n* `nothing` - (Optional) N.\n\n### `everyone`\n\n### `nothing`\n\n### `ghost`\n"
+	d, err := doc.Parse([]byte(src), "x_thing")
+	if err != nil {
+		t.Fatal(err)
+	}
+	results := (&check.SchemaDocsRule{}).Check(check.CheckContext{Resource: "x_thing", Schema: rs, Doc: d})
+	if hasMessage(results, `"everyone" in Argument Reference has no matching block`) {
+		t.Errorf("empty object heading reported as phantom:\n%s", joinMessages(results))
+	}
+	for _, want := range []string{`"nothing" in Argument Reference has no matching block`, `"ghost" in Argument Reference has no matching block`} {
+		if !hasMessage(results, want) {
+			t.Errorf("missing %q in:\n%s", want, joinMessages(results))
 		}
 	}
 }

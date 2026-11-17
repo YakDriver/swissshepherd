@@ -5,6 +5,7 @@ package check
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/YakDriver/swissshepherd/internal/doc"
@@ -20,7 +21,20 @@ import (
 //     true, validates identity import block and ### Identity Schema subsection
 type ImportSectionRule struct {
 	RequireIdentitySection bool
+
+	// AllowLanguages lists the accepted code block languages. Empty means
+	// DefaultImportLanguages.
+	AllowLanguages []string
+
+	// AllowNoImportBlock drops the requirement that the first code block be
+	// a terraform import block ("import {"); tfplugindocs import examples
+	// may be shell only.
+	AllowNoImportBlock bool
 }
+
+// DefaultImportLanguages are the import code block languages accepted when
+// ImportSectionRule.AllowLanguages is empty.
+var DefaultImportLanguages = []string{"terraform", "console"}
 
 func (r *ImportSectionRule) Name() string { return "import_section" }
 
@@ -62,13 +76,19 @@ func (r *ImportSectionRule) Check(ctx CheckContext) []Result {
 	}
 
 	// --- Code block checks ---
-	cannotImport := len(section.Paragraphs) > 0 && strings.Contains(paragraphText(section.Paragraphs[0], source), "cannot import")
+	cannotImport := len(section.Paragraphs) > 0 && statesNoImport(paragraphText(section.Paragraphs[0], source))
 
-	if !cannotImport && len(section.FencedCodeBlocks) == 0 {
-		add(SeverityError, "import section should have at least one code block (or state that the resource cannot be imported)")
+	if len(section.FencedCodeBlocks) == 0 {
+		if !cannotImport {
+			add(SeverityError, "import section should have at least one code block (or state that the resource cannot be imported)")
+		}
 		return results
 	}
 
+	langs := r.AllowLanguages
+	if len(langs) == 0 {
+		langs = DefaultImportLanguages
+	}
 	hitConsole := false
 	for i, cb := range section.FencedCodeBlocks {
 		lang := string(cb.Language(source))
@@ -85,11 +105,11 @@ func (r *ImportSectionRule) Check(ctx CheckContext) []Result {
 			add(SeverityError, fmt.Sprintf("import code block should contain resource name %q", ctx.Resource))
 		}
 
-		if lang != "terraform" && lang != "console" {
-			add(SeverityError, fmt.Sprintf("import code block type should be 'terraform' or 'console', got %q", lang))
+		if !slices.Contains(langs, lang) {
+			add(SeverityError, fmt.Sprintf("import code block type should be %s, got %q", quotedOr(langs), lang))
 		}
 
-		if i == 0 && (lang != "terraform" || !strings.HasPrefix(text, "import {")) {
+		if !r.AllowNoImportBlock && i == 0 && (lang != "terraform" || !strings.HasPrefix(text, "import {")) {
 			add(SeverityError, "first import code block should be ```terraform with an import block (import {)")
 		}
 
@@ -97,7 +117,7 @@ func (r *ImportSectionRule) Check(ctx CheckContext) []Result {
 			add(SeverityError, "import code block type 'console' should begin with '% '")
 		}
 
-		if lang == "console" {
+		if lang == "console" || lang == "shell" {
 			hitConsole = true
 		}
 		if hitConsole && lang == "terraform" && strings.HasPrefix(text, "import ") {
@@ -164,6 +184,39 @@ func (r *ImportSectionRule) checkIdentity(ctx CheckContext, section *doc.Section
 			add(SeverityWarning, fmt.Sprintf("documented identity attribute %q does not exist in identity schema", name))
 		}
 	}
+}
+
+// statesNoImport reports whether an import section's first paragraph says
+// the resource can't be imported: "cannot import", or the "does not
+// (currently) support `terraform import`" that tfplugindocs-based providers
+// write.
+func statesNoImport(text string) bool {
+	t := strings.ToLower(text)
+	if strings.Contains(t, "cannot import") || strings.Contains(t, "cannot be imported") {
+		return true
+	}
+	_, after, ok := strings.Cut(t, "does not ")
+	if !ok {
+		return false
+	}
+	after = strings.TrimPrefix(after, "currently ")
+	return strings.HasPrefix(after, "support") && strings.Contains(after, "import")
+}
+
+// quotedOr renders ["a", "b", "c"] as "'a', 'b', or 'c'" ("'a' or 'b'" for
+// two).
+func quotedOr(xs []string) string {
+	q := make([]string, len(xs))
+	for i, x := range xs {
+		q[i] = "'" + x + "'"
+	}
+	switch len(q) {
+	case 1:
+		return q[0]
+	case 2:
+		return q[0] + " or " + q[1]
+	}
+	return strings.Join(q[:len(q)-1], ", ") + ", or " + q[len(q)-1]
 }
 
 // parseIdentityAttrs extracts attribute names from identity schema list items.
