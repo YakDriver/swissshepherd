@@ -2562,6 +2562,28 @@ func TestCoverage_ReviewRegressions(t *testing.T) {
 			md:   "## Argument Reference\n\n" + parents + "### `z` Block\n\n* `a1` - (Optional) A.\n\n### `z` Block\n\n* `a1` - (Optional) A.\n* `a2` - (Optional) A.\n",
 			want: `"a3" isn't listed`,
 		},
+		// allow_either_section: duplicate z headings needn't list an
+		// Optional+Computed field it names; the field may be documented in
+		// Attribute Reference. Without it, the omission is reported.
+		"duplicate headings omitting an either-section field": {
+			rs: z(
+				&schema.Block{Attributes: []schema.Attribute{{Name: "a1", Optional: true}, {Name: "tg", Optional: true, Computed: true}}},
+				&schema.Block{Attributes: []schema.Attribute{{Name: "a1", Optional: true}, {Name: "a2", Optional: true}, {Name: "tg", Optional: true, Computed: true}}},
+				nil,
+			),
+			md:      "## Argument Reference\n\n" + parents + "### `z` Block\n\n* `a1` - (Optional) A.\n\n### `z` Block\n\n* `a1` - (Optional) A.\n* `a2` - (Optional) A.\n",
+			rule:    check.SchemaDocsRule{AllowEitherSection: []string{"x.y.z.tg", "t.u.z.tg"}},
+			wantNot: `"tg" isn't listed`,
+		},
+		"duplicate headings omitting an Optional+Computed field": {
+			rs: z(
+				&schema.Block{Attributes: []schema.Attribute{{Name: "a1", Optional: true}, {Name: "tg", Optional: true, Computed: true}}},
+				&schema.Block{Attributes: []schema.Attribute{{Name: "a1", Optional: true}, {Name: "a2", Optional: true}, {Name: "tg", Optional: true, Computed: true}}},
+				nil,
+			),
+			md:   "## Argument Reference\n\n" + parents + "### `z` Block\n\n* `a1` - (Optional) A.\n\n### `z` Block\n\n* `a1` - (Optional) A.\n* `a2` - (Optional) A.\n",
+			want: `"tg" isn't listed`,
+		},
 		// A prose list after a combined heading leaves both aliases.
 		"prose after a combined heading": {
 			rs: &schema.ResourceSchema{Name: "aws_test", Blocks: map[string]*schema.Block{
@@ -3789,5 +3811,96 @@ func TestCoverage_EmptyObjectHeadingBullets(t *testing.T) {
 	}
 	if hasMessage(results, "has no matching block") {
 		t.Errorf("empty object heading reported as phantom:\n%s", joinMessages(results))
+	}
+}
+
+// TestCoverage_AllowEitherSection guards allow_either_section: an
+// Optional+Computed field it lists may be documented in either reference
+// section, never both, and must still be documented. Fields it doesn't
+// apply to (another type, or not Optional+Computed) keep their home.
+func TestCoverage_AllowEitherSection(t *testing.T) {
+	t.Parallel()
+
+	rs := &schema.ResourceSchema{Name: "x_thing", Blocks: map[string]*schema.Block{
+		"": {Path: "", Attributes: []schema.Attribute{
+			{Name: "arn", Computed: true},
+			{Name: "name", Optional: true},
+			{Name: "tags", Optional: true, Computed: true},
+		}},
+	}}
+	const (
+		head     = "# Data Source: x_thing\n\n"
+		args     = "## Argument Reference\n\n* `name` - (Optional) N.\n"
+		argsTags = "## Argument Reference\n\n* `name` - (Optional) N.\n* `tags` - (Optional) T.\n"
+		attrs    = "\n## Attribute Reference\n\n* `arn` - A.\n"
+		attrTags = "\n## Attribute Reference\n\n* `arn` - A.\n* `tags` - T.\n"
+		move     = `argument "tags" is Optional+Computed in the schema but is documented only under Attribute Reference`
+	)
+	tests := []struct {
+		name    string
+		allow   []string
+		typ     string
+		src     string
+		want    []string
+		notWant []string
+	}{
+		{name: "output under Attribute Reference", allow: []string{"data_source/tags"}, typ: "data_source", src: args + attrTags, notWant: []string{`"tags"`}},
+		{name: "filter under Argument Reference", allow: []string{"data_source/tags"}, typ: "data_source", src: argsTags + attrs, notWant: []string{`"tags"`}},
+		{name: "bare entry", allow: []string{"tags"}, typ: "resource", src: args + attrTags, notWant: []string{`"tags"`}},
+		{
+			name: "listed in both", allow: []string{"data_source/tags"}, typ: "data_source", src: argsTags + attrTags,
+			want: []string{`attribute "tags" is listed in both Argument Reference (line 6) and Attribute Reference (line 11); keep one entry`},
+		},
+		{
+			name: "listed in neither", allow: []string{"data_source/tags"}, typ: "data_source", src: args + attrs,
+			want: []string{`attribute "tags" in block "(root)" is not documented`},
+		},
+		{
+			name: "labeled under Attribute Reference", allow: []string{"data_source/tags"}, typ: "data_source",
+			src:     args + "\n## Attribute Reference\n\n* `arn` - A.\n* `tags` - (Optional) T.\n",
+			want:    []string{`"tags"`, "should not have (Optional) label"},
+			notWant: []string{"move it to Argument Reference"},
+		},
+		{
+			name: "no Argument Reference section", allow: []string{"data_source/tags"}, typ: "data_source", src: attrTags,
+			want:    []string{"no ## Argument Reference section, so 1 argument (`name`) isn't checked against the schema"},
+			notWant: []string{move},
+		},
+		{
+			name: "no Argument Reference section, listed in neither", allow: []string{"data_source/tags"}, typ: "data_source", src: attrs,
+			want: []string{
+				"no ## Argument Reference section, so 1 argument (`name`) isn't checked against the schema",
+				`attribute "tags" in block "(root)" is not documented`,
+			},
+		},
+		{name: "other type", allow: []string{"data_source/tags"}, typ: "resource", src: args + attrTags, want: []string{move}},
+		{name: "unset", typ: "data_source", src: args + attrTags, want: []string{move}},
+		{
+			name: "plain Optional field isn't relaxed", allow: []string{"name"}, typ: "data_source",
+			src:  "## Argument Reference\n\n* `tags` - (Optional) T.\n\n## Attribute Reference\n\n* `arn` - A.\n* `name` - N.\n",
+			want: []string{`argument "name" is documented under Attribute Reference but is a configurable argument in the schema; move it to Argument Reference and label it (Optional)`},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			d, err := doc.Parse([]byte(head+tt.src), "x_thing")
+			if err != nil {
+				t.Fatal(err)
+			}
+			r := &check.SchemaDocsRule{IgnoreDeprecated: true, AllowEitherSection: tt.allow}
+			results := r.Check(check.CheckContext{Resource: "x_thing", Type: &config.Type{Name: tt.typ}, Schema: rs, Doc: d})
+			for _, w := range tt.want {
+				if !hasMessage(results, w) {
+					t.Errorf("missing %q in:\n%s", w, joinMessages(results))
+				}
+			}
+			for _, w := range tt.notWant {
+				if hasMessage(results, w) {
+					t.Errorf("unexpected %q in:\n%s", w, joinMessages(results))
+				}
+			}
+		})
 	}
 }

@@ -45,6 +45,8 @@ check "schema_docs" {
   skip_blocks_file       = "website/skip-blocks.txt" # same, one path per line; merged with skip_blocks.
                                                     # Setting either replaces the default ["timeouts"].
   allow_inline_read_only = false                    # see "Schema model" below
+  allow_either_section   = ["data_source/tags"]     # Optional+Computed fields that may be outputs: either
+                                                    # section, not both (see "Schema model"). Default: none.
 
   # Description options
   # Overrides the default weak/redundant/meta starts. Default:
@@ -162,9 +164,21 @@ The `coverage` sub-check enforces presence of every schema attribute at every de
 - **Optional** — may be set in configuration. Documented in `## Argument Reference` with `(Optional)`. Includes attributes that are both Optional and Computed: they're configurable, so they're arguments, and Argument Reference is their only home.
 - **Read-Only** — never set in configuration; always populated by the provider. Documented in `## Attribute Reference`, or — when `allow_inline_read_only = true` — inline in `## Argument Reference` with `(Read-Only)`.
 
-Every field has exactly one home, and is listed only there ([Field homes](field-homes.md), #111). A field listed in both reference sections for the same block is an error whatever its category, with the entry to remove: `argument "description" is listed in both Argument Reference (line 4) and Attribute Reference (line 9); remove the Attribute Reference entry`. For a computed-only field the Argument Reference entry is the one to remove; for a field with no single home (a `ConfigUnknown` object field, a computed-only field under `allow_inline_read_only = true`, or `id` and other `implicit_attributes`) the message says to keep one entry. The finding runs when `coverage` or `labels` is enabled.
+Every field has exactly one home, and is listed only there ([Field homes](field-homes.md), #111). A field listed in both reference sections for the same block is an error whatever its category, with the entry to remove: `argument "description" is listed in both Argument Reference (line 4) and Attribute Reference (line 9); remove the Attribute Reference entry`. For a computed-only field the Argument Reference entry is the one to remove; for a field with no single home (a `ConfigUnknown` object field, a computed-only field under `allow_inline_read_only = true`, a field listed in `allow_either_section`, or `id` and other `implicit_attributes`) the message says to keep one entry. The finding runs when `coverage` or `labels` is enabled.
 
 An Optional+Computed field may be an output the schema left Optional (terraform-provider-aws data-source `tags`, hashicorp/terraform-provider-aws#50491), so findings about one name both fixes. Documented only under Attribute Reference, it gets a warning: move it to Argument Reference if it can be set, or mark it Computed only in the schema if setting it has no effect. Listed in both sections, it's still an error, with the same two choices. See [Field homes](field-homes.md#optionalcomputed-that-may-be-an-output).
+
+When the provider knows which such fields are outputs but can't fix the schema yet, `allow_either_section` lists them, and each may then be documented in either section, but not both:
+
+```hcl
+check "schema_docs" {
+  # Data-source tags are filters on some data sources and outputs on the
+  # rest; the schema marks all of them Optional+Computed.
+  allow_either_section = ["data_source/tags"]
+}
+```
+
+An entry is a schema path (`tags`, `block.tags`), bare to apply to every type or qualified by a type name (`data_source/tags`). It applies only where the field is Optional+Computed (for a child block, where its configurable subtree is all Optional+Computed), so a bare `tags` never relaxes a resource's plain Optional `tags`. A listed field still has to be documented: listed nowhere is "is not documented", listed in both is an error that says to keep one entry, and an `(Optional)` label under Attribute Reference is still flagged for removal. Under Argument Reference it carries `(Optional)`, as the schema says. Delete an entry once the schema marks those fields Computed only.
 
 When a configurable argument (`Required` or `Optional`, including `Optional`+`Computed`) is instead documented under `## Attribute Reference`, the `labels` sub-check reports a *misplacement* — directing the author to move it to Argument Reference rather than to strip its (correct) label (issues #60, #62). For the design and rationale behind that detection — attribute-granular classification, heading→schema-path resolution, path-based severity (a genuine root scalar is a warning; every nested move is an error), and the measured corpus evidence — see [Argument/Attribute-Reference Misplacement](argument-attribute-misplacement.md). When such an argument carries no label at all, `labels` can't tell it from a computed output, so `coverage` reports it instead, with the label to add: `argument "name" is documented under Attribute Reference but is a configurable argument in the schema; move it to Argument Reference and label it (Required)`. Severity matches the labeled case: a warning at the root, an error when nested (a warning if the field is deprecated).
 

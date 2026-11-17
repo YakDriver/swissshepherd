@@ -152,6 +152,11 @@ type CheckConfig struct {
 	SkipBlocksFile      string   `hcl:"skip_blocks_file,optional"`
 	AllowInlineReadOnly *bool    `hcl:"allow_inline_read_only,optional"`
 
+	// AllowEitherSection lists Optional+Computed schema_docs fields that
+	// may be documented in either reference section, as schema paths, bare
+	// or qualified by type name ("data_source/tags").
+	AllowEitherSection []string `hcl:"allow_either_section,optional"`
+
 	// DescriptionStyle rule options.
 	BadPrefixes []string `hcl:"bad_prefixes,optional"`
 
@@ -363,6 +368,9 @@ func Load(path string) (*Config, error) {
 	if err := cfg.validateSeverity(); err != nil {
 		return nil, fmt.Errorf("config %s: %w", path, err)
 	}
+	if err := cfg.validateAllowEitherSection(); err != nil {
+		return nil, fmt.Errorf("config %s: %w", path, err)
+	}
 
 	return &cfg, nil
 }
@@ -507,6 +515,33 @@ func (c *Config) validateSeverity() error {
 		case "", "error", "warning", "warn":
 		default:
 			return fmt.Errorf("check %q: severity %q must be \"error\" or \"warning\"", ch.Name, ch.Severity)
+		}
+	}
+	return nil
+}
+
+// validateAllowEitherSection rejects allow_either_section outside
+// schema_docs, and an entry that would match nothing: an empty path, or a
+// type qualifier that names no type.
+func (c *Config) validateAllowEitherSection() error {
+	for _, ch := range c.Checks {
+		if len(ch.AllowEitherSection) == 0 {
+			continue
+		}
+		if ch.Name != "schema_docs" {
+			return fmt.Errorf("check %q: allow_either_section is only supported in check \"schema_docs\"", ch.Name)
+		}
+		for _, e := range ch.AllowEitherSection {
+			t, p, qualified := strings.Cut(e, "/")
+			if !qualified {
+				p = t
+			}
+			if p == "" || strings.Contains(p, "/") {
+				return fmt.Errorf("check %q: allow_either_section entry %q must be a schema path, optionally qualified by type (\"data_source/tags\")", ch.Name, e)
+			}
+			if qualified && c.GetType(t) == nil {
+				return fmt.Errorf("check %q: allow_either_section entry %q names unknown type %q", ch.Name, e, t)
+			}
 		}
 	}
 	return nil

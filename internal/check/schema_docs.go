@@ -56,6 +56,14 @@ type SchemaDocsRule struct {
 	AllowPhantoms      []string
 	SkipBlocks         []string
 
+	// AllowEitherSection lists Optional+Computed fields, as schema paths,
+	// bare ("tags") or type-qualified ("data_source/tags"), that the schema
+	// marks Optional but that may be outputs: each may be documented in
+	// either reference section, not both (docs/rules/field-homes.md). either
+	// holds the entries that apply to the current target (forTarget).
+	AllowEitherSection []string
+	either             []string
+
 	// AllowInlineReadOnly permits Read-Only (computed-only) attributes to
 	// be documented inline in Argument Reference with a "(Read-Only)" label,
 	// alongside Required and Optional siblings, instead of requiring them
@@ -187,12 +195,26 @@ func (r *SchemaDocsRule) forTarget(ctx CheckContext) *SchemaDocsRule {
 	if ctx.Type != nil {
 		typeName = ctx.Type.Name
 	}
+	var either []string
+	for _, e := range r.AllowEitherSection {
+		t, p, qualified := strings.Cut(e, "/")
+		switch {
+		case !qualified:
+			either = append(either, e)
+		case t == typeName:
+			either = append(either, p)
+		}
+	}
 	i := slices.IndexFunc(r.Overrides, func(o config.Override) bool { return o.Matches(ctx.Resource, typeName) })
-	if i < 0 {
+	if i < 0 && len(either) == 0 {
 		return r
 	}
-	o := r.Overrides[i]
 	c := *r
+	c.either = either
+	if i < 0 {
+		return &c
+	}
+	o := r.Overrides[i]
 	if o.Coverage != nil {
 		c.Coverage = o.Coverage
 	}
@@ -456,7 +478,7 @@ func (r *SchemaDocsRule) homeMissing(ctx CheckContext, b *schema.Block, attr sch
 	attrs := !r.sectionMissing(ctx, config.SectionAttributes)
 	computedOnly := attr.Computed && !attr.Optional && !attr.Required
 	switch {
-	case b.ConfigUnknown || (computedOnly && r.allowInlineReadOnly()):
+	case b.ConfigUnknown || (computedOnly && r.allowInlineReadOnly()) || r.eitherSection(ctx.Schema, b.Path, attr.Name):
 		return !args && !attrs
 	case computedOnly:
 		return !attrs
@@ -543,7 +565,7 @@ func (r *SchemaDocsRule) checkMissingHomes(ctx CheckContext) []Result {
 // bullet is left to labels' move finding, so the two never both fire.
 // Severity follows that finding: a warning for a root scalar (#62).
 func (r *SchemaDocsRule) outsideHome(ctx CheckContext, p string, attr schema.Attribute, argSection, attrSection *doc.DocBlock) (Result, bool) {
-	if attrSection == nil || !configurableArgAtPath(ctx.Schema, p, attr.Name) {
+	if attrSection == nil || !configurableArgAtPath(ctx.Schema, p, attr.Name) || r.eitherSection(ctx.Schema, p, attr.Name) {
 		return Result{}, false
 	}
 	if argSection != nil && slices.ContainsFunc(argSection.Attributes, func(a doc.DocAttribute) bool { return a.Name == attr.Name }) {
@@ -592,6 +614,16 @@ func optionalComputedOnly(rs *schema.ResourceSchema, p, f string) bool {
 	}
 	c, ok := childPathForAttr(p, b, f)
 	return ok && !blockTreeHasSettable(rs, c, make(map[string]bool))
+}
+
+// eitherSection reports whether field f at path p is listed in
+// allow_either_section for this target and is an argument only through
+// Optional+Computed. Such a field has no single home: it may be listed in
+// either reference section, not both, and is still required to be listed
+// in one. A Required or plain Optional field is never relaxed, so a bare
+// entry can't loosen a real argument of another type.
+func (r *SchemaDocsRule) eitherSection(rs *schema.ResourceSchema, p, f string) bool {
+	return slices.Contains(r.either, joinPath(p, f)) && optionalComputedOnly(rs, p, f)
 }
 
 // blockTreeHasSettable reports whether the subtree at path has a Required
@@ -1054,7 +1086,7 @@ func labelFor(a schema.Attribute) string {
 // no single home.
 func (r *SchemaDocsRule) homeOnlyIn(rs *schema.ResourceSchema, p, f string, inAttrs bool) bool {
 	b := rs.Blocks[p]
-	if b.ConfigUnknown {
+	if b.ConfigUnknown || r.eitherSection(rs, p, f) {
 		return false
 	}
 	var arg bool
@@ -1410,7 +1442,7 @@ func (r *SchemaDocsRule) fitMismatches(rs *schema.ResourceSchema, o doc.Occurren
 		return n
 	}
 	for _, sa := range b.Attributes {
-		if listed[sa.Name] || slices.Contains(r.implicit(), sa.Name) || (r.IgnoreDeprecated && sa.Deprecated) {
+		if listed[sa.Name] || slices.Contains(r.implicit(), sa.Name) || r.eitherSection(rs, p, sa.Name) || (r.IgnoreDeprecated && sa.Deprecated) {
 			continue
 		}
 		arg := sa.Required || sa.Optional
@@ -2880,7 +2912,7 @@ func (r *SchemaDocsRule) attributeMisplacementFindings(ctx CheckContext) []Resul
 			case placementStripLabel:
 				strips = append(strips, stripEntry{name, attr})
 			case placementMisplaced:
-				if slices.Contains(r.implicit(), attr.Name) {
+				if slices.Contains(r.implicit(), attr.Name) || r.eitherSection(ctx.Schema, path, attr.Name) {
 					// implicit_attributes (id, tags_all) aren't held to a home;
 					// SDKv2 reports some as Optional+Computed. A label on one is
 					// still wrong under Attribute Reference.

@@ -14,6 +14,7 @@ Issue #111. This rule decides which reference section a field belongs in. It sup
 | a child block whose subtree has any `Required` or `Optional` field | Argument Reference |
 | Computed-only, or a child block whose subtree has no `Required` or `Optional` field | Attribute Reference; Argument Reference instead is allowed when `allow_inline_read_only = true` |
 | any field of a `ConfigUnknown` block (configurable object-typed attribute) | unknowable: either section |
+| an argument only through `Optional` + `Computed`, listed in `allow_either_section` | declared unknowable: either section |
 
 Two consequences, checked separately:
 
@@ -41,6 +42,14 @@ Its home is still Argument Reference: a correct `tags - (Optional)` filter in Ar
 
 What this gives up: an Optional+Computed field that really is an input, documented only under Attribute Reference, gets a warning instead of an error. It's still reported.
 
+#### `allow_either_section`
+
+The warning is right until the schema is fixed, and in terraform-provider-aws that can take a long time (hashicorp/terraform-provider-aws#50497). A warning nobody can clear trains people to ignore warnings, so a provider can instead say which fields the schema can't be trusted on: `allow_either_section = ["data_source/tags"]`. Each listed field then has home "either", like a `ConfigUnknown` field: no move finding in either section, "keep one entry" for a repeat, and it must still be documented somewhere. The provider states the uncertainty in config, so swissshepherd isn't guessing.
+
+An entry applies only where the field is an argument only through Optional+Computed, so it can't relax a Required or plain Optional field, such as a resource's `tags`. A labeled entry under Attribute Reference keeps the strip-label finding, as for `implicit_attributes`. A subsection in Attribute Reference that documents one still isn't collapsed into "move this subsection", since the field may be an output.
+
+What it gives up, and nothing reports instead: an entry's field that really is an input (a data source that filters on `tags`) documented only under Attribute Reference passes. Remove the entry when the schema marks the outputs Computed only (hashicorp/terraform-provider-aws#50581); the filters then keep their Optional+Computed flag and their Argument Reference home.
+
 ### `ConfigUnknown`
 
 `ConfigUnknown` stays "either": the schema doesn't say whether each field is configurable (see [object-typed-attributes.md](object-typed-attributes.md)), so the home can't be named without guessing. A repeat is still certain, so it's reported, with a neutral fix.
@@ -54,7 +63,7 @@ For each schema path P (sorted, excluding `skip_blocks`) whose Argument Referenc
 | Argument Reference | remove the Attribute Reference entry |
 | Argument Reference, only through Optional+Computed | remove the Attribute Reference entry if it can be set; otherwise the Argument Reference entry, and fix the schema |
 | Attribute Reference | remove the Argument Reference entry |
-| either (`ConfigUnknown`, computed-only with `allow_inline_read_only = true`, or `implicit_attributes`) | keep one entry |
+| either (`ConfigUnknown`, computed-only with `allow_inline_read_only = true`, `allow_either_section`, or `implicit_attributes`) | keep one entry |
 
 Message: `argument "F" in block "P" is listed in both Argument Reference (line L1) and Attribute Reference (line L2); <fix>`. `attribute` instead of `argument` when the home is Attribute Reference. Root fields omit `in block`.
 
