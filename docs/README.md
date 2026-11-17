@@ -404,7 +404,7 @@ check "import_section" {
 
 ### `region_argument`
 
-Validates that region-aware resources document the `region` argument. Only fires for types with `region_aware = true` in their type block (resources, data sources, ephemerals by default).
+Validates that region-aware resources document the `region` argument. Only fires for types with `region_aware = true` in their type block (resources, data sources, ephemerals, and list resources by default).
 
 ```hcl
 check "region_argument" {
@@ -674,7 +674,7 @@ swissshepherd --schema-json path/to/schema.json --provider-source registry.terra
 - **Type-driven architecture** — documentation categories are config, not code. Adding a new Terraform category is a config change
 - **Per-check path scoping** — each rule rolls out independently via `types`, `prefixes`, `targets`, `ignore_targets`, `ignore_prefixes`
 - **Config-driven** — HCL configuration via [hcl/v2](https://github.com/hashicorp/hcl); no magic values
-- **Global checks** run once per invocation (directory layout, file mismatch)
+- **Global checks** run once per invocation (`file_match`)
 - **YAML frontmatter** parsed with [yaml.v3](https://gopkg.in/yaml.v3)
 
 ## License
