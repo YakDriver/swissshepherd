@@ -39,7 +39,7 @@ The order of `section` blocks IS the canonical doc order. A type with no `sectio
 
 ## Canonical section names
 
-`title`, `signature`, `example`, `arguments`, `attributes`, `timeouts`, `import` — recognized by the parser and have fixed heading text by convention (e.g. `arguments` → `## Argument Reference`, `example` → `## Example Usage`).
+`title`, `signature`, `example`, `arguments`, `attributes`, `timeouts`, `import` — recognized by the parser and have fixed heading text by convention (e.g. `arguments` → `## Argument Reference`, `example` → `## Example Usage`). The type's `arguments_heading` and `attributes_heading` change the text of those two (`"Arguments"` for functions, `"Schema"` in the tfplugindocs doc style, see [doc-style.md](doc-style.md)); findings name the configured text. In the reference doc style, any heading beginning with `Argument` or `Attribute` is also read as that section.
 
 ## Custom section names
 

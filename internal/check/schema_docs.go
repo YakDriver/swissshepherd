@@ -45,6 +45,11 @@ var DefaultBadDescriptionPrefixes = []string{
 //   - Format: no code blocks, single-line attrs, uninterrupted lists
 //   - Labels: arguments have (Required)/(Optional), attributes do not
 type SchemaDocsRule struct {
+	// Tfplugindocs is set for doc_style = "tfplugindocs": labels come from
+	// the Required/Optional/Read-Only group a field is listed under, and
+	// findings name the group rather than an inline label.
+	Tfplugindocs bool
+
 	// Coverage options
 	IgnoreDeprecated   bool
 	ImplicitAttributes []string
@@ -140,11 +145,14 @@ func (r *SchemaDocsRule) Check(ctx CheckContext) []Result {
 	}
 	if enabled(r.Coverage) {
 		results = append(results, r.checkCoverage(ctx, idx, shared)...)
+		results = append(results, r.checkFunctionArguments(ctx)...)
 	}
 	if idx != nil {
 		results = append(results, r.checkRepeated(ctx, idx)...)
 	}
-	if enabled(r.Ordering) {
+	// A function's arguments are positional, so their order isn't a style
+	// choice.
+	if enabled(r.Ordering) && ctx.FunctionSchema == nil {
 		results = append(results, r.checkOrdering(ctx)...)
 	}
 	if enabled(r.Description) {
@@ -235,6 +243,9 @@ func (r *SchemaDocsRule) checkCoverage(ctx CheckContext, idx map[*doc.DocBlock][
 		docBlocks := resolveSections(rs, ctx.Doc, blockPath)
 
 		if len(docBlocks) == 0 {
+			if r.blockDeferred(ctx, schemaBlock) {
+				continue // checkMissingHomes reports the missing section (#117)
+			}
 			if msg, ok := missing.message(blockPath); ok {
 				results = append(results, Result{
 					Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityError,
@@ -274,6 +285,9 @@ func (r *SchemaDocsRule) checkCoverage(ctx CheckContext, idx map[*doc.DocBlock][
 			if argDuplicated && !schemaBlock.ConfigUnknown {
 				continue
 			}
+			if !documented[attr.Name] && r.homeMissing(ctx, schemaBlock, attr) {
+				continue // checkMissingHomes reports the missing section (#117)
+			}
 			if !documented[attr.Name] {
 				msg := fmt.Sprintf("attribute %q in block %q is not documented", attr.Name, displayPath(blockPath)) +
 					missingPointer(rs, idx, argSection, blockPath, attr.Name)
@@ -298,8 +312,11 @@ func (r *SchemaDocsRule) checkCoverage(ctx CheckContext, idx map[*doc.DocBlock][
 			}
 		}
 
-		// Doc → schema: documented attributes should exist in schema.
-		if len(schemaBlock.Attributes) == 0 && len(schemaBlock.ChildBlocks) == 0 {
+		// Doc → schema: documented attributes should exist in schema. A
+		// block with no fields is skipped, except an empty object's: its
+		// heading is accepted (checkPhantomBlocks), so a bullet under it
+		// would otherwise go unchecked.
+		if len(schemaBlock.Attributes) == 0 && len(schemaBlock.ChildBlocks) == 0 && !schemaBlock.Object {
 			continue
 		}
 		schemaAttrNames := make(map[string]bool, len(schemaBlock.Attributes))
@@ -352,12 +369,170 @@ func (r *SchemaDocsRule) checkCoverage(ctx CheckContext, idx map[*doc.DocBlock][
 	// Attributes: Read-Only (computed-only) coverage across all schema blocks.
 	results = append(results, r.checkAttributeCoverage(ctx)...)
 
+	results = append(results, r.checkMissingHomes(ctx)...)
 	results = append(results, r.checkPhantomBlocks(ctx)...)
 	results = append(results, r.checkOrphans(ctx)...)
 	results = append(results, r.checkDuplicateHeadings(ctx)...)
 	results = append(results, r.checkUnresolvedSections(ctx)...)
 	results = append(results, r.sharedSectionResults(ctx, shared)...)
 
+	return results
+}
+
+// checkFunctionArguments compares a tfplugindocs function page's
+// ## Arguments list with the function's parameters, both ways. Only the
+// tfplugindocs style reads that list as fields ("1. `name` (Type) ...");
+// the reference style's argument bullets for functions aren't parsed, so
+// it's skipped there.
+func (r *SchemaDocsRule) checkFunctionArguments(ctx CheckContext) []Result {
+	fs := ctx.FunctionSchema
+	if !r.Tfplugindocs || ctx.Schema != nil || fs == nil || ctx.Doc == nil || ctx.Doc.Sections.Arguments == nil {
+		return nil
+	}
+	params := slices.Clone(fs.ParameterNames)
+	if fs.VariadicParameter != "" {
+		params = append(params, fs.VariadicParameter)
+	}
+	documented := make(map[string]int)
+	if b := ctx.Doc.ArgumentBlocks[""]; b != nil {
+		for _, a := range b.Attributes {
+			if _, seen := documented[a.Name]; !seen {
+				documented[a.Name] = a.Line
+			}
+		}
+	}
+	var results []Result
+	for _, p := range params {
+		if _, ok := documented[p]; !ok {
+			results = append(results, Result{
+				Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityError,
+				Message: fmt.Sprintf("function parameter %q is not documented in %s", p, ctx.Doc.Sections.Arguments.Text),
+			})
+		}
+	}
+	for _, name := range slices.Sorted(maps.Keys(documented)) {
+		if !slices.Contains(params, name) {
+			results = append(results, Result{
+				Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityError, Line: documented[name],
+				Message: fmt.Sprintf("documented function argument %q is not a parameter of the function", name),
+			})
+		}
+	}
+	return results
+}
+
+// sectionMissing reports whether the doc has no section n (arguments or
+// attributes). A Document built without Sections counts as having both.
+func (r *SchemaDocsRule) sectionMissing(ctx CheckContext, n config.SectionName) bool {
+	s := ctx.Doc.Sections
+	if s == nil {
+		return false
+	}
+	if n == config.SectionArguments {
+		return s.Arguments == nil
+	}
+	return s.Attributes == nil
+}
+
+// blockDeferred reports whether an undocumented block b is left to
+// checkMissingHomes: its configurable fields' only home, the arguments
+// section, is missing. A ConfigUnknown block's fields may be in either
+// section, so it's deferred only when both are missing.
+func (r *SchemaDocsRule) blockDeferred(ctx CheckContext, b *schema.Block) bool {
+	if !r.sectionMissing(ctx, config.SectionArguments) {
+		return false
+	}
+	return !b.ConfigUnknown || r.sectionMissing(ctx, config.SectionAttributes)
+}
+
+// homeMissing reports whether every section attr at b may be documented in
+// (docs/rules/field-homes.md) is absent from the doc, so coverage can't
+// check it. A configurable field's home is the arguments section; a
+// computed-only field's is the attributes section, or either with
+// allow_inline_read_only; a field of a ConfigUnknown block may be in
+// either.
+func (r *SchemaDocsRule) homeMissing(ctx CheckContext, b *schema.Block, attr schema.Attribute) bool {
+	args := !r.sectionMissing(ctx, config.SectionArguments)
+	attrs := !r.sectionMissing(ctx, config.SectionAttributes)
+	computedOnly := attr.Computed && !attr.Optional && !attr.Required
+	switch {
+	case b.ConfigUnknown || (computedOnly && r.allowInlineReadOnly()):
+		return !args && !attrs
+	case computedOnly:
+		return !attrs
+	}
+	return !args
+}
+
+// checkMissingHomes reports, once per missing reference section, the fields
+// coverage can't check because every section they may be documented in is
+// absent (#117): "no ## Argument Reference section, so 3 arguments (`a`,
+// `b`, `c`) aren't checked against the schema". It's a warning: the doc
+// may document them in a section swissshepherd doesn't read (a tfplugindocs
+// ## Schema under the reference style), and section_presence reports the
+// missing section as an error when the type requires it. The per-field and
+// per-block coverage findings for those fields are suppressed in its favor,
+// since they'd say the fields are undocumented when the cause is the
+// missing section. A field listed in some other section isn't counted:
+// coverage checks it there (outsideHome).
+func (r *SchemaDocsRule) checkMissingHomes(ctx CheckContext) []Result {
+	rs := ctx.Schema
+	if rs == nil || ctx.Doc == nil {
+		return nil
+	}
+	var args, attrs []string
+	argsHasReadOnly := false
+	for _, p := range slices.Sorted(maps.Keys(rs.Blocks)) {
+		b := rs.Blocks[p]
+		if b == nil || slices.Contains(r.skipBlocks(), p) {
+			continue
+		}
+		for _, attr := range b.Attributes {
+			if slices.Contains(r.implicit(), attr.Name) || (r.IgnoreDeprecated && attr.Deprecated) {
+				continue
+			}
+			if !r.homeMissing(ctx, b, attr) || slices.ContainsFunc(resolveSections(rs, ctx.Doc, p), func(d *doc.DocBlock) bool { return docBlockHasAttr(d, attr.Name) }) {
+				continue
+			}
+			name := joinPath(p, attr.Name)
+			computedOnly := attr.Computed && !attr.Optional && !attr.Required
+			if computedOnly && !b.ConfigUnknown && !r.allowInlineReadOnly() {
+				attrs = append(attrs, name)
+				continue
+			}
+			args = append(args, name)
+			argsHasReadOnly = argsHasReadOnly || computedOnly
+		}
+	}
+	var results []Result
+	add := func(n config.SectionName, names []string, noun string) {
+		if len(names) == 0 {
+			return
+		}
+		slices.Sort(names) // schema.Block.Attributes order isn't stable
+		heading := n.HeadingText()
+		if ctx.Type != nil {
+			heading = ctx.Type.HeadingText(n)
+		}
+		shown := names[:min(len(names), 3)]
+		list := "`" + strings.Join(shown, "`, `") + "`"
+		if len(names) > len(shown) {
+			list += fmt.Sprintf(", and %d more", len(names)-len(shown))
+		}
+		results = append(results, Result{
+			Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityWarning,
+			Message: fmt.Sprintf("no ## %s section, so %d %s (%s) %s checked against the schema", heading, len(names), noun, list, plural(len(names), "isn't", "aren't")),
+		})
+	}
+	noun := "arguments"
+	if argsHasReadOnly {
+		noun = "fields"
+	}
+	if len(args) == 1 {
+		noun = strings.TrimSuffix(noun, "s")
+	}
+	add(config.SectionArguments, args, noun)
+	add(config.SectionAttributes, attrs, plural(len(attrs), "Read-Only attribute", "Read-Only attributes"))
 	return results
 }
 
@@ -566,14 +741,14 @@ func (r *SchemaDocsRule) checkRepeated(ctx CheckContext, idx map[*doc.DocBlock][
 				}
 				need := r.neededElsewhere(ctx, idx, section, p, f, inAttrs)
 				if len(need) == 0 {
-					return fmt.Sprintf("remove the %s entry", referenceName(inAttrs))
+					return fmt.Sprintf("remove the %s entry", r.referenceName(inAttrs))
 				}
 				verb := "needs"
 				if len(need) > 1 {
 					verb = "need"
 				}
 				return fmt.Sprintf("don't remove the %s entry: section %q (line %d) also documents %s, which %s it; give the paths that need it a heading that resolves only to them, e.g. %q",
-					referenceName(inAttrs), section.Name, section.HeadingLine, pointerList(need), verb, doc.RenderHeading(r.pathTemplate(), need[0]))
+					r.referenceName(inAttrs), section.Name, section.HeadingLine, pointerList(need), verb, doc.RenderHeading(r.pathTemplate(), need[0]))
 			}
 			// implicit_attributes (id, tags_all) aren't held to a home: SDKv2
 			// reports id as Optional+Computed whether or not anyone sets it.
@@ -900,7 +1075,7 @@ func (r *SchemaDocsRule) sharedSectionResults(ctx CheckContext, shared []sharedS
 	for _, sh := range shared {
 		n := len(sh.served)
 		for _, c := range sh.conflicts {
-			head := fmt.Sprintf("section %q (line %d) in %s documents %d paths; ", sh.key, sh.block.HeadingLine, referenceName(sh.inAttrs), n)
+			head := fmt.Sprintf("section %q (line %d) in %s documents %d paths; ", sh.key, sh.block.HeadingLine, r.referenceName(sh.inAttrs), n)
 			var what, cond string
 			switch c.kind {
 			case 1:
@@ -1016,7 +1191,7 @@ func (r *SchemaDocsRule) checkUnresolvedSections(ctx CheckContext) []Result {
 			}
 			results = append(results, Result{
 				Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityWarning, Line: b.HeadingLine,
-				Message: fmt.Sprintf("heading %q in %s documents no block (%s), so its fields aren't checked against the schema", b.Heading, referenceName(inAttrs), why),
+				Message: fmt.Sprintf("heading %q in %s documents no block (%s), so its fields aren't checked against the schema", b.Heading, r.referenceName(inAttrs), why),
 			})
 		}
 	}
@@ -1058,7 +1233,7 @@ func (r *SchemaDocsRule) checkDuplicateHeadings(ctx CheckContext) []Result {
 		if inAttrs {
 			blocks = ctx.Doc.AttributeBlocks
 		}
-		section := referenceName(inAttrs)
+		section := r.referenceName(inAttrs)
 		for _, key := range slices.Sorted(maps.Keys(blocks)) {
 			b := blocks[key]
 			if !duplicated(b) {
@@ -1271,11 +1446,11 @@ func (r *SchemaDocsRule) checkOrphans(ctx CheckContext) []Result {
 		results = append(results, Result{Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityWarning, Message: msg, Line: line})
 	}
 	for _, o := range ctx.Doc.Orphans {
-		add(o.Line, fmt.Sprintf("heading %q in %s isn't a recognized block heading, so its bullets aren't checked against the schema", o.Text, referenceName(o.InAttributes)), headingNames(o.Text))
+		add(o.Line, fmt.Sprintf("heading %q in %s isn't a recognized block heading, so its bullets aren't checked against the schema", o.Text, r.referenceName(o.InAttributes)), headingNames(o.Text))
 	}
 	for _, ps := range proseSections(ctx.Schema, ctx.Doc) {
 		msg := fmt.Sprintf("list introduced by prose (%q) in %s documents %q without a block heading; use a block heading, e.g. %q",
-			truncate(ps.Text, 80), referenceName(ps.InAttributes), ps.key, doc.RenderHeading(r.pathTemplate(), ps.key))
+			truncate(ps.Text, 80), r.referenceName(ps.InAttributes), ps.key, doc.RenderHeading(r.pathTemplate(), ps.key))
 		if ps.resumeLine > 0 {
 			msg += fmt.Sprintf(". The list runs on into fields of the enclosing section from line %d; end it before them", ps.resumeLine)
 		}
@@ -1285,7 +1460,12 @@ func (r *SchemaDocsRule) checkOrphans(ctx CheckContext) []Result {
 	return results
 }
 
-func referenceName(inAttributes bool) string {
+// referenceName names the reference section for messages: "Schema" for
+// every field in the tfplugindocs style.
+func (r *SchemaDocsRule) referenceName(inAttributes bool) string {
+	if r.Tfplugindocs {
+		return "Schema"
+	}
 	if inAttributes {
 		return "Attribute Reference"
 	}
@@ -1585,6 +1765,12 @@ func (r *SchemaDocsRule) undocumentedBlocks(ctx CheckContext) undocumented {
 		if p == "" || slices.Contains(r.skipBlocks(), p) || !hasConfigurableAttributes(b) {
 			continue
 		}
+		// A deferred block isn't reported, so it must not absorb its
+		// descendants either: a ConfigUnknown object below it can still be
+		// documented, and missed, in the section that exists.
+		if r.blockDeferred(ctx, b) {
+			continue
+		}
 		if len(resolveSections(ctx.Schema, ctx.Doc, p)) == 0 {
 			m[p] = true
 		}
@@ -1699,7 +1885,7 @@ func (r *SchemaDocsRule) checkPhantomBlocks(ctx CheckContext) []Result {
 			Rule:     r.Name(),
 			Resource: ctx.Resource,
 			Severity: SeverityError,
-			Message:  fmt.Sprintf("block heading %q in Argument Reference has no matching block in schema", block.Heading),
+			Message:  fmt.Sprintf("block heading %q in %s has no matching block in schema", block.Heading, r.referenceName(false)),
 			Block:    blockName,
 		})
 	}
@@ -1720,7 +1906,7 @@ func nestedAttributeLeaves(rs *schema.ResourceSchema) map[string]bool {
 	var walk func(attrs []schema.Attribute)
 	walk = func(attrs []schema.Attribute) {
 		for _, a := range attrs {
-			if len(a.Children) == 0 {
+			if len(a.Children) == 0 && !a.Object {
 				continue
 			}
 			leaves[a.Name] = true
@@ -1804,6 +1990,11 @@ func (r *SchemaDocsRule) checkAttributeCoverage(ctx CheckContext) []Result {
 				continue
 			}
 
+			// Defer only a field listed nowhere: one listed in Argument
+			// Reference while inline Read-Only is off still needs its move.
+			if !inArgs && r.homeMissing(ctx, schemaBlock, attr) {
+				continue // checkMissingHomes reports the missing section (#117)
+			}
 			key := blockPath + "." + attr.Name
 			if reported[key] {
 				continue
@@ -1815,6 +2006,10 @@ func (r *SchemaDocsRule) checkAttributeCoverage(ctx CheckContext) []Result {
 			case schemaBlock.ConfigUnknown:
 				// Section can't be dictated; report neutrally as undocumented.
 				msg = fmt.Sprintf("attribute %q in block %q is not documented", attr.Name, displayPath(blockPath))
+			case r.Tfplugindocs && blockPath == "":
+				msg = fmt.Sprintf("Read-Only attribute %q is not documented", attr.Name)
+			case r.Tfplugindocs:
+				msg = fmt.Sprintf("Read-Only attribute %q in block %q is not documented", attr.Name, displayPath(blockPath))
 			case blockPath == "":
 				msg = fmt.Sprintf("Read-Only attribute %q should be documented in Attribute Reference section", attr.Name)
 			default:
@@ -2259,6 +2454,11 @@ func (r *SchemaDocsRule) validateIndentedAttr(ctx CheckContext, attrStack []stri
 // --- Labels ---
 
 func (r *SchemaDocsRule) checkLabels(ctx CheckContext, idx map[*doc.DocBlock][]string) []Result {
+	if r.Tfplugindocs && ctx.Schema == nil {
+		// A function's arguments: tfplugindocs lists them without groups,
+		// and there's no block schema to label them against.
+		return nil
+	}
 	var results []Result
 
 	// Build set of attrs in attribute section to avoid false positives from
@@ -2328,9 +2528,13 @@ func (r *SchemaDocsRule) checkLabels(ctx CheckContext, idx map[*doc.DocBlock][]s
 			if allowReadOnly {
 				label = "(Required), (Optional), or (Read-Only)"
 			}
+			msg := fmt.Sprintf("argument %q in block %q is missing %s label", attr.Name, displayPath(blockName), label)
+			if r.Tfplugindocs {
+				msg = fmt.Sprintf("%q in block %q isn't listed under a Required, Optional, or Read-Only group", attr.Name, displayPath(blockName))
+			}
 			results = append(results, Result{
 				Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityWarning,
-				Message: fmt.Sprintf("argument %q in block %q is missing %s label", attr.Name, displayPath(blockName), label),
+				Message: msg,
 				Block:   blockName,
 				Line:    attr.Line,
 			})
@@ -2385,6 +2589,15 @@ func (r *SchemaDocsRule) labelCorrectness(ctx CheckContext, idx map[*doc.DocBloc
 	want := r.servedLabel(ctx.Schema, paths, attr.Name)
 	if want == "" {
 		return nil
+	}
+	// tfplugindocs lists a root id that has no schema description under
+	// Read-Only, whatever its flags (SDKv2 makes it Optional+Computed);
+	// older releases listed it by its flags (the ldap provider's docs), so
+	// both are right.
+	if r.Tfplugindocs && blockName == "" && attr.Name == "id" && attr.ReadOnly {
+		if a, ok := attrAt(ctx.Schema.Blocks[""], "id"); ok && !a.Described {
+			return nil
+		}
 	}
 	state := map[string]string{"(Required)": "required", "(Optional)": "optional", "(Read-Only)": "read-only"}[want]
 
@@ -2476,6 +2689,15 @@ func (r *SchemaDocsRule) labelCorrectness(ctx CheckContext, idx map[*doc.DocBloc
 	msg := fmt.Sprintf("argument %q is labeled %s but is %s in the schema; use %s", attr.Name, have, state, want)
 	if blockName != "" {
 		msg = fmt.Sprintf("argument %q in block %q is labeled %s but is %s in the schema; use %s", attr.Name, displayPath(blockName), have, state, want)
+	}
+	if r.Tfplugindocs {
+		// The label is the group the field is listed under.
+		g := strings.Trim(have, "()")
+		w := strings.Trim(want, "()")
+		msg = fmt.Sprintf("%q is listed under %s but is %s in the schema; list it under %s", attr.Name, g, state, w)
+		if blockName != "" {
+			msg = fmt.Sprintf("%q in block %q is listed under %s but is %s in the schema; list it under %s", attr.Name, displayPath(blockName), g, state, w)
+		}
 	}
 	return &Result{
 		Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityError,

@@ -182,6 +182,9 @@ func (r *Runner) runTarget(t *config.Type, name string, logOnError bool) ([]Resu
 
 	d, err := doc.ParseWithOptions(content, docPath, r.HeadingTemplates, doc.ParseOptions{
 		CaptureNestedAttributes: r.CaptureNestedAttrs,
+		ArgumentsHeading:        t.ArgumentsHeading,
+		AttributesHeading:       t.AttributesHeading,
+		Tfplugindocs:            r.Config.Tfplugindocs(),
 	})
 	if err != nil {
 		if logOnError {

@@ -89,7 +89,7 @@ func (r *SectionPresenceRule) checkPresence(ctx CheckContext) []Result {
 				Rule:     r.Name(),
 				Resource: ctx.Resource,
 				Severity: SeverityError,
-				Message:  fmt.Sprintf("missing required section: %s", sectionLabel(name)),
+				Message:  fmt.Sprintf("missing required section: %s", sectionLabel(ctx.Type, name)),
 			})
 		case spec.Forbidden && present:
 			results = append(results, Result{
@@ -97,7 +97,7 @@ func (r *SectionPresenceRule) checkPresence(ctx CheckContext) []Result {
 				Resource: ctx.Resource,
 				Severity: SeverityError,
 				Message: fmt.Sprintf("section %s is not allowed for type %q",
-					sectionLabel(name), ctx.Type.Name),
+					sectionLabel(ctx.Type, name), ctx.Type.Name),
 			})
 		}
 	}
@@ -147,7 +147,7 @@ func (r *SectionPresenceRule) checkOrder(ctx CheckContext) []Result {
 				Resource: ctx.Resource,
 				Severity: SeverityError,
 				Message: fmt.Sprintf("section %s appears before %s; expected the reverse order",
-					sectionLabel(present[i-1].name), sectionLabel(present[i].name)),
+					sectionLabel(ctx.Type, present[i-1].name), sectionLabel(ctx.Type, present[i].name)),
 			})
 		}
 	}
@@ -215,7 +215,7 @@ func (r *SectionPresenceRule) checkUnknown(ctx CheckContext) []Result {
 		// exact match.
 		headingText := section.Text
 		if headingText == "" {
-			headingText = name.HeadingText()
+			headingText = ctx.Type.HeadingText(name)
 		}
 		results = append(results, Result{
 			Rule:     r.Name(),
@@ -247,6 +247,7 @@ func checkTimeoutsAgainstSchema(ctx CheckContext, section *doc.Section) []Result
 		for _, attr := range timeoutsBlock.Attributes {
 			actions = append(actions, "'"+attr.Name+"'")
 		}
+		slices.Sort(actions) // schema.Block.Attributes order isn't stable
 		return []Result{{
 			Rule:     "section_presence",
 			Resource: ctx.Resource,
@@ -316,10 +317,11 @@ func canonicalSection(s *doc.Sections, name config.SectionName) *doc.Section {
 }
 
 // sectionLabel returns the user-facing label for a section, e.g.
-// "## Argument Reference" or "# <title>" for the H1 title.
-func sectionLabel(name config.SectionName) string {
+// "## Argument Reference" or "# <title>" for the H1 title, using the type's
+// configured heading text (arguments_heading, attributes_heading).
+func sectionLabel(t *config.Type, name config.SectionName) string {
 	if name == config.SectionTitle {
 		return "# <title>"
 	}
-	return "## " + name.HeadingText()
+	return "## " + t.HeadingText(name)
 }

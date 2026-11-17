@@ -5,6 +5,7 @@ package check_test
 
 import (
 	"fmt"
+	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -852,6 +853,180 @@ func TestSchemaDocsRule_Overrides(t *testing.T) {
 			}
 			if rule.Coverage != nil {
 				t.Error("Check modified the rule's own toggles")
+			}
+		})
+	}
+}
+
+// tfplugindocsCheck runs schema_docs the way doc_style = "tfplugindocs" sets
+// it up (config.StyledCheck): the ## Schema dialect, nested object fields
+// modeled as blocks, inline Read-Only, no skipped blocks, no description
+// style.
+func tfplugindocsCheck(t *testing.T, schemaFile, source, kind, name, src string) []check.Result {
+	t.Helper()
+	ps, err := schema.LoadFile(schemaFile, source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	schema.ExpandObjectAttributes(ps)
+	d, err := doc.ParseWithOptions([]byte(src), name, doc.DefaultHeadingTemplates(), doc.ParseOptions{
+		CaptureNestedAttributes: true, ArgumentsHeading: "Schema", Tfplugindocs: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rule := &check.SchemaDocsRule{
+		Tfplugindocs: true, IgnoreDeprecated: true,
+		AllowInlineReadOnly: new(true), SkipBlocks: []string{}, Description: new(false),
+	}
+	return rule.Check(check.CheckContext{Resource: name, Schema: ps.ResourceSchemaFor(kind, name), Doc: d})
+}
+
+// TestSchemaDocs_TfplugindocsFixtures guards that unedited tfplugindocs pages
+// pass, and that each edit a generator wouldn't make is reported with the
+// tfplugindocs remedy (#116): a deleted field, a field in the wrong group, a
+// dropped Deprecated marker, a deleted nested field.
+func TestSchemaDocs_TfplugindocsFixtures(t *testing.T) {
+	t.Parallel()
+
+	type fixture struct{ schema, source, kind, name, doc string }
+	cloudinit := fixture{"../../testdata/schema/cloudinit.json", "registry.terraform.io/hashicorp/cloudinit", "resource", "cloudinit_config", "../../testdata/docs/r/cloudinit_config_tfplugindocs.md"}
+	ldap := fixture{"../../testdata/schema/ldap.json", "registry.terraform.io/elastic-infra/ldap", "resource", "ldap_object", "../../testdata/docs/r/ldap_object_tfplugindocs.md"}
+	http := fixture{"../../testdata/schema/http.json", "registry.terraform.io/hashicorp/http", "data_source", "http", "../../testdata/docs/d/http_tfplugindocs.md"}
+
+	tests := []struct {
+		name          string
+		f             fixture
+		edit          func(string) string
+		want, wantNot string
+	}{
+		{name: "cloudinit unedited", f: cloudinit},
+		{name: "ldap unedited (bold names, id under Optional)", f: ldap},
+		{name: "http unedited (deprecated, id described)", f: http},
+		{
+			name: "root field deleted", f: cloudinit,
+			edit: dropLine("- `gzip` "),
+			want: `attribute "gzip" in block "(root)" is not documented`,
+		},
+		{
+			name: "nested field deleted", f: cloudinit,
+			edit: dropLine("- `content` "),
+			want: `attribute "content" in block "part" is not documented`,
+		},
+		{
+			name: "Read-Only field deleted", f: cloudinit,
+			edit: dropLine("- `rendered` "),
+			want: `Read-Only attribute "rendered" is not documented`,
+		},
+		{
+			name: "field in the wrong group", f: cloudinit,
+			edit: func(s string) string {
+				s = dropLine("- `boundary` ")(s)
+				return strings.Replace(s, "### Read-Only\n\n", "### Read-Only\n\n- `boundary` (String) B.\n", 1)
+			},
+			want: `"boundary" is listed under Read-Only but is optional in the schema; list it under Optional`,
+		},
+		{
+			name: "field outside any group", f: cloudinit,
+			edit: func(s string) string {
+				s = dropLine("- `gzip` ")(s)
+				return strings.Replace(s, "## Schema\n\n", "## Schema\n\n- `gzip` (Boolean) G.\n\n", 1)
+			},
+			want: `"gzip" in block "(root)" isn't listed under a Required, Optional, or Read-Only group`,
+		},
+		{
+			name: "Deprecated marker dropped", f: http,
+			edit: func(s string) string { return strings.Replace(s, "`body` (String, Deprecated)", "`body` (String)", 1) },
+			want: `attribute "body" in block "(root)" is deprecated in schema but not marked as deprecated in docs`,
+		},
+		{
+			name: "undescribed id under Read-Only is tfplugindocs's own placement", f: ldap,
+			edit: func(s string) string {
+				s = dropLine("- **id** ")(s)
+				return s + "\n### Read-Only\n\n- `id` (String) The ID of this resource.\n"
+			},
+			wantNot: `"id"`,
+		},
+		{
+			name: "missing ## Schema", f: ldap,
+			edit: func(s string) string { return strings.Replace(s, "## Schema", "## Fields", 1) },
+			want: "no ## Argument Reference section, so 3 arguments (`attributes`, `dn`, `object_classes`) aren't checked against the schema",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			b, err := os.ReadFile(tt.f.doc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			src := string(b)
+			if tt.edit != nil {
+				src = tt.edit(src)
+			}
+			results := tfplugindocsCheck(t, tt.f.schema, tt.f.source, tt.f.kind, tt.f.name, src)
+			switch {
+			case tt.want == "" && tt.wantNot == "":
+				if len(results) != 0 {
+					t.Errorf("unedited page should pass:\n%s", joinMessages(results))
+				}
+			case tt.want != "":
+				if !hasMessage(results, tt.want) {
+					t.Errorf("missing %q in:\n%s", tt.want, joinMessages(results))
+				}
+			default:
+				if hasMessage(results, tt.wantNot) {
+					t.Errorf("unexpected %q in:\n%s", tt.wantNot, joinMessages(results))
+				}
+			}
+		})
+	}
+}
+
+func dropLine(prefix string) func(string) string {
+	return func(s string) string {
+		var out []string
+		for line := range strings.SplitSeq(s, "\n") {
+			if !strings.HasPrefix(line, prefix) {
+				out = append(out, line)
+			}
+		}
+		return strings.Join(out, "\n")
+	}
+}
+
+// TestSchemaDocs_TfplugindocsFunctionArguments guards the comparison of a
+// tfplugindocs function page's ## Arguments list with the parameters, both
+// ways, and that it doesn't run in the reference style.
+func TestSchemaDocs_TfplugindocsFunctionArguments(t *testing.T) {
+	t.Parallel()
+
+	fs := &schema.FunctionSchema{Name: "parse", ParameterNames: []string{"input"}, VariadicParameter: "extra"}
+	tests := []struct {
+		name         string
+		args         string
+		tfplugindocs bool
+		want         []string
+	}{
+		{"documented", "1. `input` (String) In.\n1. `extra` (Variadic, String) More.\n", true, nil},
+		{"missing", "1. `input` (String) In.\n", true, []string{`function parameter "extra" is not documented in Arguments`}},
+		{"extra", "1. `input` (String) In.\n1. `extra` (String) E.\n1. `bogus` (String) B.\n", true, []string{`documented function argument "bogus" is not a parameter of the function`}},
+		{"reference style skipped", "1. `bogus` (String) B.\n", false, nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			d, err := doc.ParseWithOptions([]byte("# function: parse\n\n## Arguments\n\n"+tt.args), "parse", doc.DefaultHeadingTemplates(),
+				doc.ParseOptions{ArgumentsHeading: "Arguments", Tfplugindocs: tt.tfplugindocs})
+			if err != nil {
+				t.Fatal(err)
+			}
+			rule := &check.SchemaDocsRule{Tfplugindocs: tt.tfplugindocs}
+			results := rule.Check(check.CheckContext{Resource: "parse", FunctionSchema: fs, Doc: d})
+			if got := resultMessages(results); !slices.Equal(got, tt.want) {
+				t.Errorf("got %q, want %q", got, tt.want)
 			}
 		})
 	}

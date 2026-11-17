@@ -21,6 +21,9 @@ const DefaultConfigFile = ".swissshepherd.hcl"
 //go:embed defaults.hcl
 var defaultsHCL []byte
 
+//go:embed defaults_tfplugindocs.hcl
+var defaultsTfplugindocsHCL []byte
+
 // Config is the top-level configuration for swissshepherd.
 type Config struct {
 	ProviderSource string `hcl:"provider_source,optional"`
@@ -44,8 +47,27 @@ type Config struct {
 	// the same name replace defaults wholesale, new names add new types.
 	Types []Type `hcl:"type,block"`
 
+	// DocStyle names the shape of the provider's doc pages: "reference"
+	// (default; ## Argument Reference and ## Attribute Reference with inline
+	// (Required)/(Optional) labels, as in the AWS, Google, and Azure
+	// providers) or "tfplugindocs" (the ## Schema section and "<name>
+	// (Resource)" titles that terraform-plugin-docs generates). It selects
+	// the embedded default types and how the reference section is read
+	// (docs/rules/doc-style.md).
+	DocStyle string `hcl:"doc_style,optional"`
+
 	Checks []CheckConfig `hcl:"check,block"`
 }
+
+// Doc styles accepted by DocStyle.
+const (
+	DocStyleReference    = "reference"
+	DocStyleTfplugindocs = "tfplugindocs"
+)
+
+// Tfplugindocs reports whether the provider's docs use the tfplugindocs
+// style.
+func (c *Config) Tfplugindocs() bool { return c.DocStyle == DocStyleTfplugindocs }
 
 // CheckConfig represents a single check block in the config.
 type CheckConfig struct {
@@ -195,6 +217,11 @@ type CheckConfig struct {
 	// ImportSection rule options.
 	RequireIdentitySection *bool `hcl:"require_identity_section,optional"`
 
+	// RequireImportBlock (import_section) requires the first import code
+	// block to be a terraform import block. nil means true, except in the
+	// tfplugindocs doc style, whose import example may be shell only.
+	RequireImportBlock *bool `hcl:"require_import_block,optional"`
+
 	// ExampleSection rule options.
 	AllowLanguages []string `hcl:"allow_languages,optional"`
 
@@ -289,14 +316,12 @@ func Load(path string) (*Config, error) {
 		path = DefaultConfigFile
 	}
 
-	defaults, err := loadDefaultTypes()
-	if err != nil {
-		return nil, fmt.Errorf("loading embedded default types: %w", err)
-	}
-
 	if _, err := os.Stat(path); os.IsNotExist(err) {
-		cfg := &Config{Types: defaults}
-		return cfg, nil
+		defaults, err := loadDefaultTypes(DocStyleReference)
+		if err != nil {
+			return nil, fmt.Errorf("loading embedded default types: %w", err)
+		}
+		return &Config{Types: defaults, DocStyle: DocStyleReference}, nil
 	}
 
 	if err := checkDuplicateChecks(path); err != nil {
@@ -307,7 +332,18 @@ func Load(path string) (*Config, error) {
 	if err := hclsimple.DecodeFile(path, nil, &cfg); err != nil {
 		return nil, fmt.Errorf("parsing config %s: %w", path, err)
 	}
+	switch cfg.DocStyle {
+	case "":
+		cfg.DocStyle = DocStyleReference
+	case DocStyleReference, DocStyleTfplugindocs:
+	default:
+		return nil, fmt.Errorf("config %s: doc_style %q must be %q or %q", path, cfg.DocStyle, DocStyleReference, DocStyleTfplugindocs)
+	}
 
+	defaults, err := loadDefaultTypes(cfg.DocStyle)
+	if err != nil {
+		return nil, fmt.Errorf("loading embedded default types: %w", err)
+	}
 	cfg.Types = mergeTypes(defaults, cfg.Types)
 	for i := range cfg.Types {
 		if err := cfg.Types[i].Validate(); err != nil {
@@ -331,19 +367,23 @@ func Load(path string) (*Config, error) {
 	return &cfg, nil
 }
 
-// loadDefaultTypes parses the embedded defaults.hcl and returns the set of
-// default type blocks. Failures here indicate a bug in the embedded file —
-// they should never fire in a shipped binary.
-func loadDefaultTypes() ([]Type, error) {
+// loadDefaultTypes parses the embedded default types for a doc style
+// (defaults.hcl or defaults_tfplugindocs.hcl). Failures here indicate a bug
+// in the embedded file — they should never fire in a shipped binary.
+func loadDefaultTypes(style string) ([]Type, error) {
+	name, src := "defaults.hcl", defaultsHCL
+	if style == DocStyleTfplugindocs {
+		name, src = "defaults_tfplugindocs.hcl", defaultsTfplugindocsHCL
+	}
 	var wrapper struct {
 		Types []Type `hcl:"type,block"`
 	}
-	if err := hclsimple.Decode("defaults.hcl", defaultsHCL, nil, &wrapper); err != nil {
+	if err := hclsimple.Decode(name, src, nil, &wrapper); err != nil {
 		return nil, err
 	}
 	for i := range wrapper.Types {
 		if err := wrapper.Types[i].Validate(); err != nil {
-			return nil, fmt.Errorf("defaults.hcl: %w", err)
+			return nil, fmt.Errorf("%s: %w", name, err)
 		}
 	}
 	return wrapper.Types, nil
@@ -513,6 +553,51 @@ func (c *Config) GetCheck(name string) CheckConfig {
 		}
 	}
 	return CheckConfig{Name: name}
+}
+
+// StyledCheck returns GetCheck(name) with the defaults of the config's doc
+// style filled in where the check block leaves a setting unset. For the
+// tfplugindocs style (docs/rules/doc-style.md):
+//
+//   - schema_docs: every field is documented in the one ## Schema section,
+//     so allow_inline_read_only is always true; timeouts is a nested block
+//     in that section, so skip_blocks defaults to none; every object's
+//     fields have their own "Nested Schema for" heading, so
+//     nested_object_attributes defaults to true; descriptions come from
+//     the schema, so the description-style sub-check defaults to off; and
+//     format, which checks the reference style's "* `name` - " bullets
+//     line by line, defaults to off (it has never scanned ## Schema).
+//   - import_section: shell code blocks are accepted, and the first block
+//     needn't be a terraform import block.
+func (c *Config) StyledCheck(name string) CheckConfig {
+	cc := c.GetCheck(name)
+	if !c.Tfplugindocs() {
+		return cc
+	}
+	switch name {
+	case "schema_docs":
+		cc.AllowInlineReadOnly = new(true)
+		if cc.SkipBlocks == nil {
+			cc.SkipBlocks = []string{}
+		}
+		if cc.NestedObjectAttributes == nil {
+			cc.NestedObjectAttributes = new(true)
+		}
+		if cc.Description == nil {
+			cc.Description = new(false)
+		}
+		if cc.Format == nil {
+			cc.Format = new(false)
+		}
+	case "import_section":
+		if len(cc.AllowLanguages) == 0 {
+			cc.AllowLanguages = []string{"terraform", "shell", "console"}
+		}
+		if cc.RequireImportBlock == nil {
+			cc.RequireImportBlock = new(false)
+		}
+	}
+	return cc
 }
 
 // optInChecks are off unless a check block sets enabled = true. prose_casing

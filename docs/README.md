@@ -18,6 +18,7 @@ A documentation linter for Terraform providers. swissshepherd compares a provide
 - [CLI reference](#cli-reference)
 - [Configuration](#configuration)
 - [Rules reference](#rules-reference)
+- [Doc styles](#doc-styles)
 - [Path scoping](#path-scoping)
 - [Type system](#type-system)
 - [Heading templates](#heading-templates)
@@ -138,6 +139,13 @@ All configuration lives in a single HCL file. The full reference:
 
 provider_source = "registry.terraform.io/hashicorp/aws"
 provider_dir    = "."
+
+# ─── Doc style ──────────────────────────────────────────────────────────────
+# "reference" (default): ## Argument Reference / ## Attribute Reference with
+# inline (Required)/(Optional) labels. "tfplugindocs": the ## Schema pages
+# terraform-plugin-docs generates. See "Doc styles" below.
+
+doc_style = "reference"
 
 # ─── Schema caching ─────────────────────────────────────────────────────────
 # When set, the schema is cached at this path (relative to provider_dir).
@@ -377,13 +385,18 @@ check "frontmatter" {
 Validates import section content and structure:
 - No passive voice ("can be imported" → use imperative)
 - No "e.g." (use "For example" or just show the example)
-- Code blocks present with correct types (`terraform` and `console`)
-- Correct ordering (terraform block before console block)
+- Code blocks present with allowed languages (`allow_languages`; default `terraform` and `console`)
+- The first code block is a ```` ```terraform ```` `import {` block (`require_import_block`)
+- Correct ordering (terraform blocks before `console` or `shell` blocks)
 - Identity-aware: when resource has identity schema, validates `### Identity Schema` subsection
+
+An import section with no code block passes when its first paragraph says the resource can't be imported ("cannot import", "cannot be imported", "does not support import", "does not currently support `terraform import`").
 
 ```hcl
 check "import_section" {
-  require_identity_section = true  # default: true
+  require_identity_section = true                     # default: true
+  allow_languages          = ["terraform", "console"] # default; tfplugindocs style adds "shell"
+  require_import_block     = true                     # default; false in the tfplugindocs style
 }
 ```
 
@@ -404,7 +417,7 @@ check "region_argument" {
 
 ### `schema_docs`
 
-The primary rule. Validates argument and attribute documentation against the provider schema. Eight sub-checks: `byline`, `coverage`, `deprecated`, `description`, `format`, `heading`, `labels`, `ordering`. Coverage enforces the Required / Optional / Read-Only model at every depth of nesting and supports inline `(Read-Only)` labels via `allow_inline_read_only`. Every field has one home: Required, Optional, and Optional+Computed fields go in Argument Reference, computed-only fields in Attribute Reference. A field listed in both is an error ([rules/field-homes.md](rules/field-homes.md)). It decides which section documents a block from headings alone, and checks every section against every block it documents; `labels` checks each section's labels the same way. A list introduced by prose naming a block ("The `cloudwatch_logs` object supports the following:") documents that block, as a heading would; with `nested_object_attributes`, the indented sub-bullets under its bullets go with it. Fields of object-typed attributes (`list(object({...}))` and the like) are checked only with `nested_object_attributes = true`; with it off, a section naming such an attribute is accepted without comparing its bullets to the object's fields.
+The primary rule. Validates argument and attribute documentation against the provider schema. Eight sub-checks: `byline`, `coverage`, `deprecated`, `description`, `format`, `heading`, `labels`, `ordering`. Coverage enforces the Required / Optional / Read-Only model at every depth of nesting and supports inline `(Read-Only)` labels via `allow_inline_read_only`. Every field has one home: Required, Optional, and Optional+Computed fields go in Argument Reference, computed-only fields in Attribute Reference. A field listed in both is an error ([rules/field-homes.md](rules/field-homes.md)). It decides which section documents a block from headings alone, and checks every section against every block it documents; `labels` checks each section's labels the same way. A list introduced by prose naming a block ("The `cloudwatch_logs` object supports the following:") documents that block, as a heading would; with `nested_object_attributes`, the indented sub-bullets under its bullets go with it. Fields of object-typed attributes (`list(object({...}))` and the like) are checked only with `nested_object_attributes = true`; with it off, a section naming such an attribute is accepted without comparing its bullets to the object's fields. When a doc has no section a field may be documented in (no Argument Reference for an argument; no Attribute Reference for a Read-Only attribute, unless `allow_inline_read_only` lets it live in Argument Reference), one warning per missing section names the fields it leaves unchecked: `no ## Argument Reference section, so 3 arguments (`attributes`, `dn`, `object_classes`) aren't checked against the schema` ([rules/doc-style.md](rules/doc-style.md#3-a-missing-reference-section-117)).
 
 See **[rules/schema_docs.md](rules/schema_docs.md)** for the full configuration reference, sub-check details, and the schema model.
 
@@ -445,7 +458,8 @@ Validates the level-1 heading (`# Resource: aws_thing`).
 
 Checks:
 - Heading exists and is at level 1
-- Begins with an allowed `<Kind>: ` prefix (from `allow_prefixes` or the type's `title_prefix`)
+- When the type sets `title_format`, the heading is exactly that text with `{name}` replaced by the target name (`aws_thing (Resource)` for `"{name} (Resource)"`)
+- Otherwise, it begins with an allowed `<Kind>: ` prefix (from `allow_prefixes` or the type's `title_prefix`)
 - No code blocks appear above the first `##` heading
 
 ```hcl
@@ -453,6 +467,27 @@ check "title_section" {
   allow_prefixes = ["Resource", "Data Source", "Ephemeral", "Function"]
 }
 ```
+
+## Doc styles
+
+`doc_style` names the shape of the provider's doc pages. It defaults to `"reference"`, the hand-written shape of the AWS, Google, and Azure providers: `# Resource: name`, `## Argument Reference` with `(Required)`/`(Optional)` labels on each bullet, `## Attribute Reference`, `## Timeouts`.
+
+Set `doc_style = "tfplugindocs"` for docs generated by [terraform-plugin-docs](https://github.com/hashicorp/terraform-plugin-docs):
+
+```hcl
+provider_source = "registry.terraform.io/hashicorp/cloudinit"
+doc_style       = "tfplugindocs"
+```
+
+In that style:
+
+- The default types expect `# name (Resource)` titles (`function: name` for functions), one `## Schema` section, an optional `## Import`, and no `## Attribute Reference` or `## Timeouts`.
+- `## Schema` is read the way tfplugindocs writes it: a field's label is the `### Required`, `### Optional`, or `### Read-Only` group it's listed under (`Required:`-style paragraphs under each `` ### Nested Schema for `path` ``), and a bullet is `` - `name` (Type, Deprecated) Description `` (or the older `- **name** (Type) ...`). Coverage, labels, deprecation, phantom fields and blocks, and ordering within each group all apply, and findings name the group: `"boundary" is listed under Read-Only but is optional in the schema; list it under Optional`.
+- `schema_docs` defaults change: Read-Only fields belong in `## Schema` (`allow_inline_read_only` is always on), `timeouts` isn't skipped, `nested_object_attributes` is on, the `description` style sub-check is off because descriptions come from the schema, and `format`, which reads the reference style's bullets line by line, is off. A root `id` without a schema description may be listed under Read-Only, where tfplugindocs puts it.
+- On function pages, the `## Arguments` list is compared with the function's parameters.
+- `import_section` accepts `shell` code blocks and doesn't require an `import {` block first.
+
+Each default can be set in the config as usual. Custom templates that add sections, reorder them, or change titles are configured through the `type` blocks and `allow_unknown_sections`. See [rules/doc-style.md](rules/doc-style.md) for the design.
 
 ## Path scoping
 
@@ -556,7 +591,9 @@ type "resource" {
 | `schema_kind` | Schema accessor: `resource`, `data_source`, `ephemeral`, `function`, `list_resource`, `action`, `none` |
 | `website_paths` | Ordered list of path templates. `{name}` = provider-prefix-stripped target name |
 | `title_prefix` | Expected `# <Prefix>: ` in the level-1 heading |
-| `arguments_heading` | Override the expected heading text (default: `"Argument Reference"`) |
+| `title_format` | Exact level-1 heading text, `{name}` standing for the target name, e.g. `"{name} (Resource)"`; replaces the `title_prefix` check |
+| `arguments_heading` | Heading text of the arguments section (default: `"Argument Reference"`; functions `"Arguments"`; tfplugindocs style `"Schema"`). In the reference style, any heading beginning with `Argument` is also read as this section, so `Arguments Reference` works |
+| `attributes_heading` | Heading text of the attributes section (default: `"Attribute Reference"`); any heading beginning with `Attribute` also counts in the reference style |
 | `arguments_bylines` | Allowed paragraph texts under `## Argument Reference` |
 | `attributes_bylines` | Allowed paragraph texts under `## Attribute Reference` |
 | `allow_missing_arguments_byline` | Don't require a byline paragraph |

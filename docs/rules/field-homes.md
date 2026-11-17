@@ -20,6 +20,8 @@ Two consequences, checked separately:
 1. **Wrong section.** A field listed only outside its home is reported with a move. This is the existing misplacement and home-section behavior, with Optional+Computed now counted as configurable.
 2. **Repeated.** A field listed in both P's Argument Reference section and P's Attribute Reference section is reported, whatever its home. Neither entry is "also fine": the duplicate adds nothing, the Attribute Reference byline already says "in addition to the arguments above", and duplicates drift (`aws_media_packagev2_channel_group`: `` `description` - The same as `description` ``).
 
+In the tfplugindocs doc style the two homes are one section: every field is listed in `## Schema`, under the group its schema flags call for ([doc-style.md](doc-style.md)). A doc missing a field's home section gets one warning per missing section instead of per-field findings (doc-style.md §3).
+
 ## What changed and why
 
 Optional+Computed fields used to have home "either", so they could be listed in Attribute Reference, in Argument Reference, or in both. The flags say the user can set the field; that it can also be computed when unset is a default, not a second identity. It's an argument. Its default behavior belongs in its Argument Reference description.

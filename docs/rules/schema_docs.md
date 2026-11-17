@@ -70,6 +70,12 @@ check "schema_docs" {
 }
 ```
 
+## Doc styles
+
+`doc_style = "tfplugindocs"` reads the one `## Schema` section tfplugindocs writes, taking each field's label from the `Required`/`Optional`/`Read-Only` group it's listed under, and changes some defaults: `allow_inline_read_only` is always on, `skip_blocks` is empty, `nested_object_attributes` is on, and `description` and `format` are off. See [doc-style.md](doc-style.md).
+
+A doc missing every section a field may be documented in gets one warning per missing section naming the unchecked fields, in place of per-field "not documented" findings ([doc-style.md](doc-style.md) §3).
+
 ## Severity
 
 `schema_docs` reports most findings as errors and some as warnings: advisories, such as a heading that resolves to no block, and findings that roll out gradually, such as a misplaced root scalar. `severity = "warning"` or `"error"` on the check block replaces the severity of all of them, so `"error"` turns the advisories into errors too. It applies to every target; an `override` block can't set it.

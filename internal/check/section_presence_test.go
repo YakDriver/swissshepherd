@@ -4,6 +4,7 @@
 package check_test
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -639,5 +640,35 @@ func TestSectionPresenceRule_SchemaTimeouts(t *testing.T) {
 				t.Errorf("expected error containing %q, got: %v", tt.wantErr, msgs)
 			}
 		})
+	}
+}
+
+// TestSectionPresenceRule_ConfiguredHeadings guards that findings name the
+// type's arguments_heading, which was a documented option no code read, and
+// that the timeouts finding lists its actions in sorted order: they came
+// from schema.Block.Attributes, whose order isn't stable, so the message
+// flapped between runs on azurerm and google.
+func TestSectionPresenceRule_ConfiguredHeadings(t *testing.T) {
+	t.Parallel()
+
+	d, err := doc.Parse([]byte("# x_thing (Resource)\n\n## Example Usage\n"), "x_thing")
+	if err != nil {
+		t.Fatal(err)
+	}
+	typ := &config.Type{Name: "resource", ArgumentsHeading: "Schema", Sections: []config.SectionSpec{
+		{Name: "title", Required: true}, {Name: "example"}, {Name: "arguments", Required: true}, {Name: "timeouts"},
+	}}
+	rs := &schema.ResourceSchema{Blocks: map[string]*schema.Block{
+		"":         {Path: ""},
+		"timeouts": {Path: "timeouts", Attributes: []schema.Attribute{{Name: "update", Optional: true}, {Name: "create", Optional: true}}},
+	}}
+	got := resultMessages((&check.SectionPresenceRule{}).Check(check.CheckContext{Resource: "x_thing", Type: typ, Schema: rs, Doc: d}))
+	for _, want := range []string{
+		"missing required section: ## Schema",
+		"schema configures timeouts ('create', 'update') but ## Timeouts section is missing",
+	} {
+		if !slices.Contains(got, want) {
+			t.Errorf("missing %q in %q", want, got)
+		}
 	}
 }

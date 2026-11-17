@@ -523,6 +523,24 @@ type ParseOptions struct {
 	// sub-bullets yields blocks "items" and "items.dns_entry". Off by
 	// default: nested sub-bullets are ignored, exactly as before.
 	CaptureNestedAttributes bool
+
+	// ArgumentsHeading and AttributesHeading are the level-2 heading texts
+	// of the arguments and attributes sections (Type.ArgumentsHeading and
+	// Type.AttributesHeading). An exact match always counts. Unless
+	// Tfplugindocs is set, so does the legacy prefix rule: a heading
+	// beginning with "Argument" or "Attribute".
+	ArgumentsHeading  string
+	AttributesHeading string
+
+	// Tfplugindocs reads the arguments section the way terraform-plugin-docs
+	// writes it (doc_style = "tfplugindocs"): every field in one section,
+	// grouped under "### Required", "### Optional", and "### Read-Only"
+	// headings at the root and "Required:" / "Optional:" / "Read-Only:"
+	// paragraphs under each "### Nested Schema for `path`" heading. A
+	// bullet's label comes from its group, and the bullet itself is
+	// "- `name` (Type, Deprecated) Description" (older releases bold the
+	// name instead). See docs/rules/doc-style.md.
+	Tfplugindocs bool
 }
 
 // ParseWithOptions parses markdown source with specific heading templates and
@@ -548,7 +566,7 @@ func ParseWithOptions(source []byte, name string, templates HeadingTemplates, op
 	}
 
 	idx := newLineIndex(source)
-	extractBlocks(tree, source, idx, doc, templates, opts.CaptureNestedAttributes)
+	extractBlocks(tree, source, idx, doc, templates, opts)
 	doc.HeadingAnchors = dedupAnchorSet(collectHeadingSlugs(tree, source))
 	doc.HTMLAnchors = collectHTMLAnchors(tree, source)
 	doc.InPageLinks = collectInPageLinks(tree, idx)
@@ -911,7 +929,11 @@ func blankFrontmatter(source []byte, end int) []byte {
 	return out
 }
 
-func extractBlocks(tree ast.Node, source []byte, idx *lineIndex, doc *Document, templates HeadingTemplates, captureNested bool) {
+func extractBlocks(tree ast.Node, source []byte, idx *lineIndex, doc *Document, templates HeadingTemplates, opts ParseOptions) {
+	captureNested := opts.CaptureNestedAttributes
+	// group is the tfplugindocs group ("Required", "Optional", or
+	// "Read-Only") the next bullets belong to (ParseOptions.Tfplugindocs).
+	var group string
 	var currentBlockName string
 	var currentBlockAliases []string
 	// orphaned is set by an H3+ heading in Argument or Attribute Reference that
@@ -1000,9 +1022,10 @@ func extractBlocks(tree ast.Node, source []byte, idx *lineIndex, doc *Document, 
 				orphaned = false
 				listSinceHeading = false
 				activeProse = -1
-				inArguments = strings.HasPrefix(headingText, "Argument")
-				inAttributes = strings.HasPrefix(headingText, "Attribute")
+				inArguments = isSectionHeading(headingText, opts.ArgumentsHeading, "Argument", opts.Tfplugindocs)
+				inAttributes = !inArguments && isSectionHeading(headingText, opts.AttributesHeading, "Attribute", opts.Tfplugindocs)
 				sawRequiredByline = false
+				group = ""
 
 				// Argument and Attribute sections use prefix matching so
 				// both "Argument Reference" (canonical) and "Arguments"
@@ -1048,8 +1071,31 @@ func extractBlocks(tree ast.Node, source []byte, idx *lineIndex, doc *Document, 
 				return ast.WalkSkipChildren, nil
 			}
 
+			if n.Level >= 3 && opts.Tfplugindocs && inArguments && isTfplugindocsGroup(headingText) {
+				// A root group heading: what follows are root fields.
+				group = headingText
+				currentBlockName = ""
+				currentBlockAliases = nil
+				underHeading, orphaned, listSinceHeading = false, false, false
+				activeProse = -1
+				if currentSection != nil {
+					currentSection.ChildHeadings = append(currentSection.ChildHeadings, ChildHeading{Level: n.Level, Text: headingText, Line: nodeLineNumber(n, idx), StartOffset: headingStartOffset(n)})
+				}
+				return ast.WalkSkipChildren, nil
+			}
+
 			if n.Level >= 3 && (inArguments || inAttributes) {
+				group = ""
 				blockNames := templates.MatchAll(headingText)
+				if opts.Tfplugindocs {
+					// tfplugindocs's own heading form is the only block
+					// heading; any other heading in ## Schema (a custom
+					// template's "### Example: ...") documents no block.
+					blockNames = nil
+					if p := matchTemplate("Nested Schema for `{Path}`", strings.TrimSpace(headingText)); p != "" {
+						blockNames = []string{p}
+					}
+				}
 				orphaned = len(blockNames) == 0
 				underHeading = !orphaned
 				listSinceHeading = false
@@ -1134,6 +1180,12 @@ func extractBlocks(tree ast.Node, source []byte, idx *lineIndex, doc *Document, 
 			if currentSection != nil {
 				currentSection.Paragraphs = append(currentSection.Paragraphs, n)
 			}
+			if opts.Tfplugindocs && inArguments {
+				if g, ok := strings.CutSuffix(strings.TrimSpace(string(n.Text(source))), ":"); ok && isTfplugindocsGroup(g) {
+					group = g
+					return ast.WalkSkipChildren, nil
+				}
+			}
 			// Detect "required:" / "optional:" bylines preceding lists.
 			// "required:" sets sawRequiredByline; the next list-bearing block
 			// will be marked split.
@@ -1210,10 +1262,27 @@ func extractBlocks(tree ast.Node, source []byte, idx *lineIndex, doc *Document, 
 				block.SplitByLabel = true
 				sawRequiredByline = false
 			}
+			if opts.Tfplugindocs {
+				// tfplugindocs sorts each group on its own.
+				block.SplitByLabel = true
+			}
 
 			for child := n.FirstChild(); child != nil; child = child.NextSibling() {
 				if li, ok := child.(*ast.ListItem); ok {
 					line := nodeLineNumber(li, idx)
+					if opts.Tfplugindocs {
+						if attr := parseTfplugindocsItem(li, source, group); attr.Name != "" {
+							attr.Line = line
+							block.Attributes = append(block.Attributes, attr)
+							if underHeading && !orphaned {
+								appendToLastOccurrence(block, attr)
+							}
+							if orphaned && orphanIdx >= 0 {
+								doc.Orphans[orphanIdx].Bullets = append(doc.Orphans[orphanIdx].Bullets, attr)
+							}
+						}
+						continue
+					}
 					attr := parseListItem(li, source)
 					if attr.Name != "" {
 						attr.Line = line
@@ -1294,6 +1363,85 @@ func extractBlocks(tree ast.Node, source []byte, idx *lineIndex, doc *Document, 
 	// Expose the heading anchor map so coverage can resolve sibling bullets
 	// that point at a shared subsection (see Document.BlockAnchors).
 	doc.BlockAnchors = blockAnchors
+}
+
+// isSectionHeading reports whether a level-2 heading opens a reference
+// section: it equals the configured heading, or, outside the tfplugindocs
+// style, begins with prefix ("Argument" or "Attribute"), which accepts both
+// "Argument Reference" and the "Arguments Reference" some providers use.
+func isSectionHeading(text, configured, prefix string, tfplugindocs bool) bool {
+	if configured != "" && text == configured {
+		return true
+	}
+	return !tfplugindocs && strings.HasPrefix(text, prefix)
+}
+
+// isTfplugindocsGroup reports whether s names a tfplugindocs field group.
+func isTfplugindocsGroup(s string) bool {
+	return s == "Required" || s == "Optional" || s == "Read-Only"
+}
+
+// parseTfplugindocsItem reads a tfplugindocs field bullet,
+// "- `name` (Type, Sensitive, Deprecated) Description", or the older
+// "- **name** (Type) Description", labeling it from group. A bullet that
+// doesn't begin with a code span or bold name isn't a field and yields an
+// empty DocAttribute.
+func parseTfplugindocsItem(li *ast.ListItem, source []byte, group string) DocAttribute {
+	var para ast.Node
+	for c := li.FirstChild(); c != nil && para == nil; c = c.NextSibling() {
+		switch c.(type) {
+		case *ast.TextBlock, *ast.Paragraph:
+			para = c
+		}
+	}
+	if para == nil {
+		return DocAttribute{}
+	}
+	first := para.FirstChild()
+	switch f := first.(type) {
+	case *ast.CodeSpan:
+	case *ast.Emphasis:
+		if f.Level != 2 {
+			return DocAttribute{}
+		}
+	default:
+		return DocAttribute{}
+	}
+	name := string(first.Text(source))
+	if name == "" || strings.ContainsAny(name, " .[]*") {
+		return DocAttribute{}
+	}
+	attr := DocAttribute{
+		Name:       name,
+		Required:   group == "Required",
+		Optional:   group == "Optional",
+		ReadOnly:   group == "Read-Only",
+		LinkAnchor: firstAnchorLink(li),
+	}
+	// The raw text keeps the name's markup: drop the "`name`" or "**name**".
+	raw := strings.TrimSpace(string(para.Text(source)))
+	rest := raw
+	for _, mark := range []string{"`", "**"} {
+		if after, ok := strings.CutPrefix(raw, mark+name+mark); ok {
+			rest = strings.TrimSpace(after)
+			break
+		}
+	}
+	// tfplugindocs always writes "(Type...)" after the name. A bullet
+	// without it, such as "* `log` - ..." or "- `\"geo\"`: ..." in a
+	// description's own list of values, isn't a field.
+	traits, after, ok := strings.Cut(strings.TrimPrefix(rest, "("), ")")
+	if !ok || !strings.HasPrefix(rest, "(") {
+		return DocAttribute{}
+	}
+	for t := range strings.SplitSeq(traits, ",") {
+		if strings.TrimSpace(t) == "Deprecated" {
+			attr.Deprecated = true
+		}
+	}
+	rest = strings.TrimSpace(after)
+	attr.Description = rest
+	return attr
 }
 
 // parseSectionListItem extracts a name/value pair from a list item in a

@@ -74,6 +74,19 @@ func (n SectionName) IsCanonical() bool {
 	return slices.Contains(AllSectionNames, n)
 }
 
+// HeadingText returns the heading text the type expects for section n: the
+// type's arguments_heading or attributes_heading when set, otherwise the
+// canonical text (SectionName.HeadingText).
+func (t *Type) HeadingText(n SectionName) string {
+	switch {
+	case n == SectionArguments && t.ArgumentsHeading != "":
+		return t.ArgumentsHeading
+	case n == SectionAttributes && t.AttributesHeading != "":
+		return t.AttributesHeading
+	}
+	return n.HeadingText()
+}
+
 // HeadingText returns the canonical "## <text>" heading for the section.
 // For canonical names, the heading text is fixed by Terraform provider
 // docs convention. For custom names, the snake_case identifier is
@@ -169,9 +182,22 @@ type Type struct {
 	// AttributesBylines is the analogous set for "## Attribute Reference".
 	AttributesBylines []string `hcl:"attributes_bylines,optional"`
 
-	// ArgumentsHeading overrides the expected "## Argument Reference" text.
-	// Functions use "Arguments" instead, for example.
+	// ArgumentsHeading is the level-2 heading text of the arguments section,
+	// e.g. "Arguments" for functions or "Schema" for tfplugindocs docs.
+	// Empty means "Argument Reference". In the reference doc style, any
+	// heading beginning with "Argument" is also read as the arguments section,
+	// so "Arguments Reference" keeps working.
 	ArgumentsHeading string `hcl:"arguments_heading,optional"`
+
+	// AttributesHeading is the analogous heading for the attributes section.
+	// Empty means "Attribute Reference"; in the reference doc style any
+	// heading beginning with "Attribute" also counts.
+	AttributesHeading string `hcl:"attributes_heading,optional"`
+
+	// TitleFormat, when set, is the exact level-1 heading text expected,
+	// with {name} standing for the target name, e.g. "{name} (Resource)".
+	// It replaces the "<title_prefix>: " check.
+	TitleFormat string `hcl:"title_format,optional"`
 
 	// AllowMissingArgumentsByline relaxes the byline requirement — useful
 	// for categories where the section header alone is enough.

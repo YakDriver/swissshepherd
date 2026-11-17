@@ -6,6 +6,7 @@ package check
 import (
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -68,6 +69,28 @@ func (r *TitleSectionRule) Check(ctx CheckContext) []Result {
 		fail(fmt.Sprintf("title section heading level (%d) should be: 1", level))
 	}
 
+	if ctx.Type != nil && ctx.Type.TitleFormat != "" {
+		var want []string
+		for _, n := range ctx.ResourceNames() {
+			want = append(want, strings.ReplaceAll(ctx.Type.TitleFormat, "{name}", n))
+		}
+		if !slices.Contains(want, section.Text) {
+			fail(fmt.Sprintf("title section heading %q should be %q", section.Text, want[0]))
+		}
+	} else {
+		r.checkPrefix(ctx, section.Text, fail)
+	}
+
+	if len(section.FencedCodeBlocks) > 0 {
+		fail("title section should not contain code blocks; move code examples to ## Example Usage")
+	}
+
+	return results
+}
+
+// checkPrefix applies the "<Kind>: " prefix check used when the type sets no
+// title_format.
+func (r *TitleSectionRule) checkPrefix(ctx CheckContext, text string, fail func(string)) {
 	prefixes := r.AllowPrefixes
 	if len(prefixes) == 0 {
 		prefixes = DefaultTitleSectionPrefixes
@@ -78,16 +101,14 @@ func (r *TitleSectionRule) Check(ctx CheckContext) []Result {
 			prefixes = append(prefixes, ctx.Type.TitlePrefix)
 		}
 	}
-	if !hasAnyPrefix(section.Text, prefixes) {
-		fail(fmt.Sprintf("title section heading %q should have one of these prefixes: %v",
-			section.Text, prefixes))
+	if !hasAnyPrefix(text, prefixes) {
+		quoted := make([]string, len(prefixes))
+		for i, p := range prefixes {
+			quoted[i] = strconv.Quote(p + ": ")
+		}
+		fail(fmt.Sprintf("title section heading %q should have one of these prefixes: %s",
+			text, strings.Join(quoted, ", ")))
 	}
-
-	if len(section.FencedCodeBlocks) > 0 {
-		fail("title section should not contain code blocks; move code examples to ## Example Usage")
-	}
-
-	return results
 }
 
 // hasAnyPrefix reports whether s begins with any of the given prefixes
