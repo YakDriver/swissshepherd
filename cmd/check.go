@@ -196,6 +196,7 @@ func runCheck(cmd *cobra.Command, args []string) error {
 			ImplicitAttributes:        cc.ImplicitAttributes,
 			AllowPhantoms:             cc.AllowPhantoms,
 			SkipBlocks:                cc.SkipBlocks,
+			AllowEitherSection:        cc.AllowEitherSection,
 			AllowInlineReadOnly:       cc.AllowInlineReadOnly,
 			Coverage:                  cc.Coverage,
 			Ordering:                  cc.Ordering,

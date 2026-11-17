@@ -56,6 +56,14 @@ type SchemaDocsRule struct {
 	AllowPhantoms      []string
 	SkipBlocks         []string
 
+	// AllowEitherSection lists Optional+Computed fields, as schema paths,
+	// bare ("tags") or type-qualified ("data_source/tags"), that the schema
+	// marks Optional but that may be outputs: each may be documented in
+	// either reference section, not both (docs/rules/field-homes.md). either
+	// holds the entries that apply to the current target (forTarget).
+	AllowEitherSection []string
+	either             []string
+
 	// AllowInlineReadOnly permits Read-Only (computed-only) attributes to
 	// be documented inline in Argument Reference with a "(Read-Only)" label,
 	// alongside Required and Optional siblings, instead of requiring them
@@ -187,12 +195,26 @@ func (r *SchemaDocsRule) forTarget(ctx CheckContext) *SchemaDocsRule {
 	if ctx.Type != nil {
 		typeName = ctx.Type.Name
 	}
+	var either []string
+	for _, e := range r.AllowEitherSection {
+		t, p, qualified := strings.Cut(e, "/")
+		switch {
+		case !qualified:
+			either = append(either, e)
+		case t == typeName:
+			either = append(either, p)
+		}
+	}
 	i := slices.IndexFunc(r.Overrides, func(o config.Override) bool { return o.Matches(ctx.Resource, typeName) })
-	if i < 0 {
+	if i < 0 && len(either) == 0 {
 		return r
 	}
-	o := r.Overrides[i]
 	c := *r
+	c.either = either
+	if i < 0 {
+		return &c
+	}
+	o := r.Overrides[i]
 	if o.Coverage != nil {
 		c.Coverage = o.Coverage
 	}
@@ -437,12 +459,15 @@ func (r *SchemaDocsRule) sectionMissing(ctx CheckContext, n config.SectionName) 
 // blockDeferred reports whether an undocumented block b is left to
 // checkMissingHomes: its configurable fields' only home, the arguments
 // section, is missing. A ConfigUnknown block's fields may be in either
-// section, so it's deferred only when both are missing.
+// section, so it's deferred only when both are missing; so is a block with
+// an allow_either_section field.
 func (r *SchemaDocsRule) blockDeferred(ctx CheckContext, b *schema.Block) bool {
 	if !r.sectionMissing(ctx, config.SectionArguments) {
 		return false
 	}
-	return !b.ConfigUnknown || r.sectionMissing(ctx, config.SectionAttributes)
+	either := b.ConfigUnknown || slices.ContainsFunc(b.Attributes, func(a schema.Attribute) bool { return r.eitherSection(ctx.Schema, b.Path, a.Name) }) ||
+		slices.ContainsFunc(b.ChildBlocks, func(c string) bool { return r.eitherSection(ctx.Schema, b.Path, leafName(c)) })
+	return !either || r.sectionMissing(ctx, config.SectionAttributes)
 }
 
 // homeMissing reports whether every section attr at b may be documented in
@@ -456,7 +481,7 @@ func (r *SchemaDocsRule) homeMissing(ctx CheckContext, b *schema.Block, attr sch
 	attrs := !r.sectionMissing(ctx, config.SectionAttributes)
 	computedOnly := attr.Computed && !attr.Optional && !attr.Required
 	switch {
-	case b.ConfigUnknown || (computedOnly && r.allowInlineReadOnly()):
+	case b.ConfigUnknown || (computedOnly && r.allowInlineReadOnly()) || r.eitherSection(ctx.Schema, b.Path, attr.Name):
 		return !args && !attrs
 	case computedOnly:
 		return !attrs
@@ -543,7 +568,7 @@ func (r *SchemaDocsRule) checkMissingHomes(ctx CheckContext) []Result {
 // bullet is left to labels' move finding, so the two never both fire.
 // Severity follows that finding: a warning for a root scalar (#62).
 func (r *SchemaDocsRule) outsideHome(ctx CheckContext, p string, attr schema.Attribute, argSection, attrSection *doc.DocBlock) (Result, bool) {
-	if attrSection == nil || !configurableArgAtPath(ctx.Schema, p, attr.Name) {
+	if attrSection == nil || !configurableArgAtPath(ctx.Schema, p, attr.Name) || r.eitherSection(ctx.Schema, p, attr.Name) {
 		return Result{}, false
 	}
 	if argSection != nil && slices.ContainsFunc(argSection.Attributes, func(a doc.DocAttribute) bool { return a.Name == attr.Name }) {
@@ -592,6 +617,16 @@ func optionalComputedOnly(rs *schema.ResourceSchema, p, f string) bool {
 	}
 	c, ok := childPathForAttr(p, b, f)
 	return ok && !blockTreeHasSettable(rs, c, make(map[string]bool))
+}
+
+// eitherSection reports whether field f at path p is listed in
+// allow_either_section for this target and is an argument only through
+// Optional+Computed. Such a field has no single home: it may be listed in
+// either reference section, not both, and is still required to be listed
+// in one. A Required or plain Optional field is never relaxed, so a bare
+// entry can't loosen a real argument of another type.
+func (r *SchemaDocsRule) eitherSection(rs *schema.ResourceSchema, p, f string) bool {
+	return slices.Contains(r.either, joinPath(p, f)) && optionalComputedOnly(rs, p, f)
 }
 
 // blockTreeHasSettable reports whether the subtree at path has a Required
@@ -1054,7 +1089,7 @@ func labelFor(a schema.Attribute) string {
 // no single home.
 func (r *SchemaDocsRule) homeOnlyIn(rs *schema.ResourceSchema, p, f string, inAttrs bool) bool {
 	b := rs.Blocks[p]
-	if b.ConfigUnknown {
+	if b.ConfigUnknown || r.eitherSection(rs, p, f) {
 		return false
 	}
 	var arg bool
@@ -1270,7 +1305,7 @@ func (r *SchemaDocsRule) checkDuplicateHeadings(ctx CheckContext) []Result {
 			for i, o := range occs {
 				mis[i] = make([][]string, len(served))
 				for j, p := range served {
-					mis[i][j] = r.fitMismatches(rs, o, p, inAttrs)
+					mis[i][j] = r.fitMismatches(ctx, o, p, inAttrs)
 				}
 			}
 			before := len(results)
@@ -1368,8 +1403,16 @@ func summarize(d []string) string {
 // label or deprecation marker is wrong for p. None means o fits p. Uses
 // coverage's own filters, so a difference only in a skipped or allowed field
 // never counts.
-func (r *SchemaDocsRule) fitMismatches(rs *schema.ResourceSchema, o doc.Occurrence, p string, inAttrs bool) []string {
+func (r *SchemaDocsRule) fitMismatches(ctx CheckContext, o doc.Occurrence, p string, inAttrs bool) []string {
+	rs := ctx.Schema
 	b := rs.Blocks[p]
+	// An allow_either_section field needn't be listed here when p's
+	// Attribute Reference section lists it. Coverage skips a block whose
+	// section is duplicated, so this is its only presence check.
+	elsewhere := func(f string) bool {
+		_, ok := listedBullet(resolveSection(rs, ctx.Doc.AttributeBlocks, p), f)
+		return r.eitherSection(rs, p, f) && ok
+	}
 	var n []string
 	listed := make(map[string]bool, len(o.Attributes))
 	for _, a := range o.Attributes {
@@ -1410,7 +1453,7 @@ func (r *SchemaDocsRule) fitMismatches(rs *schema.ResourceSchema, o doc.Occurren
 		return n
 	}
 	for _, sa := range b.Attributes {
-		if listed[sa.Name] || slices.Contains(r.implicit(), sa.Name) || (r.IgnoreDeprecated && sa.Deprecated) {
+		if listed[sa.Name] || slices.Contains(r.implicit(), sa.Name) || (!inAttrs && elsewhere(sa.Name)) || (r.IgnoreDeprecated && sa.Deprecated) {
 			continue
 		}
 		arg := sa.Required || sa.Optional
@@ -1421,7 +1464,7 @@ func (r *SchemaDocsRule) fitMismatches(rs *schema.ResourceSchema, o doc.Occurren
 	}
 	if !inAttrs {
 		for _, c := range b.ChildBlocks {
-			if !listed[leafName(c)] && blockTreeHasConfigurable(rs, childBlockPath(p, c), make(map[string]bool)) {
+			if !listed[leafName(c)] && !elsewhere(leafName(c)) && blockTreeHasConfigurable(rs, childBlockPath(p, c), make(map[string]bool)) {
 				n = append(n, fmt.Sprintf("%q isn't listed", leafName(c)))
 			}
 		}
@@ -2880,11 +2923,14 @@ func (r *SchemaDocsRule) attributeMisplacementFindings(ctx CheckContext) []Resul
 			case placementStripLabel:
 				strips = append(strips, stripEntry{name, attr})
 			case placementMisplaced:
-				if slices.Contains(r.implicit(), attr.Name) {
+				if slices.Contains(r.implicit(), attr.Name) || r.eitherSection(ctx.Schema, path, attr.Name) {
 					// implicit_attributes (id, tags_all) aren't held to a home;
 					// SDKv2 reports some as Optional+Computed. A label on one is
-					// still wrong under Attribute Reference.
+					// still wrong under Attribute Reference. A listed
+					// allow_either_section field may be an output, so it keeps
+					// the subsection from moving whole.
 					strips = append(strips, stripEntry{name, attr})
+					sm.ocOnly = sm.ocOnly || (resolved && r.eitherSection(ctx.Schema, path, attr.Name))
 					continue
 				}
 				target := path

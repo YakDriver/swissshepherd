@@ -4,6 +4,7 @@
 package config_test
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -846,6 +847,52 @@ func TestLoad_SeverityValidation(t *testing.T) {
 			if tc.wantErr == "" {
 				if err != nil {
 					t.Fatalf("Load() error = %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("Load() error = %v, want it to contain %q", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+// TestLoad_AllowEitherSection guards allow_either_section validation: an
+// entry that could never match (an empty path, an unknown type qualifier)
+// or the option outside schema_docs is a load error.
+func TestLoad_AllowEitherSection(t *testing.T) {
+	t.Parallel()
+
+	testCases := map[string]struct {
+		entries string
+		check   string
+		wantErr string
+	}{
+		"bare":                {entries: `["tags"]`},
+		"type-qualified":      {entries: `["data_source/tags", "resource/block.tags"]`},
+		"unknown type":        {entries: `["datasource/tags"]`, wantErr: `allow_either_section entry "datasource/tags" names unknown type "datasource"`},
+		"empty path":          {entries: `["data_source/"]`, wantErr: `allow_either_section entry "data_source/" must be a schema path`},
+		"empty entry":         {entries: `[""]`, wantErr: `allow_either_section entry "" must be a schema path`},
+		"target-qualified":    {entries: `["data_source/aws_vpc/tags"]`, wantErr: `allow_either_section entry "data_source/aws_vpc/tags" must be a schema path`},
+		"outside schema_docs": {entries: `["tags"]`, check: "anchors", wantErr: `check "anchors": allow_either_section is only supported in check "schema_docs"`},
+	}
+	for name, tc := range testCases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			check := tc.check
+			if check == "" {
+				check = "schema_docs"
+			}
+			path := filepath.Join(t.TempDir(), "swissshepherd.hcl")
+			writeFile(t, path, fmt.Sprintf("check %q {\n  allow_either_section = %s\n}\n", check, tc.entries))
+			cfg, err := config.Load(path)
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("Load() error = %v", err)
+				}
+				if got := cfg.GetCheck("schema_docs").AllowEitherSection; len(got) == 0 {
+					t.Errorf("AllowEitherSection = %v, want the entries", got)
 				}
 				return
 			}
