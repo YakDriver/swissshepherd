@@ -459,12 +459,15 @@ func (r *SchemaDocsRule) sectionMissing(ctx CheckContext, n config.SectionName) 
 // blockDeferred reports whether an undocumented block b is left to
 // checkMissingHomes: its configurable fields' only home, the arguments
 // section, is missing. A ConfigUnknown block's fields may be in either
-// section, so it's deferred only when both are missing.
+// section, so it's deferred only when both are missing; so is a block with
+// an allow_either_section field.
 func (r *SchemaDocsRule) blockDeferred(ctx CheckContext, b *schema.Block) bool {
 	if !r.sectionMissing(ctx, config.SectionArguments) {
 		return false
 	}
-	return !b.ConfigUnknown || r.sectionMissing(ctx, config.SectionAttributes)
+	either := b.ConfigUnknown || slices.ContainsFunc(b.Attributes, func(a schema.Attribute) bool { return r.eitherSection(ctx.Schema, b.Path, a.Name) }) ||
+		slices.ContainsFunc(b.ChildBlocks, func(c string) bool { return r.eitherSection(ctx.Schema, b.Path, leafName(c)) })
+	return !either || r.sectionMissing(ctx, config.SectionAttributes)
 }
 
 // homeMissing reports whether every section attr at b may be documented in
@@ -1302,7 +1305,7 @@ func (r *SchemaDocsRule) checkDuplicateHeadings(ctx CheckContext) []Result {
 			for i, o := range occs {
 				mis[i] = make([][]string, len(served))
 				for j, p := range served {
-					mis[i][j] = r.fitMismatches(rs, o, p, inAttrs)
+					mis[i][j] = r.fitMismatches(ctx, o, p, inAttrs)
 				}
 			}
 			before := len(results)
@@ -1400,8 +1403,16 @@ func summarize(d []string) string {
 // label or deprecation marker is wrong for p. None means o fits p. Uses
 // coverage's own filters, so a difference only in a skipped or allowed field
 // never counts.
-func (r *SchemaDocsRule) fitMismatches(rs *schema.ResourceSchema, o doc.Occurrence, p string, inAttrs bool) []string {
+func (r *SchemaDocsRule) fitMismatches(ctx CheckContext, o doc.Occurrence, p string, inAttrs bool) []string {
+	rs := ctx.Schema
 	b := rs.Blocks[p]
+	// An allow_either_section field needn't be listed here when p's
+	// Attribute Reference section lists it. Coverage skips a block whose
+	// section is duplicated, so this is its only presence check.
+	elsewhere := func(f string) bool {
+		_, ok := listedBullet(resolveSection(rs, ctx.Doc.AttributeBlocks, p), f)
+		return r.eitherSection(rs, p, f) && ok
+	}
 	var n []string
 	listed := make(map[string]bool, len(o.Attributes))
 	for _, a := range o.Attributes {
@@ -1442,7 +1453,7 @@ func (r *SchemaDocsRule) fitMismatches(rs *schema.ResourceSchema, o doc.Occurren
 		return n
 	}
 	for _, sa := range b.Attributes {
-		if listed[sa.Name] || slices.Contains(r.implicit(), sa.Name) || r.eitherSection(rs, p, sa.Name) || (r.IgnoreDeprecated && sa.Deprecated) {
+		if listed[sa.Name] || slices.Contains(r.implicit(), sa.Name) || (!inAttrs && elsewhere(sa.Name)) || (r.IgnoreDeprecated && sa.Deprecated) {
 			continue
 		}
 		arg := sa.Required || sa.Optional
@@ -1453,7 +1464,7 @@ func (r *SchemaDocsRule) fitMismatches(rs *schema.ResourceSchema, o doc.Occurren
 	}
 	if !inAttrs {
 		for _, c := range b.ChildBlocks {
-			if !listed[leafName(c)] && blockTreeHasConfigurable(rs, childBlockPath(p, c), make(map[string]bool)) {
+			if !listed[leafName(c)] && !elsewhere(leafName(c)) && blockTreeHasConfigurable(rs, childBlockPath(p, c), make(map[string]bool)) {
 				n = append(n, fmt.Sprintf("%q isn't listed", leafName(c)))
 			}
 		}
@@ -2915,8 +2926,11 @@ func (r *SchemaDocsRule) attributeMisplacementFindings(ctx CheckContext) []Resul
 				if slices.Contains(r.implicit(), attr.Name) || r.eitherSection(ctx.Schema, path, attr.Name) {
 					// implicit_attributes (id, tags_all) aren't held to a home;
 					// SDKv2 reports some as Optional+Computed. A label on one is
-					// still wrong under Attribute Reference.
+					// still wrong under Attribute Reference. A listed
+					// allow_either_section field may be an output, so it keeps
+					// the subsection from moving whole.
 					strips = append(strips, stripEntry{name, attr})
+					sm.ocOnly = sm.ocOnly || (resolved && r.eitherSection(ctx.Schema, path, attr.Name))
 					continue
 				}
 				target := path

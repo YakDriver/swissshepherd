@@ -2563,17 +2563,56 @@ func TestCoverage_ReviewRegressions(t *testing.T) {
 			want: `"a3" isn't listed`,
 		},
 		// allow_either_section: duplicate z headings needn't list an
-		// Optional+Computed field it names; the field may be documented in
-		// Attribute Reference. Without it, the omission is reported.
-		"duplicate headings omitting an either-section field": {
+		// Optional+Computed field it names when Attribute Reference does.
+		// Listed nowhere, the omission is still reported: coverage skips a
+		// block whose section is duplicated, so the fit is its only check.
+		"duplicate headings omitting an either-section field listed in Attribute Reference": {
 			rs: z(
 				&schema.Block{Attributes: []schema.Attribute{{Name: "a1", Optional: true}, {Name: "tg", Optional: true, Computed: true}}},
 				&schema.Block{Attributes: []schema.Attribute{{Name: "a1", Optional: true}, {Name: "a2", Optional: true}, {Name: "tg", Optional: true, Computed: true}}},
 				nil,
 			),
-			md:      "## Argument Reference\n\n" + parents + "### `z` Block\n\n* `a1` - (Optional) A.\n\n### `z` Block\n\n* `a1` - (Optional) A.\n* `a2` - (Optional) A.\n",
+			md:      "## Argument Reference\n\n" + parents + "### `z` Block\n\n* `a1` - (Optional) A.\n\n### `z` Block\n\n* `a1` - (Optional) A.\n* `a2` - (Optional) A.\n\n## Attribute Reference\n\n### `z` Block\n\n* `tg` - T.\n",
 			rule:    check.SchemaDocsRule{AllowEitherSection: []string{"x.y.z.tg", "t.u.z.tg"}},
 			wantNot: `"tg" isn't listed`,
+		},
+		"duplicate headings omitting an either-section field listed nowhere": {
+			rs: z(
+				&schema.Block{Attributes: []schema.Attribute{{Name: "a1", Optional: true}, {Name: "tg", Optional: true, Computed: true}}},
+				&schema.Block{Attributes: []schema.Attribute{{Name: "a1", Optional: true}, {Name: "a2", Optional: true}, {Name: "tg", Optional: true, Computed: true}}},
+				nil,
+			),
+			md:   "## Argument Reference\n\n" + parents + "### `z` Block\n\n* `a1` - (Optional) A.\n\n### `z` Block\n\n* `a1` - (Optional) A.\n* `a2` - (Optional) A.\n",
+			rule: check.SchemaDocsRule{AllowEitherSection: []string{"x.y.z.tg", "t.u.z.tg"}},
+			want: `"tg" isn't listed`,
+		},
+		// The same for a child block whose configurable subtree is all
+		// Optional+Computed.
+		"duplicate headings omitting an either-section child listed in Attribute Reference": {
+			rs: z(
+				&schema.Block{Attributes: optional("a1"), ChildBlocks: []string{"k"}},
+				&schema.Block{Attributes: optional("a1", "a2"), ChildBlocks: []string{"k"}},
+				map[string]*schema.Block{
+					"x.y.z.k": {Attributes: []schema.Attribute{{Name: "d1", Optional: true, Computed: true}}},
+					"t.u.z.k": {Attributes: []schema.Attribute{{Name: "d1", Optional: true, Computed: true}}},
+				},
+			),
+			md:      "## Argument Reference\n\n" + parents + "### `z` Block\n\n* `a1` - (Optional) A.\n\n### `z` Block\n\n* `a1` - (Optional) A.\n* `a2` - (Optional) A.\n\n## Attribute Reference\n\n### `z` Block\n\n* `k` - K.\n",
+			rule:    check.SchemaDocsRule{AllowEitherSection: []string{"x.y.z.k", "t.u.z.k"}},
+			wantNot: `"k" isn't listed`,
+		},
+		"duplicate headings omitting an either-section child listed nowhere": {
+			rs: z(
+				&schema.Block{Attributes: optional("a1"), ChildBlocks: []string{"k"}},
+				&schema.Block{Attributes: optional("a1", "a2"), ChildBlocks: []string{"k"}},
+				map[string]*schema.Block{
+					"x.y.z.k": {Attributes: []schema.Attribute{{Name: "d1", Optional: true, Computed: true}}},
+					"t.u.z.k": {Attributes: []schema.Attribute{{Name: "d1", Optional: true, Computed: true}}},
+				},
+			),
+			md:   "## Argument Reference\n\n" + parents + "### `z` Block\n\n* `a1` - (Optional) A.\n\n### `z` Block\n\n* `a1` - (Optional) A.\n* `a2` - (Optional) A.\n",
+			rule: check.SchemaDocsRule{AllowEitherSection: []string{"x.y.z.k", "t.u.z.k"}},
+			want: `"k" isn't listed`,
 		},
 		"duplicate headings omitting an Optional+Computed field": {
 			rs: z(
@@ -3891,6 +3930,60 @@ func TestCoverage_AllowEitherSection(t *testing.T) {
 			}
 			r := &check.SchemaDocsRule{IgnoreDeprecated: true, AllowEitherSection: tt.allow}
 			results := r.Check(check.CheckContext{Resource: "x_thing", Type: &config.Type{Name: tt.typ}, Schema: rs, Doc: d})
+			for _, w := range tt.want {
+				if !hasMessage(results, w) {
+					t.Errorf("missing %q in:\n%s", w, joinMessages(results))
+				}
+			}
+			for _, w := range tt.notWant {
+				if hasMessage(results, w) {
+					t.Errorf("unexpected %q in:\n%s", w, joinMessages(results))
+				}
+			}
+		})
+	}
+}
+
+// TestCoverage_AllowEitherSectionNested guards allow_either_section on
+// nested fields (PR #127 review): a block holding a listed field isn't
+// deferred to the missing-section warning while Attribute Reference exists;
+// and a labeled listed field in an Attribute Reference subsection keeps the
+// subsection from collapsing into one move, so only the real argument moves.
+func TestCoverage_AllowEitherSectionNested(t *testing.T) {
+	t.Parallel()
+
+	rs := &schema.ResourceSchema{Name: "x_thing", Blocks: map[string]*schema.Block{
+		"":  {Path: "", Attributes: []schema.Attribute{{Name: "arn", Computed: true}}, ChildBlocks: []string{"b"}},
+		"b": {Path: "b", Attributes: []schema.Attribute{{Name: "name", Optional: true}, {Name: "tags", Optional: true, Computed: true}}},
+	}}
+	tests := []struct {
+		name    string
+		src     string
+		want    []string
+		notWant []string
+	}{
+		{
+			name: "no Argument Reference, no subsection for b",
+			src:  "## Attribute Reference\n\n* `arn` - A.\n",
+			want: []string{`block "b" is not documented`},
+		},
+		{
+			name:    "labeled listed field beside a misplaced argument",
+			src:     "## Argument Reference\n\n* `b` - (Optional) B.\n\n## Attribute Reference\n\n* `arn` - A.\n\n### `b` Block\n\n* `name` - (Optional) N.\n* `tags` - (Optional) T.\n",
+			want:    []string{`argument "name" in block "b" is documented under Attribute Reference`, `"tags"`},
+			notWant: []string{"subsection"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			d, err := doc.Parse([]byte("# Resource: x_thing\n\n"+tt.src), "x_thing")
+			if err != nil {
+				t.Fatal(err)
+			}
+			r := &check.SchemaDocsRule{IgnoreDeprecated: true, AllowEitherSection: []string{"b.tags"}}
+			results := r.Check(check.CheckContext{Resource: "x_thing", Schema: rs, Doc: d})
 			for _, w := range tt.want {
 				if !hasMessage(results, w) {
 					t.Errorf("missing %q in:\n%s", w, joinMessages(results))
