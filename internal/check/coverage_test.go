@@ -3699,3 +3699,95 @@ func TestCoverage_PhantomEmptyObject(t *testing.T) {
 		}
 	}
 }
+
+// TestCoverage_MissingHomeSectionKeepsOtherFindings guards what the #117
+// warning must not swallow (PR #124 review): a ConfigUnknown object whose
+// fields may live in either section is still reported when its subsection
+// is missing and the other section exists, even under a deferred ancestor;
+// and a computed-only nested field listed in Argument Reference, with no
+// Attribute Reference and inline Read-Only off, still gets the move.
+func TestCoverage_MissingHomeSectionKeepsOtherFindings(t *testing.T) {
+	t.Parallel()
+
+	rs := &schema.ResourceSchema{Name: "x_thing", Blocks: map[string]*schema.Block{
+		"": {Path: "", Attributes: []schema.Attribute{
+			{Name: "name", Required: true},
+			{Name: "settings", Optional: true, Object: true, Children: []schema.Attribute{{Name: "level", Optional: true}}},
+		}, ChildBlocks: []string{"outer"}},
+		"settings": {Path: "settings", ConfigUnknown: true, Attributes: []schema.Attribute{{Name: "level", Optional: true}}},
+		"outer": {Path: "outer", Attributes: []schema.Attribute{
+			{Name: "tag", Optional: true},
+			{Name: "inner", Optional: true, Object: true, Children: []schema.Attribute{{Name: "depth", Optional: true}}},
+		}},
+		"outer.inner": {Path: "outer.inner", ConfigUnknown: true, Attributes: []schema.Attribute{{Name: "depth", Optional: true}}},
+	}}
+	tests := []struct {
+		name string
+		src  string
+		want []string
+	}{
+		{
+			name: "ConfigUnknown subsection missing, Attribute Reference present",
+			src:  "## Attribute Reference\n\n* `arn` - A.\n",
+			want: []string{
+				"no ## Argument Reference section, so 4 arguments (`name`, `outer.inner`, `outer.tag`, and 1 more) aren't checked against the schema",
+				`block "settings" is not documented`,
+				`block "outer.inner" is not documented`,
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			d, err := doc.Parse([]byte("# Resource: x_thing\n\n"+tt.src), "x_thing")
+			if err != nil {
+				t.Fatal(err)
+			}
+			results := (&check.SchemaDocsRule{IgnoreDeprecated: true}).Check(check.CheckContext{Resource: "x_thing", Schema: rs, Doc: d})
+			for _, w := range tt.want {
+				if !hasMessage(results, w) {
+					t.Errorf("missing %q in:\n%s", w, joinMessages(results))
+				}
+			}
+		})
+	}
+
+	nested := &schema.ResourceSchema{Name: "x_thing", Blocks: map[string]*schema.Block{
+		"":     {Path: "", Attributes: []schema.Attribute{{Name: "name", Required: true}}, ChildBlocks: []string{"part"}},
+		"part": {Path: "part", Attributes: []schema.Attribute{{Name: "content", Required: true}, {Name: "size", Computed: true}}},
+	}}
+	d, err := doc.Parse([]byte("# Resource: x_thing\n\n## Argument Reference\n\n* `name` - (Required) N.\n* `part` - (Optional) P.\n\n### `part` Block\n\n* `content` - (Required) C.\n* `size` - (Optional) S.\n"), "x_thing")
+	if err != nil {
+		t.Fatal(err)
+	}
+	results := (&check.SchemaDocsRule{IgnoreDeprecated: true}).Check(check.CheckContext{Resource: "x_thing", Schema: nested, Doc: d})
+	if !hasMessage(results, `Read-Only attribute "size" in block "part" should be documented in Attribute Reference section`) {
+		t.Errorf("computed-only field in Argument Reference lost its move finding:\n%s", joinMessages(results))
+	}
+	if hasMessage(results, "no ## Attribute Reference section") {
+		t.Errorf("a field listed in Argument Reference isn't unchecked:\n%s", joinMessages(results))
+	}
+}
+
+// TestCoverage_EmptyObjectHeadingBullets guards that bullets under an empty
+// object's heading are compared with its (empty) field set when
+// nested_object_attributes models objects as blocks (PR #124 review): an
+// invented field there is reported, not hidden by the phantom-heading
+// exemption.
+func TestCoverage_EmptyObjectHeadingBullets(t *testing.T) {
+	t.Parallel()
+
+	ps := &schema.ProviderSchema{Resources: map[string]*schema.ResourceSchema{"x_thing": {Name: "x_thing", Blocks: map[string]*schema.Block{
+		"": {Path: "", Attributes: []schema.Attribute{{Name: "everyone", Optional: true, Object: true}}},
+	}}}}
+	schema.ExpandObjectAttributes(ps)
+	d := parseCaptured(t, "# Resource: x_thing\n\n## Argument Reference\n\n* `everyone` - (Optional) E.\n\n### `everyone`\n\n* `invented` - (Optional) I.\n")
+	results := (&check.SchemaDocsRule{}).Check(check.CheckContext{Resource: "x_thing", Schema: ps.Resources["x_thing"], Doc: d})
+	if !hasMessage(results, `documented argument "invented" in block "everyone" does not exist in schema`) {
+		t.Errorf("invented field under an empty object's heading not reported:\n%s", joinMessages(results))
+	}
+	if hasMessage(results, "has no matching block") {
+		t.Errorf("empty object heading reported as phantom:\n%s", joinMessages(results))
+	}
+}

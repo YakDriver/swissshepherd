@@ -930,8 +930,8 @@ func TestStyledCheck(t *testing.T) {
 		t.Parallel()
 		cfg := load(t, `doc_style = "tfplugindocs"`)
 		sd := cfg.StyledCheck("schema_docs")
-		if b(sd.AllowInlineReadOnly) != "true" || sd.SkipBlocks == nil || len(sd.SkipBlocks) != 0 || b(sd.NestedObjectAttributes) != "true" || b(sd.Description) != "false" {
-			t.Errorf("schema_docs = inline %s, skip %v, nested %s, description %s", b(sd.AllowInlineReadOnly), sd.SkipBlocks, b(sd.NestedObjectAttributes), b(sd.Description))
+		if b(sd.AllowInlineReadOnly) != "true" || sd.SkipBlocks == nil || len(sd.SkipBlocks) != 0 || b(sd.NestedObjectAttributes) != "true" || b(sd.Description) != "false" || b(sd.Format) != "false" {
+			t.Errorf("schema_docs = inline %s, skip %v, nested %s, description %s, format %s", b(sd.AllowInlineReadOnly), sd.SkipBlocks, b(sd.NestedObjectAttributes), b(sd.Description), b(sd.Format))
 		}
 		is := cfg.StyledCheck("import_section")
 		if !slices.Equal(is.AllowLanguages, []string{"terraform", "shell", "console"}) || b(is.RequireImportBlock) != "false" {
@@ -965,7 +965,7 @@ check "import_section" {
 		cfg := load(t, ``)
 		sd := cfg.StyledCheck("schema_docs")
 		is := cfg.StyledCheck("import_section")
-		if sd.AllowInlineReadOnly != nil || sd.SkipBlocks != nil || sd.NestedObjectAttributes != nil || sd.Description != nil || is.AllowLanguages != nil || is.RequireImportBlock != nil {
+		if sd.AllowInlineReadOnly != nil || sd.SkipBlocks != nil || sd.NestedObjectAttributes != nil || sd.Description != nil || sd.Format != nil || is.AllowLanguages != nil || is.RequireImportBlock != nil {
 			t.Errorf("reference style should leave settings unset: %+v %+v", sd, is)
 		}
 	})

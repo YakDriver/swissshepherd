@@ -243,7 +243,7 @@ func (r *SchemaDocsRule) checkCoverage(ctx CheckContext, idx map[*doc.DocBlock][
 		docBlocks := resolveSections(rs, ctx.Doc, blockPath)
 
 		if len(docBlocks) == 0 {
-			if r.sectionMissing(ctx, config.SectionArguments) {
+			if r.blockDeferred(ctx, schemaBlock) {
 				continue // checkMissingHomes reports the missing section (#117)
 			}
 			if msg, ok := missing.message(blockPath); ok {
@@ -312,8 +312,11 @@ func (r *SchemaDocsRule) checkCoverage(ctx CheckContext, idx map[*doc.DocBlock][
 			}
 		}
 
-		// Doc → schema: documented attributes should exist in schema.
-		if len(schemaBlock.Attributes) == 0 && len(schemaBlock.ChildBlocks) == 0 {
+		// Doc → schema: documented attributes should exist in schema. A
+		// block with no fields is skipped, except an empty object's: its
+		// heading is accepted (checkPhantomBlocks), so a bullet under it
+		// would otherwise go unchecked.
+		if len(schemaBlock.Attributes) == 0 && len(schemaBlock.ChildBlocks) == 0 && !schemaBlock.Object {
 			continue
 		}
 		schemaAttrNames := make(map[string]bool, len(schemaBlock.Attributes))
@@ -429,6 +432,17 @@ func (r *SchemaDocsRule) sectionMissing(ctx CheckContext, n config.SectionName) 
 		return s.Arguments == nil
 	}
 	return s.Attributes == nil
+}
+
+// blockDeferred reports whether an undocumented block b is left to
+// checkMissingHomes: its configurable fields' only home, the arguments
+// section, is missing. A ConfigUnknown block's fields may be in either
+// section, so it's deferred only when both are missing.
+func (r *SchemaDocsRule) blockDeferred(ctx CheckContext, b *schema.Block) bool {
+	if !r.sectionMissing(ctx, config.SectionArguments) {
+		return false
+	}
+	return !b.ConfigUnknown || r.sectionMissing(ctx, config.SectionAttributes)
 }
 
 // homeMissing reports whether every section attr at b may be documented in
@@ -1751,6 +1765,12 @@ func (r *SchemaDocsRule) undocumentedBlocks(ctx CheckContext) undocumented {
 		if p == "" || slices.Contains(r.skipBlocks(), p) || !hasConfigurableAttributes(b) {
 			continue
 		}
+		// A deferred block isn't reported, so it must not absorb its
+		// descendants either: a ConfigUnknown object below it can still be
+		// documented, and missed, in the section that exists.
+		if r.blockDeferred(ctx, b) {
+			continue
+		}
 		if len(resolveSections(ctx.Schema, ctx.Doc, p)) == 0 {
 			m[p] = true
 		}
@@ -1970,7 +1990,9 @@ func (r *SchemaDocsRule) checkAttributeCoverage(ctx CheckContext) []Result {
 				continue
 			}
 
-			if r.homeMissing(ctx, schemaBlock, attr) {
+			// Defer only a field listed nowhere: one listed in Argument
+			// Reference while inline Read-Only is off still needs its move.
+			if !inArgs && r.homeMissing(ctx, schemaBlock, attr) {
 				continue // checkMissingHomes reports the missing section (#117)
 			}
 			key := blockPath + "." + attr.Name

@@ -34,6 +34,7 @@ The style chooses defaults; every one can still be set in the config, except whe
   - `skip_blocks` defaults to none: `timeouts` is documented in `## Schema`.
   - `nested_object_attributes` defaults to true: every object attribute has its own `Nested Schema for` heading with its fields.
   - `description` defaults to off: tfplugindocs copies descriptions from the schema, so a weak description is a schema fix, and the default `bad_prefixes` are AWS style.
+  - `format` defaults to off. It scans raw lines for the reference style's `` * `name` - `` bullets between `## Argument Reference` and `## Attribute Reference` headings it matches by text, so it never ran on `## Schema`; turning it on there does nothing (§5).
   - Label findings name the group: `"boundary" is listed under Read-Only but is optional in the schema; list it under Optional`.
   - A root `id` with no schema description is accepted under Read-Only whatever its flags, because tfplugindocs puts it there (SDKv2 makes `id` Optional+Computed). Older releases listed it by its flags (the ldap provider's docs), which is also accepted. `schema.Attribute.Described` carries whether the schema has a description, so this doesn't guess.
   - On function pages, the `## Arguments` list (`` 1. `name` (Type) ... ``) is compared with the function's parameters, both ways. Labels and ordering don't apply: arguments are positional and unlabeled.
@@ -53,7 +54,9 @@ What stays the same: field homes collapse to one section, but every other `schem
 - It names the type's heading (`arguments_heading`, `attributes_heading`), so a tfplugindocs page with no `## Schema` gets "no ## Schema section, so N fields ...".
 - Field paths are sorted and capped at three, with a count of the rest. The noun is "fields" when Read-Only fields are counted under the arguments section (inline Read-Only).
 - It replaces, for those fields only, the per-field "is not documented" and "Read-Only attribute ... should be documented" findings and the per-block "block is not documented" findings. They would say the fields are undocumented when the cause is the missing section, and on a tfplugindocs page they are documented.
-- A field listed in the other reference section isn't counted: coverage checks it there, and `outsideHome` reports a configurable field that is listed only under Attribute Reference.
+- A field listed in the other reference section isn't counted: coverage checks it there, and `outsideHome` reports a configurable field that is listed only under Attribute Reference. A computed-only field listed in Argument Reference while inline Read-Only is off keeps its "should be documented in Attribute Reference" move.
+- A `ConfigUnknown` object's fields may be in either section, so its block is deferred only when both are missing. With one present, a missing subsection for it is still "block ... is not documented", and a deferred ancestor doesn't absorb it.
+- With `nested_object_attributes`, an object attribute with no fields becomes an empty block, so a bullet under its heading is compared with the empty field set ("does not exist in schema") rather than accepted.
 - It's a **warning**. The doc may document the fields in a section swissshepherd doesn't read (`## Schema` read in the reference style), and the remedy is structural, which `section_presence` reports as an error when the type requires the section. As an error it would recreate the problem in #116: a consumer would have to demote all of `schema_docs` to stop failing on a page shape, hiding real coverage errors.
 
 **What reports it.** Under the default types both checks fire on a missing Argument Reference: `section_presence`'s "missing required section" error and this warning (`TestCoverage_MissingHomeSectionDeferral`). Neither depends on the other. When the type doesn't require the section, or `section_presence` is off, this warning is the only report, which is the case #117 was about.
@@ -72,6 +75,7 @@ What stays the same: field homes collapse to one section, but every other `schem
 |---|---|---|
 | Fields whose every home section is missing | Nothing to check them against | The §3 warning, which names them; `section_presence` when the type requires the section |
 | Description style in the tfplugindocs style | Descriptions are the schema's | Nothing by default; `description = true` turns it back on |
+| `format` (code blocks, multi-line and indented bullets, interrupted lists) in `## Schema`, and in any reference section whose heading isn't exactly `## Argument Reference` or `## Attribute Reference` (`## Arguments Reference` and `## Attributes Reference` on azurerm and google, a configured `attributes_heading`) | `checkFormat` finds sections by heading text, not from the parsed sections. Pre-existing for azurerm and google; scanning by parsed section would add findings there that need their own corpus review | Nothing | Follow-up issue |
 | Labels and order of function arguments | Positional, unlabeled | `signature_section` for the signature; §2 for presence both ways |
 | A root `id` without a description listed under Read-Only or under its flag's group | Both are what tfplugindocs writes | Nothing, by design |
 | Docs written in the other style | One style per provider | Their sections are unknown sections (`section_presence`) and the §3 warning |
@@ -94,10 +98,10 @@ Corpus: each provider's docs at the tag of its latest registry release, with tha
 | hashicorp/tls 4.4.2 | 75/0 | 36/16 | 7/0 |
 | cloudflare/cloudflare 5.29.0 | 6,993/0 | 3,687/1,502 | 23/0 |
 | DataDog/datadog 4.30.0 | 2,536/2 | 1,447/384 | 67/2 |
-| hashicorp/kubernetes 3.5.0 | 1,352/145 | 785/339 | 645/143 |
-| hashicorp/tfe 0.84.0 (mostly reference style) | 904/82 | 667/258 | 158/83 |
-| integrations/github 6.13.0 (mostly reference style) | 1,378/150 | 1,334/188 | 467/254 |
-| hashicorp/google 8.11.0 | 32,219/34,031 | 32,160/34,035 | |
+| hashicorp/kubernetes 3.5.0 | 1,352/145 | 787/339 | 643/143 |
+| hashicorp/tfe 0.84.0 (mostly reference style) | 904/82 | 667/258 | 158/81 |
+| integrations/github 6.13.0 (mostly reference style) | 1,378/150 | 1,335/188 | 467/254 |
+| hashicorp/google 8.11.0 | 32,219/34,031 | 32,171/34,035 | |
 | hashicorp/azurerm 5.14.0 | 36,998/5,236 | 36,998/5,236 | |
 
 In the reference style, the drop on tfplugindocs providers is the §3 rule: one warning per missing section in place of a per-field error for each field of a `## Schema` page. That style still fails those providers, on titles and sections, as it should; it isn't their style.
@@ -108,4 +112,4 @@ Reference-style providers:
 
 - terraform-provider-aws `745bb043908` with `.ci/swissshepherd-full.hcl` and `-weak.hcl` (`make corpus`, base `716ac6d`): unchanged, 0 added and 0 removed in both.
 - azurerm: the title prefix message is reworded (1,236 findings, same targets), and one timeouts message now lists actions sorted.
-- google: the same title rewording (1,422); 30 "should have at least one code block" errors removed on import sections saying "This resource does not support import."; 29 Read-Only errors on 4 docs with no `## Attributes Reference` became 4 warnings, one per doc.
+- google: the same title rewording (1,422); 30 "should have at least one code block" errors removed on import sections saying "This resource does not support import."; 18 Read-Only errors on 4 docs with no `## Attributes Reference` became 4 warnings, one per doc. Read-Only fields those docs list under Argument Reference keep their "should be documented in Attribute Reference" error.

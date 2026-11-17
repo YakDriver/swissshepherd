@@ -77,6 +77,11 @@ type Block struct {
 	// ElementType: types.ObjectType shape, and the proto6 migration that
 	// resolves it) see docs/rules/object-typed-attributes.md.
 	ConfigUnknown bool
+
+	// Object is set on every block ExpandObjectAttributes synthesizes. Such a
+	// block may have no fields at all (an empty object), and its doc
+	// section is still compared with that empty set.
+	Object bool
 }
 
 // ResourceSchema holds the flattened block map for a single block-based
@@ -358,7 +363,7 @@ func expandResourceObjectAttributes(rs *ResourceSchema) {
 // configurable (so its cty-encoded fields have unknown per-field
 // configurability) rather than Computed-only.
 func addObjectAttrBlocks(rs *ResourceSchema, parentPath string, attr Attribute, ancestorConfigurable bool) {
-	if len(attr.Children) == 0 {
+	if len(attr.Children) == 0 && !attr.Object {
 		return
 	}
 	childPath := attr.Name
@@ -367,7 +372,7 @@ func addObjectAttrBlocks(rs *ResourceSchema, parentPath string, attr Attribute, 
 	}
 	configurable := ancestorConfigurable || attr.Optional || attr.Required
 	if _, exists := rs.Blocks[childPath]; !exists {
-		rs.Blocks[childPath] = &Block{Path: childPath, Attributes: attr.Children, ConfigUnknown: configurable}
+		rs.Blocks[childPath] = &Block{Path: childPath, Attributes: attr.Children, ConfigUnknown: configurable, Object: true}
 	}
 	for _, c := range attr.Children {
 		addObjectAttrBlocks(rs, childPath, c, configurable)

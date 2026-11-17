@@ -72,7 +72,7 @@ check "schema_docs" {
 
 ## Doc styles
 
-`doc_style = "tfplugindocs"` reads the one `## Schema` section tfplugindocs writes, taking each field's label from the `Required`/`Optional`/`Read-Only` group it's listed under, and changes some defaults: `allow_inline_read_only` is always on, `skip_blocks` is empty, `nested_object_attributes` is on, and `description` is off. See [doc-style.md](doc-style.md).
+`doc_style = "tfplugindocs"` reads the one `## Schema` section tfplugindocs writes, taking each field's label from the `Required`/`Optional`/`Read-Only` group it's listed under, and changes some defaults: `allow_inline_read_only` is always on, `skip_blocks` is empty, `nested_object_attributes` is on, and `description` and `format` are off. See [doc-style.md](doc-style.md).
 
 A doc missing every section a field may be documented in gets one warning per missing section naming the unchecked fields, in place of per-field "not documented" findings ([doc-style.md](doc-style.md) §3).
 

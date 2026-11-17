@@ -563,8 +563,10 @@ func (c *Config) GetCheck(name string) CheckConfig {
 //     so allow_inline_read_only is always true; timeouts is a nested block
 //     in that section, so skip_blocks defaults to none; every object's
 //     fields have their own "Nested Schema for" heading, so
-//     nested_object_attributes defaults to true; and descriptions come from
-//     the schema, so the description-style sub-check defaults to off.
+//     nested_object_attributes defaults to true; descriptions come from
+//     the schema, so the description-style sub-check defaults to off; and
+//     format, which checks the reference style's "* `name` - " bullets
+//     line by line, defaults to off (it has never scanned ## Schema).
 //   - import_section: shell code blocks are accepted, and the first block
 //     needn't be a terraform import block.
 func (c *Config) StyledCheck(name string) CheckConfig {
@@ -583,6 +585,9 @@ func (c *Config) StyledCheck(name string) CheckConfig {
 		}
 		if cc.Description == nil {
 			cc.Description = new(false)
+		}
+		if cc.Format == nil {
+			cc.Format = new(false)
 		}
 	case "import_section":
 		if len(cc.AllowLanguages) == 0 {

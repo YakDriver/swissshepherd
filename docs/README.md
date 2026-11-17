@@ -483,7 +483,7 @@ In that style:
 
 - The default types expect `# name (Resource)` titles (`function: name` for functions), one `## Schema` section, an optional `## Import`, and no `## Attribute Reference` or `## Timeouts`.
 - `## Schema` is read the way tfplugindocs writes it: a field's label is the `### Required`, `### Optional`, or `### Read-Only` group it's listed under (`Required:`-style paragraphs under each `` ### Nested Schema for `path` ``), and a bullet is `` - `name` (Type, Deprecated) Description `` (or the older `- **name** (Type) ...`). Coverage, labels, deprecation, phantom fields and blocks, and ordering within each group all apply, and findings name the group: `"boundary" is listed under Read-Only but is optional in the schema; list it under Optional`.
-- `schema_docs` defaults change: Read-Only fields belong in `## Schema` (`allow_inline_read_only` is always on), `timeouts` isn't skipped, `nested_object_attributes` is on, and the `description` style sub-check is off because descriptions come from the schema. A root `id` without a schema description may be listed under Read-Only, where tfplugindocs puts it.
+- `schema_docs` defaults change: Read-Only fields belong in `## Schema` (`allow_inline_read_only` is always on), `timeouts` isn't skipped, `nested_object_attributes` is on, the `description` style sub-check is off because descriptions come from the schema, and `format`, which reads the reference style's bullets line by line, is off. A root `id` without a schema description may be listed under Read-Only, where tfplugindocs puts it.
 - On function pages, the `## Arguments` list is compared with the function's parameters.
 - `import_section` accepts `shell` code blocks and doesn't require an `import {` block first.
 
