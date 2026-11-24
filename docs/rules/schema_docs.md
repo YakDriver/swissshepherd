@@ -12,7 +12,7 @@ All enabled by default; disable individually via the rule's config block.
 |---------------|-----------------------------------------------------------------------------------------------------------------------------------|
 | `byline`      | First paragraph after section heading matches expected byline text (from type)                                                    |
 | `coverage`    | Every schema field is documented, in its one home section and only there (a field listed in both reference sections is an error, also reported with only `labels` on); every schema field is documented in the section its path resolves to; every documented field exists at every path its section documents; a section shared by several paths is right for all of them; headings that document nothing, or the same key twice, are reported (see [Coverage: which section documents a block](#coverage-which-section-documents-a-block)) |
-| `deprecated`  | Deprecation status matches between schema and docs (both directions); a mismatch is an error                                     |
+| `deprecated`  | Deprecation status matches between schema and docs (both directions); a mismatch is an error. Fields of a cty object type (`list(object({...}))` and the like) aren't checked: the schema JSON has no deprecation flag for them ([object-typed-attributes.md](object-typed-attributes.md#deprecation-of-cty-object-fields)) |
 | `description` | Descriptions don't start with weak/redundant/meta prefixes ("The ", "This ", "Contains ", "Used ", etc.). One finding per bullet, so same-named bullets in different sections are each reported |
 | `format`      | No code blocks in arg/attr sections; single-line attrs; uninterrupted lists                                                       |
 | `heading`     | Block headings match the preferred template style. Style only: whether a heading documents the right block is `coverage`'s job     |
@@ -257,7 +257,7 @@ Every field a section lists must exist at **every** path that resolves to it. A 
 A section with a short heading (`` ### `z` Block ``) can serve several paths. That's fine when the paths are interchangeable, and wrong when they aren't. A shared section is valid only if, across every path it serves:
 
 - every field that must be listed for one path (its only home is this reference section) exists at all of them;
-- each listed field has the same label and the same deprecation status; and
+- each listed field has the same label and the same deprecation status (a cty object field's deprecation is unknown, so it never conflicts); and
 - child blocks it lists are themselves interchangeable at every depth.
 
 Otherwise `coverage` reports the section once per conflicting field, naming two of the paths and suggesting a qualified heading:

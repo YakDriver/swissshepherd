@@ -129,6 +129,38 @@ When [`nested_object_attributes`](schema_docs.md) is enabled, expansion sets a
 where the lossy `ElementType: types.ObjectType` shape was forced, and false
 wherever the author had a richer option.
 
+## Deprecation of cty object fields
+
+The cty type encoding drops `deprecated` along with the other per-field flags.
+In terraform-provider-aws, `accounts` in `aws_organizations_organization` is a
+Computed `TypeList` of `schema.Resource` whose `status` field is
+`Deprecated: "status is deprecated. Use state instead."`. The schema JSON
+renders it as `["list", ["object", {..., "status": "string"}]]`, so the loader
+can't tell a deprecated field from one that isn't (#129).
+
+The loader sets `DeprecationUnknown` on every field it reads from a cty object
+type, at any depth, including a cty object nested inside a Framework nested
+type. For those fields, `schema_docs` doesn't compare deprecation:
+
+- the `deprecated` sub-check doesn't report "marked deprecated in docs but not
+  in schema" (and "deprecated in schema but not marked" can't fire, since the
+  flag is never set);
+- a shared section doesn't report a deprecation conflict (disjunct 3) between
+  such a field and the same field at another path; and
+- the fit rule for duplicate headings doesn't count a deprecation marker as a
+  mismatch.
+
+This is independent of `ConfigUnknown`: it applies under a Computed-only parent
+too. Fields of a Framework nested type (`nested_type`) carry the real flag, and
+are checked in both directions as usual.
+
+**What this leaves unchecked.** Nothing verifies the deprecation of a cty
+object field, in either direction: a notice on a field that isn't deprecated,
+and a missing notice on one that is, both pass. Nothing else reports them.
+`ignore_deprecated` can't exempt such a field, and coverage and labels give it
+the severity of a non-deprecated field. Checking these needs deprecation read
+from the provider's Go schema, which swissshepherd doesn't do.
+
 ## Future alignment
 
 There is nothing to fix in swissshepherd here — the escape hatch is correct

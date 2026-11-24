@@ -515,3 +515,61 @@ func TestLoadFile_ObjectAndDescribed(t *testing.T) {
 		}
 	}
 }
+
+// TestLoadFile_DeprecationUnknown (#129): a field of a cty object type, at any
+// depth, has DeprecationUnknown set because the type encoding has no
+// deprecated flag. A Framework nested type's field keeps its real flag.
+func TestLoadFile_DeprecationUnknown(t *testing.T) {
+	t.Parallel()
+
+	const js = `{"format_version":"1.0","provider_schemas":{"registry.terraform.io/x/x":{"resource_schemas":{"x_thing":{"version":0,"block":{"attributes":{
+		"cty":{"type":["list",["object",{"a":"string","deep":["object",{"b":"string"}]}]],"computed":true},
+		"nested":{"nested_type":{"attributes":{
+			"c":{"type":"string","computed":true,"deprecated":true},
+			"d":{"type":"string","computed":true},
+			"inner":{"type":["set",["object",{"e":"string"}]],"computed":true}
+		},"nesting_mode":"list"},"computed":true},
+		"plain":{"type":"string","optional":true}
+	}}}}}}}`
+	path := filepath.Join(t.TempDir(), "schema.json")
+	if err := os.WriteFile(path, []byte(js), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ps, err := schema.LoadFile(path, "registry.terraform.io/x/x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	schema.ExpandObjectAttributes(ps)
+	rs := ps.Resources["x_thing"]
+
+	tests := []struct {
+		block, field        string
+		unknown, deprecated bool
+	}{
+		{"", "cty", false, false},
+		{"", "nested", false, false},
+		{"", "plain", false, false},
+		{"cty", "a", true, false},
+		{"cty", "deep", true, false},
+		{"cty.deep", "b", true, false},
+		{"nested", "c", false, true},
+		{"nested", "d", false, false},
+		{"nested", "inner", false, false},
+		{"nested.inner", "e", true, false},
+	}
+	for _, tt := range tests {
+		b := rs.Blocks[tt.block]
+		if b == nil {
+			t.Errorf("block %q missing", tt.block)
+			continue
+		}
+		i := slices.IndexFunc(b.Attributes, func(a schema.Attribute) bool { return a.Name == tt.field })
+		if i < 0 {
+			t.Errorf("%q.%q missing", tt.block, tt.field)
+			continue
+		}
+		if a := b.Attributes[i]; a.DeprecationUnknown != tt.unknown || a.Deprecated != tt.deprecated {
+			t.Errorf("%q.%q: DeprecationUnknown=%v Deprecated=%v, want %v %v", tt.block, tt.field, a.DeprecationUnknown, a.Deprecated, tt.unknown, tt.deprecated)
+		}
+	}
+}
