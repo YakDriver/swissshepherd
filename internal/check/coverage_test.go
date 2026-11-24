@@ -2409,12 +2409,14 @@ func TestSchemaDocs_MarkerMismatchIsError(t *testing.T) {
 // deprecation is unknown, so a section shared with a path where the field is
 // deprecated has no deprecation conflict (disjunct 3), and a duplicate
 // heading marking it deprecated still fits that path (the fit rule). With the
-// flag known and false, both still report.
+// flag known and false, both still report. An unknown path, even the first in
+// path order, must not mask a conflict between two known paths (PR #130
+// review).
 func TestCoverage_SharedDeprecationUnknown(t *testing.T) {
 	t.Parallel()
 
 	const parents = "## Argument Reference\n\n" +
-		"* `x` - (Optional) x.\n* `t` - (Optional) t.\n\n" +
+		"* `t` - (Optional) t.\n* `x` - (Optional) x.\n\n" +
 		"### `x` Block\n\n* `y` - (Optional) y.\n\n" +
 		"### `x.y` Block\n\n* `z` - (Optional) z.\n\n" +
 		"### `t` Block\n\n* `u` - (Optional) u.\n\n" +
@@ -2422,26 +2424,46 @@ func TestCoverage_SharedDeprecationUnknown(t *testing.T) {
 	const z = "\n### `z` Block\n\n* `a1` - (Optional, **Deprecated**) a1.\n"
 	const tail = "\n## Attribute Reference\n\nThis resource exports no additional attributes.\n"
 
+	// w.v.z is a third path whose a1 is known and not deprecated. t.u.z sorts
+	// before it and x.y.z.
+	const third = "\n### `w` Block\n\n* `v` - (Optional) v.\n\n### `w.v` Block\n\n* `z` - (Optional) z.\n"
+
 	testCases := map[string]struct {
 		md      string
 		unknown bool // t.u.z's a1 comes from a cty object
+		third   bool // add w.v.z
 		want    string
 	}{
 		"shared section, unknown":     {md: parents + z + tail, unknown: true},
 		"shared section, known":       {md: parents + z + tail, want: `"a1" is deprecated at "x.y.z" but not at "t.u.z"`},
 		"duplicate headings, unknown": {md: parents + z + z + tail, unknown: true},
 		"duplicate headings, known":   {md: parents + z + z + tail, want: `"a1" deprecation marker is wrong`},
+		"shared section, unknown first of three": {
+			md: strings.Replace(parents, "* `x`", "* `w` - (Optional) w.\n* `x`", 1) + third + z + tail, unknown: true, third: true,
+			want: `"a1" is deprecated at "x.y.z" but not at "w.v.z"`,
+		},
 	}
 	for name, tc := range testCases {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
+			var extra map[string]*schema.Block
+			if tc.third {
+				extra = map[string]*schema.Block{
+					"w":     {ChildBlocks: []string{"w.v"}},
+					"w.v":   {ChildBlocks: []string{"w.v.z"}},
+					"w.v.z": {Attributes: optional("a1")},
+				}
+			}
 			rs := twoZSchema(
 				&schema.Block{Attributes: []schema.Attribute{{Name: "a1", Optional: true, Deprecated: true}}},
 				// A cty object under a configurable parent, as
 				// ExpandObjectAttributes synthesizes it.
 				&schema.Block{ConfigUnknown: true, Object: true, Attributes: []schema.Attribute{{Name: "a1", Computed: true, DeprecationUnknown: tc.unknown}}},
-				nil,
+				extra,
 			)
+			if tc.third {
+				rs.Blocks[""] = &schema.Block{ChildBlocks: []string{"x", "t", "w"}}
+			}
 			d, err := doc.Parse([]byte(tc.md), rs.Name)
 			if err != nil {
 				t.Fatalf("parse: %v", err)

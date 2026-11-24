@@ -1020,17 +1020,26 @@ func (e *shareEval) eval(paths []string, inAttrs bool, listed map[string]bool) [
 					break
 				}
 			}
-			for _, p := range asAttr[1:] {
-				pa, _ := attrAt(e.rs.Blocks[p], f)
-				// A cty object field's deprecation is unknown (#129), so it
-				// can't be said to differ.
-				if sa.Deprecated != pa.Deprecated && !sa.DeprecationUnknown && !pa.DeprecationUnknown {
-					q, other := rep, p
-					if !sa.Deprecated {
-						q, other = p, rep
+			// A cty object field's deprecation is unknown (#129), so only the
+			// paths where it's known are compared.
+			var known []string
+			for _, p := range asAttr {
+				if a, _ := attrAt(e.rs.Blocks[p], f); !a.DeprecationUnknown {
+					known = append(known, p)
+				}
+			}
+			if len(known) > 1 {
+				ka, _ := attrAt(e.rs.Blocks[known[0]], f)
+				for _, p := range known[1:] {
+					pa, _ := attrAt(e.rs.Blocks[p], f)
+					if ka.Deprecated != pa.Deprecated {
+						q, other := known[0], p
+						if !ka.Deprecated {
+							q, other = p, known[0]
+						}
+						out = append(out, shareConflict{kind: 3, field: f, q: q, p: other})
+						break
 					}
-					out = append(out, shareConflict{kind: 3, field: f, q: q, p: other})
-					break
 				}
 			}
 		}
