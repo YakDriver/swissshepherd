@@ -6,6 +6,7 @@ package check_test
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -1027,6 +1028,111 @@ func TestSchemaDocs_TfplugindocsFunctionArguments(t *testing.T) {
 			results := rule.Check(check.CheckContext{Resource: "parse", FunctionSchema: fs, Doc: d})
 			if got := resultMessages(results); !slices.Equal(got, tt.want) {
 				t.Errorf("got %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestSchemaDocs_CtyObjectDeprecation pins #129. A cty object type records
+// only field names and types, so a field the provider deprecates (status in
+// aws_organizations_organizational_unit_child_accounts' accounts list) loads
+// with Deprecated false. A docs deprecation notice on it can't be denied, so
+// the deprecated sub-check must not report it. A Framework nested type carries
+// real per-field flags, so its fields are still checked in both directions.
+func TestSchemaDocs_CtyObjectDeprecation(t *testing.T) {
+	t.Parallel()
+
+	const fixture = "../../testdata/docs/d/organizations_organizational_unit_child_accounts.html.markdown"
+	const (
+		ctyAccounts = `"accounts":{"type":["list",["object",{"arn":"string","email":"string","id":"string","joined_method":"string","joined_timestamp":"string","name":"string","state":"string","status":"string"}]],"description_kind":"plain","computed":true}`
+		rootFields  = `"id":{"type":"string","description_kind":"plain","optional":true,"computed":true},"parent_id":{"type":"string","description_kind":"plain","required":true}`
+	)
+	nestedAccounts := func(state, status bool) string {
+		var b strings.Builder
+		b.WriteString(`"accounts":{"nested_type":{"attributes":{`)
+		for i, f := range []string{"arn", "email", "id", "joined_method", "joined_timestamp", "name", "state", "status"} {
+			if i > 0 {
+				b.WriteString(",")
+			}
+			fmt.Fprintf(&b, `%q:{"type":"string","computed":true,"deprecated":%t}`, f, (f == "state" && state) || (f == "status" && status))
+		}
+		b.WriteString(`},"nesting_mode":"list"},"computed":true}`)
+		return b.String()
+	}
+	// The object nests a cty list(object) inside a Framework nested type.
+	const (
+		ctyInNested   = `"outer":{"nested_type":{"attributes":{"inner":{"type":["list",["object",{"status":"string"}]],"computed":true}},"nesting_mode":"single"},"computed":true}`
+		ctyInNestedMD = "## Argument Reference\n\nThis data source supports no arguments.\n\n## Attribute Reference\n\n" +
+			"This data source exports the following attributes:\n\n" +
+			"* `outer` - Outer. See below.\n\n" +
+			"### `outer` Block\n\n" +
+			"* `inner` - Inner list, which has the following attributes:\n" +
+			"    * `status` - (**Deprecated** use `state` instead) Status.\n"
+	)
+
+	testCases := map[string]struct {
+		attrs   string // data source block attributes
+		md      string // empty uses the frozen #129 doc
+		want    []string
+		notWant []string
+	}{
+		"cty object field marked deprecated in docs": {
+			attrs:   ctyAccounts + "," + rootFields,
+			notWant: []string{"deprecat"},
+		},
+		"cty object nested in a nested type": {
+			attrs:   ctyInNested,
+			md:      ctyInNestedMD,
+			notWant: []string{"deprecat"},
+		},
+		"nested type field not deprecated, marked in docs": {
+			attrs: nestedAccounts(false, false) + "," + rootFields,
+			want:  []string{`attribute "status" in block "accounts" is marked deprecated in docs but not in schema`},
+		},
+		"nested type field deprecated, not marked in docs": {
+			attrs:   nestedAccounts(true, true) + "," + rootFields,
+			want:    []string{`attribute "state" in block "accounts" is deprecated in schema but not marked as deprecated in docs`},
+			notWant: []string{`"status"`},
+		},
+	}
+	for name, tc := range testCases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			js := `{"format_version":"1.0","provider_schemas":{"registry.terraform.io/hashicorp/aws":{"data_source_schemas":{"aws_organizations_organizational_unit_child_accounts":{"version":0,"block":{"attributes":{` +
+				tc.attrs + `},"description_kind":"plain"}}}}}}`
+			path := filepath.Join(t.TempDir(), "schema.json")
+			if err := os.WriteFile(path, []byte(js), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			ps, err := schema.LoadFile(path, "registry.terraform.io/hashicorp/aws")
+			if err != nil {
+				t.Fatal(err)
+			}
+			schema.ExpandObjectAttributes(ps)
+			rs := ps.DataSources["aws_organizations_organizational_unit_child_accounts"]
+
+			md := []byte(tc.md)
+			if tc.md == "" {
+				if md, err = os.ReadFile(fixture); err != nil {
+					t.Fatal(err)
+				}
+			}
+			d, err := doc.ParseWithOptions(md, rs.Name, doc.DefaultHeadingTemplates(), doc.ParseOptions{CaptureNestedAttributes: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			results := (&check.SchemaDocsRule{}).Check(check.CheckContext{Resource: rs.Name, Schema: rs, Doc: d})
+			for _, w := range tc.want {
+				if !slices.ContainsFunc(results, func(r check.Result) bool { return strings.Contains(r.Message, w) }) {
+					t.Errorf("missing %q in:\n  %s", w, joinMessages(results))
+				}
+			}
+			for _, nw := range tc.notWant {
+				for _, r := range results {
+					if strings.Contains(r.Message, nw) {
+						t.Errorf("unexpected finding containing %q: %s", nw, r.Message)
+					}
+				}
 			}
 		})
 	}

@@ -1022,7 +1022,9 @@ func (e *shareEval) eval(paths []string, inAttrs bool, listed map[string]bool) [
 			}
 			for _, p := range asAttr[1:] {
 				pa, _ := attrAt(e.rs.Blocks[p], f)
-				if sa.Deprecated != pa.Deprecated {
+				// A cty object field's deprecation is unknown (#129), so it
+				// can't be said to differ.
+				if sa.Deprecated != pa.Deprecated && !sa.DeprecationUnknown && !pa.DeprecationUnknown {
 					q, other := rep, p
 					if !sa.Deprecated {
 						q, other = p, rep
@@ -1429,7 +1431,7 @@ func (r *SchemaDocsRule) fitMismatches(ctx CheckContext, o doc.Occurrence, p str
 			continue // a child block bullet carries no label or marker to compare
 		}
 		sa := b.Attributes[i]
-		if a.Deprecated != sa.Deprecated && !(r.IgnoreDeprecated && sa.Deprecated) {
+		if a.Deprecated != sa.Deprecated && !sa.DeprecationUnknown && !(r.IgnoreDeprecated && sa.Deprecated) {
 			n = append(n, fmt.Sprintf("%q deprecation marker is wrong", a.Name))
 		}
 		if !inAttrs && !b.ConfigUnknown && (a.Required || a.Optional || a.ReadOnly) {
@@ -3620,6 +3622,9 @@ func (r *SchemaDocsRule) checkSectionByline(ctx CheckContext, section *doc.Secti
 // A field whose deprecation differs across the paths a shared section serves
 // is reported once by the shared-section finding (disjunct 3); per path it
 // would produce contradictory findings, so it's skipped here.
+//
+// A field of a cty object type has no deprecation flag in the schema JSON
+// (#129), so a docs deprecation notice on it is neither confirmed nor denied.
 func (r *SchemaDocsRule) checkDeprecated(ctx CheckContext, shared []sharedSection) []Result {
 	if ctx.Schema == nil {
 		return nil
@@ -3689,7 +3694,7 @@ func (r *SchemaDocsRule) checkDeprecated(ctx CheckContext, shared []sharedSectio
 				if !ok {
 					continue // phantom — coverage check handles this
 				}
-				if !sa.Deprecated {
+				if !sa.Deprecated && !sa.DeprecationUnknown {
 					results = append(results, Result{
 						Rule: r.Name(), Resource: ctx.Resource, Severity: SeverityError,
 						Message: fmt.Sprintf("attribute %q in block %q is marked deprecated in docs but not in schema; either mark as deprecated in schema or remove the deprecation notice", da.Name, displayPath(blockPath)),

@@ -55,6 +55,11 @@ type Attribute struct {
 	// object or collection of objects), even one whose object has no
 	// attributes and so no Children.
 	Object bool
+	// DeprecationUnknown is set on a field of a cty object type. The cty
+	// encoding records only names and types, so Deprecated is false whether
+	// or not the provider deprecates the field (#129). A Framework nested
+	// type carries the real flag and leaves this false.
+	DeprecationUnknown bool
 }
 
 // Block represents a flattened schema block with its attributes and child block names.
@@ -457,7 +462,7 @@ func isObjectAttribute(attr *tfjson.SchemaAttribute) bool {
 func attributesFromCtyObject(ty cty.Type) []Attribute {
 	children := make([]Attribute, 0, len(ty.AttributeTypes()))
 	for name, childTy := range ty.AttributeTypes() {
-		child := Attribute{Name: name, Computed: true}
+		child := Attribute{Name: name, Computed: true, DeprecationUnknown: true}
 		elemTy := childTy
 		if elemTy.IsCollectionType() {
 			elemTy = elemTy.ElementType()
